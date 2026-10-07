@@ -531,6 +531,110 @@ describe("plugin local folder routes", () => {
   });
 });
 
+describe("plugin private network host routes", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRegistry.getCompanySettings.mockResolvedValue(null);
+  });
+
+  function readyPrivateNetworkPlugin() {
+    mockRegistry.getById.mockResolvedValue({
+      id: pluginId,
+      pluginKey: "paperclip.example",
+      version: "1.0.0",
+      status: "ready",
+      manifestJson: {
+        id: "paperclip.example",
+        capabilities: ["http.outbound", "http.outbound.private-network"],
+        privateNetworkHosts: [
+          { hostKey: "ha", displayName: "Home Assistant" },
+        ],
+      },
+    });
+  }
+
+  it("rejects approving an undeclared private network host key", async () => {
+    readyPrivateNetworkPlugin();
+    const { app } = await createApp(boardActor());
+
+    const res = await request(app)
+      .put(`/api/plugins/${pluginId}/companies/${companyA}/private-network-hosts/ssh`)
+      .send({ host: "10.0.1.50" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("Private network host key is not declared");
+    expect(mockRegistry.upsertCompanySettings).not.toHaveBeenCalled();
+  });
+
+  it("rejects a wildcard or scheme-bearing host value", async () => {
+    readyPrivateNetworkPlugin();
+    const { app } = await createApp(boardActor());
+
+    const res = await request(app)
+      .put(`/api/plugins/${pluginId}/companies/${companyA}/private-network-hosts/ha`)
+      .send({ host: "https://*.tieredint.com" });
+
+    expect(res.status).toBe(400);
+    expect(mockRegistry.upsertCompanySettings).not.toHaveBeenCalled();
+  });
+
+  it("approves a declared host and persists it under settingsJson", async () => {
+    readyPrivateNetworkPlugin();
+    mockRegistry.upsertCompanySettings.mockResolvedValue(undefined);
+    const { app } = await createApp(boardActor());
+
+    const res = await request(app)
+      .put(`/api/plugins/${pluginId}/companies/${companyA}/private-network-hosts/ha`)
+      .send({ host: "HA.TieredInt.com" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ hostKey: "ha", host: "ha.tieredint.com" });
+    expect(mockRegistry.upsertCompanySettings).toHaveBeenCalledWith(
+      pluginId,
+      companyA,
+      expect.objectContaining({
+        settingsJson: expect.objectContaining({
+          privateNetworkHosts: expect.objectContaining({
+            ha: expect.objectContaining({ host: "ha.tieredint.com" }),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("rejects approving a host for a company the board actor cannot access", async () => {
+    readyPrivateNetworkPlugin();
+    const { app } = await createApp(boardActor());
+
+    const res = await request(app)
+      .put(`/api/plugins/${pluginId}/companies/${companyB}/private-network-hosts/ha`)
+      .send({ host: "ha.tieredint.com" });
+
+    expect(res.status).toBe(403);
+    expect(mockRegistry.upsertCompanySettings).not.toHaveBeenCalled();
+  });
+
+  it("revokes a previously approved host", async () => {
+    readyPrivateNetworkPlugin();
+    mockRegistry.upsertCompanySettings.mockResolvedValue(undefined);
+    const { app } = await createApp(boardActor());
+
+    const res = await request(app)
+      .delete(`/api/plugins/${pluginId}/companies/${companyA}/private-network-hosts/ha`);
+
+    expect(res.status).toBe(204);
+    expect(mockRegistry.upsertCompanySettings).toHaveBeenCalledWith(
+      pluginId,
+      companyA,
+      expect.objectContaining({
+        settingsJson: expect.objectContaining({
+          privateNetworkHosts: expect.not.objectContaining({ ha: expect.anything() }),
+        }),
+      }),
+    );
+  });
+});
+
 describe("plugin tool and bridge authz", () => {
   beforeEach(() => {
     vi.clearAllMocks();

@@ -82,6 +82,13 @@ import {
   setStoredLocalFolder,
 } from "../services/plugin-local-folders.js";
 import {
+  deleteStoredPrivateNetworkHost,
+  getStoredPrivateNetworkHosts,
+  normalizePrivateNetworkHostValue,
+  requirePrivateNetworkHostDeclaration,
+  setStoredPrivateNetworkHost,
+} from "../services/plugin-private-network.js";
+import {
   extractSecretRefBindingsFromConfig,
 } from "../services/plugin-secrets-handler.js";
 import {
@@ -2967,6 +2974,115 @@ export function pluginRoutes(
     });
 
     res.json(status);
+  });
+
+  // ===========================================================================
+  // Company-scoped private-network outbound host allowlist
+  //
+  // Opt-in SSRF-guard carve-out: a plugin declares candidate hosts by stable
+  // `hostKey` in its manifest (requires `http.outbound.private-network`), and
+  // only an operator (board access) can approve the actual hostname for a
+  // given company here. Declaring the capability does not grant access on
+  // its own — see plugin-host-services.ts's `http.fetch` handler.
+  // ===========================================================================
+
+  router.get("/plugins/:pluginId/companies/:companyId/private-network-hosts", async (req, res) => {
+    assertBoardOrgAccess(req);
+    const { pluginId, companyId } = req.params;
+    assertCompanyAccess(req, companyId);
+
+    const plugin = await resolvePlugin(registry, pluginId);
+    if (!plugin) {
+      res.status(404).json({ error: "Plugin not found" });
+      return;
+    }
+
+    const settings = await registry.getCompanySettings(plugin.id, companyId);
+    const storedHosts = getStoredPrivateNetworkHosts(settings?.settingsJson);
+    const declarations = plugin.manifestJson.privateNetworkHosts ?? [];
+
+    res.json({
+      pluginId: plugin.id,
+      companyId,
+      declarations,
+      hosts: declarations.map((declaration) => ({
+        hostKey: declaration.hostKey,
+        host: storedHosts[declaration.hostKey]?.host ?? null,
+        updatedAt: storedHosts[declaration.hostKey]?.updatedAt ?? null,
+      })),
+    });
+  });
+
+  router.put("/plugins/:pluginId/companies/:companyId/private-network-hosts/:hostKey", async (req, res) => {
+    assertBoardOrgAccess(req);
+    assertPluginManagementVisible();
+    const { pluginId, companyId, hostKey } = req.params;
+    assertCompanyAccess(req, companyId);
+
+    const plugin = await resolvePlugin(registry, pluginId);
+    if (!plugin) {
+      res.status(404).json({ error: "Plugin not found" });
+      return;
+    }
+
+    const body = req.body as { host?: unknown } | undefined;
+    if (typeof body?.host !== "string" || body.host.trim().length === 0) {
+      res.status(400).json({ error: '"host" is required and must be a non-empty string' });
+      return;
+    }
+
+    requirePrivateNetworkHostDeclaration(plugin.manifestJson.privateNetworkHosts ?? [], hostKey);
+    const normalizedHost = normalizePrivateNetworkHostValue(body.host);
+
+    const existing = await registry.getCompanySettings(plugin.id, companyId);
+    const nextSettings = setStoredPrivateNetworkHost(existing?.settingsJson, hostKey, {
+      host: normalizedHost,
+    });
+    await registry.upsertCompanySettings(plugin.id, companyId, {
+      enabled: existing?.enabled ?? true,
+      settingsJson: nextSettings,
+      lastError: existing?.lastError ?? null,
+    });
+    await logPluginMutationActivity(req, "plugin.private_network_host.approved", plugin.id, {
+      pluginId: plugin.id,
+      pluginKey: plugin.pluginKey,
+      companyId,
+      hostKey,
+      host: normalizedHost,
+    });
+
+    res.json({ hostKey, host: normalizedHost });
+  });
+
+  router.delete("/plugins/:pluginId/companies/:companyId/private-network-hosts/:hostKey", async (req, res) => {
+    assertBoardOrgAccess(req);
+    assertPluginManagementVisible();
+    const { pluginId, companyId, hostKey } = req.params;
+    assertCompanyAccess(req, companyId);
+
+    const plugin = await resolvePlugin(registry, pluginId);
+    if (!plugin) {
+      res.status(404).json({ error: "Plugin not found" });
+      return;
+    }
+
+    requirePrivateNetworkHostDeclaration(plugin.manifestJson.privateNetworkHosts ?? [], hostKey);
+
+    const existing = await registry.getCompanySettings(plugin.id, companyId);
+    const nextSettings = deleteStoredPrivateNetworkHost(existing?.settingsJson, hostKey);
+    await registry.upsertCompanySettings(plugin.id, companyId, {
+      enabled: existing?.enabled ?? true,
+      settingsJson: nextSettings,
+      lastError: existing?.lastError ?? null,
+    });
+    await logPluginMutationActivity(req, "plugin.private_network_host.revoked", plugin.id, {
+      pluginId: plugin.id,
+      pluginKey: plugin.pluginKey,
+      companyId,
+      hostKey,
+    });
+
+    res.status(204).end();
   });
 
   // ===========================================================================
