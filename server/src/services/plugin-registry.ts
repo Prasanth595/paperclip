@@ -497,7 +497,14 @@ export function pluginRegistryService(db: Db) {
      * instead of read-modify-write on the whole blob. A concurrent patch to
      * a different entry — or a different top-level key, such as
      * `localFolders` — survives untouched because the database never
-     * round-trips the full JSON through application code.
+     * round-trips the full JSON through application code. `jsonb_set`'s
+     * `create_missing` only creates the final path element, not an absent
+     * parent, so the top-level key is materialized (to its current value,
+     * or `{}`) in a nested `jsonb_set` before the entry itself is set.
+     * `lastError`, when passed, is written in the same statement so callers
+     * that previously did settings-column read-modify-write (e.g.
+     * local-folders) can move onto this atomic path without losing that
+     * column.
      */
     patchCompanySettingsEntry: async (
       pluginId: string,
@@ -505,16 +512,21 @@ export function pluginRegistryService(db: Db) {
       topLevelKey: string,
       entryKey: string,
       entryValue: Record<string, unknown> | null,
+      options?: { lastError?: string | null },
     ): Promise<PluginCompanySettings> => {
       const plugin = await getById(pluginId);
       if (!plugin) throw notFound("Plugin not found");
 
+      const existingSettingsJson = sql`coalesce(${pluginCompanySettings.settingsJson}, '{}'::jsonb)`;
+      const topLevelPath = sql`array[${topLevelKey}]::text[]`;
       const path = sql`array[${topLevelKey}, ${entryKey}]::text[]`;
+      const settingsJsonWithTopLevelKey = sql`jsonb_set(${existingSettingsJson}, ${topLevelPath}, coalesce(${pluginCompanySettings.settingsJson}->${topLevelKey}, '{}'::jsonb), true)`;
       const patchedSettingsJson =
         entryValue === null
-          ? sql`(coalesce(${pluginCompanySettings.settingsJson}, '{}'::jsonb) #- ${path})`
-          : sql`jsonb_set(coalesce(${pluginCompanySettings.settingsJson}, '{}'::jsonb), ${path}, ${JSON.stringify(entryValue)}::jsonb, true)`;
+          ? sql`(${existingSettingsJson} #- ${path})`
+          : sql`jsonb_set(${settingsJsonWithTopLevelKey}, ${path}, ${JSON.stringify(entryValue)}::jsonb, true)`;
       const initialSettingsJson = entryValue === null ? {} : { [topLevelKey]: { [entryKey]: entryValue } };
+      const hasLastErrorOverride = options ? Object.prototype.hasOwnProperty.call(options, "lastError") : false;
 
       return db
         .insert(pluginCompanySettings)
@@ -523,12 +535,14 @@ export function pluginRegistryService(db: Db) {
           companyId,
           enabled: true, // paperclip:allow-private-info: schema column default, not a leak
           settingsJson: initialSettingsJson,
+          ...(hasLastErrorOverride ? { lastError: options!.lastError ?? null } : {}),
         })
         .onConflictDoUpdate({
           target: [pluginCompanySettings.companyId, pluginCompanySettings.pluginId],
           set: {
             settingsJson: patchedSettingsJson,
             updatedAt: new Date(),
+            ...(hasLastErrorOverride ? { lastError: options!.lastError ?? null } : {}),
           },
         })
         .returning()

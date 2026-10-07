@@ -79,7 +79,6 @@ import {
   getStoredLocalFolders,
   inspectPluginLocalFolder,
   requireLocalFolderDeclaration,
-  setStoredLocalFolder,
 } from "../services/plugin-local-folders.js";
 import {
   getStoredPrivateNetworkHosts,
@@ -2952,17 +2951,24 @@ export function pluginRoutes(
       },
     });
 
-    const nextSettings = setStoredLocalFolder(existing?.settingsJson, folderKey, {
-      path: body.path,
-      access: status.access,
-      requiredDirectories: status.requiredDirectories,
-      requiredFiles: status.requiredFiles,
-    });
-    await registry.upsertCompanySettings(plugin.id, companyId, {
-      enabled: existing?.enabled ?? true,
-      settingsJson: nextSettings,
-      lastError: status.healthy ? null : status.problems.map((item: { message: string }) => item.message).join("; "),
-    });
+    // Atomic patch (same primitive the private-network routes below use) so a
+    // concurrent write to a different folder key, or to privateNetworkHosts,
+    // can't be lost to this route's old read-modify-write of the whole
+    // settings column.
+    await registry.patchCompanySettingsEntry(
+      plugin.id,
+      companyId,
+      "localFolders",
+      folderKey,
+      {
+        path: body.path,
+        access: status.access,
+        requiredDirectories: status.requiredDirectories,
+        requiredFiles: status.requiredFiles,
+        updatedAt: new Date().toISOString(),
+      },
+      { lastError: status.healthy ? null : status.problems.map((item: { message: string }) => item.message).join("; ") },
+    );
     await logPluginMutationActivity(req, "plugin.local_folder.configured", plugin.id, {
       pluginId: plugin.id,
       pluginKey: plugin.pluginKey,

@@ -64,7 +64,6 @@ import {
   preparePluginLocalFolder,
   readPluginLocalFolderText,
   requireLocalFolderDeclaration,
-  setStoredLocalFolder,
   writePluginLocalFolderTextAtomic,
 } from "./plugin-local-folders.js";
 import {
@@ -1624,17 +1623,24 @@ export function buildHostServices(
           },
         });
 
-        const nextSettings = setStoredLocalFolder(existing?.settingsJson, params.folderKey, {
-          path: params.path,
-          access: status.access,
-          requiredDirectories: status.requiredDirectories,
-          requiredFiles: status.requiredFiles,
-        });
-        await registry.upsertCompanySettings(pluginId, companyId, {
-          enabled: existing?.enabled ?? true,
-          settingsJson: nextSettings,
-          lastError: status.healthy ? null : status.problems.map((item: { message: string }) => item.message).join("; "),
-        });
+        // Atomic patch (same primitive the private-network allowlist routes
+        // use) so a concurrent write to a different folder key, or to
+        // privateNetworkHosts, can't be lost to a stale read-modify-write of
+        // the whole settings column.
+        await registry.patchCompanySettingsEntry(
+          pluginId,
+          companyId,
+          "localFolders",
+          params.folderKey,
+          {
+            path: params.path,
+            access: status.access,
+            requiredDirectories: status.requiredDirectories,
+            requiredFiles: status.requiredFiles,
+            updatedAt: new Date().toISOString(),
+          },
+          { lastError: status.healthy ? null : status.problems.map((item: { message: string }) => item.message).join("; ") },
+        );
         return status;
       },
 

@@ -556,4 +556,68 @@ describeEmbeddedPostgres("plugin tenant isolation (company_id FK)", () => {
     expect(hosts?.ha).toBeUndefined();
     expect(hosts?.other?.host).toBe("10.0.1.50");
   });
+
+  it("patchCompanySettingsEntry creates its top-level key when the settings row already holds an unrelated one", async () => {
+    // Regression for a second Greptile P1 on PR #15410: jsonb_set's
+    // create_missing only materializes the final path element, not an
+    // absent parent, so approving the first privateNetworkHosts entry for a
+    // company that already has e.g. a `localFolders` settings row (and thus
+    // no `privateNetworkHosts` key yet) silently wrote nothing.
+    const pluginId = await seedPlugin();
+    const companyId = await seedCompany();
+    const registry = pluginRegistryService(db);
+
+    await registry.patchCompanySettingsEntry(pluginId, companyId, "localFolders", "data", {
+      path: "/tmp/data",
+    });
+
+    await registry.patchCompanySettingsEntry(pluginId, companyId, "privateNetworkHosts", "ha", {
+      host: "ha.tieredint.com",
+    });
+
+    const settings = await registry.getCompanySettings(pluginId, companyId);
+    const settingsJson = settings?.settingsJson as Record<string, unknown> | undefined;
+    expect((settingsJson?.localFolders as Record<string, { path: string }>)?.data?.path).toBe("/tmp/data");
+    expect((settingsJson?.privateNetworkHosts as Record<string, { host: string }>)?.ha?.host).toBe(
+      "ha.tieredint.com",
+    );
+  });
+
+  it("patchCompanySettingsEntry can set lastError atomically without disturbing a concurrent patch to a different key", async () => {
+    // Regression for Greptile's follow-up ask on PR #15410 ("protect
+    // revocations from stale folder writes"): both the local-folders
+    // configure path and the private-network approve/revoke routes now go
+    // through this one atomic primitive, so a lastError update from one
+    // write can't race a settingsJson-only write to an unrelated key.
+    const pluginId = await seedPlugin();
+    const companyId = await seedCompany();
+    const registry = pluginRegistryService(db);
+
+    await registry.patchCompanySettingsEntry(pluginId, companyId, "privateNetworkHosts", "ha", {
+      host: "ha.tieredint.com",
+    });
+
+    await Promise.all([
+      registry.patchCompanySettingsEntry(
+        pluginId,
+        companyId,
+        "localFolders",
+        "data",
+        { path: "/tmp/data" },
+        { lastError: "folder unwritable" },
+      ),
+      registry.patchCompanySettingsEntry(pluginId, companyId, "privateNetworkHosts", "other", {
+        host: "10.0.1.50",
+      }),
+    ]);
+
+    const settings = await registry.getCompanySettings(pluginId, companyId);
+    const settingsJson = settings?.settingsJson as Record<string, unknown> | undefined;
+    expect((settingsJson?.privateNetworkHosts as Record<string, { host: string }>)?.ha?.host).toBe(
+      "ha.tieredint.com",
+    );
+    expect((settingsJson?.privateNetworkHosts as Record<string, { host: string }>)?.other?.host).toBe("10.0.1.50");
+    expect((settingsJson?.localFolders as Record<string, { path: string }>)?.data?.path).toBe("/tmp/data");
+    expect(settings?.lastError).toBe("folder unwritable");
+  });
 });
