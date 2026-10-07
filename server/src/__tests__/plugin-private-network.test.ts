@@ -2,12 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   assertPluginPrivateNetworkHostKey,
   buildApprovedPrivateNetworkHostSet,
-  deleteStoredPrivateNetworkHost,
   findPrivateNetworkHostDeclaration,
   getStoredPrivateNetworkHosts,
   normalizePrivateNetworkHostValue,
   requirePrivateNetworkHostDeclaration,
-  setStoredPrivateNetworkHost,
 } from "../services/plugin-private-network.js";
 
 describe("plugin private network host allowlist", () => {
@@ -53,6 +51,16 @@ describe("plugin private network host allowlist", () => {
     it("rejects an empty or whitespace-only value", () => {
       expect(() => normalizePrivateNetworkHostValue("   ")).toThrow();
     });
+
+    it("rejects an IPv4 literal with a leading-zero octet", () => {
+      // The WHATWG URL parser treats a leading-zero octet as octal (e.g.
+      // "010" -> decimal 8), so a stored value with leading zeros would
+      // never exact-match the hostname `validateAndResolveFetchUrl` sees
+      // from the actual fetch target. Reject at the source instead of
+      // trying to replicate octal canonicalization here.
+      expect(() => normalizePrivateNetworkHostValue("10.0.1.004")).toThrow();
+      expect(() => normalizePrivateNetworkHostValue("010.0.1.4")).toThrow();
+    });
   });
 
   describe("findPrivateNetworkHostDeclaration / requirePrivateNetworkHostDeclaration", () => {
@@ -72,20 +80,16 @@ describe("plugin private network host allowlist", () => {
     });
   });
 
-  describe("stored config round-trip", () => {
-    it("stores, reads, and deletes a host under its own key without disturbing others", () => {
-      let settings = setStoredPrivateNetworkHost(null, "ha", { host: "ha.tieredint.com" });
-      settings = setStoredPrivateNetworkHost(settings, "other", { host: "10.0.1.50" });
-
-      const stored = getStoredPrivateNetworkHosts(settings);
+  describe("getStoredPrivateNetworkHosts", () => {
+    it("reads stored hosts keyed by hostKey", () => {
+      const stored = getStoredPrivateNetworkHosts({
+        privateNetworkHosts: {
+          ha: { host: "ha.tieredint.com", updatedAt: "2026-10-07T00:00:00.000Z" },
+          other: { host: "10.0.1.50" },
+        },
+      });
       expect(stored.ha?.host).toBe("ha.tieredint.com");
       expect(stored.other?.host).toBe("10.0.1.50");
-      expect(stored.ha?.updatedAt).toBeDefined();
-
-      const afterDelete = deleteStoredPrivateNetworkHost(settings, "ha");
-      const remaining = getStoredPrivateNetworkHosts(afterDelete);
-      expect(remaining.ha).toBeUndefined();
-      expect(remaining.other?.host).toBe("10.0.1.50");
     });
 
     it("returns an empty object when nothing is stored yet", () => {

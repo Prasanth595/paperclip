@@ -491,6 +491,50 @@ export function pluginRegistryService(db: Db) {
       });
     },
 
+    /**
+     * Atomically set (or, with `entryValue: null`, delete) one entry under a
+     * top-level key of a company's settings JSON via `jsonb_set`/`#-`,
+     * instead of read-modify-write on the whole blob. A concurrent patch to
+     * a different entry — or a different top-level key, such as
+     * `localFolders` — survives untouched because the database never
+     * round-trips the full JSON through application code.
+     */
+    patchCompanySettingsEntry: async (
+      pluginId: string,
+      companyId: string,
+      topLevelKey: string,
+      entryKey: string,
+      entryValue: Record<string, unknown> | null,
+    ): Promise<PluginCompanySettings> => {
+      const plugin = await getById(pluginId);
+      if (!plugin) throw notFound("Plugin not found");
+
+      const path = sql`array[${topLevelKey}, ${entryKey}]::text[]`;
+      const patchedSettingsJson =
+        entryValue === null
+          ? sql`(coalesce(${pluginCompanySettings.settingsJson}, '{}'::jsonb) #- ${path})`
+          : sql`jsonb_set(coalesce(${pluginCompanySettings.settingsJson}, '{}'::jsonb), ${path}, ${JSON.stringify(entryValue)}::jsonb, true)`;
+      const initialSettingsJson = entryValue === null ? {} : { [topLevelKey]: { [entryKey]: entryValue } };
+
+      return db
+        .insert(pluginCompanySettings)
+        .values({
+          pluginId,
+          companyId,
+          enabled: true,
+          settingsJson: initialSettingsJson,
+        })
+        .onConflictDoUpdate({
+          target: [pluginCompanySettings.companyId, pluginCompanySettings.pluginId],
+          set: {
+            settingsJson: patchedSettingsJson,
+            updatedAt: new Date(),
+          },
+        })
+        .returning()
+        .then((rows) => rows[0]) as Promise<PluginCompanySettings>;
+    },
+
     // ----- Entities -------------------------------------------------------
 
     /**

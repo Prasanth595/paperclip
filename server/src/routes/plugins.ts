@@ -82,11 +82,9 @@ import {
   setStoredLocalFolder,
 } from "../services/plugin-local-folders.js";
 import {
-  deleteStoredPrivateNetworkHost,
   getStoredPrivateNetworkHosts,
   normalizePrivateNetworkHostValue,
   requirePrivateNetworkHostDeclaration,
-  setStoredPrivateNetworkHost,
 } from "../services/plugin-private-network.js";
 import {
   extractSecretRefBindingsFromConfig,
@@ -3034,14 +3032,12 @@ export function pluginRoutes(
     requirePrivateNetworkHostDeclaration(plugin.manifestJson.privateNetworkHosts ?? [], hostKey);
     const normalizedHost = normalizePrivateNetworkHostValue(body.host);
 
-    const existing = await registry.getCompanySettings(plugin.id, companyId);
-    const nextSettings = setStoredPrivateNetworkHost(existing?.settingsJson, hostKey, {
+    // Patches only this hostKey's entry via jsonb_set so a concurrent
+    // approve/revoke of a different host (or an unrelated settings write,
+    // e.g. local-folders) can't be clobbered by a stale read-modify-write.
+    await registry.patchCompanySettingsEntry(plugin.id, companyId, "privateNetworkHosts", hostKey, {
       host: normalizedHost,
-    });
-    await registry.upsertCompanySettings(plugin.id, companyId, {
-      enabled: existing?.enabled ?? true,
-      settingsJson: nextSettings,
-      lastError: existing?.lastError ?? null,
+      updatedAt: new Date().toISOString(),
     });
     await logPluginMutationActivity(req, "plugin.private_network_host.approved", plugin.id, {
       pluginId: plugin.id,
@@ -3068,13 +3064,8 @@ export function pluginRoutes(
 
     requirePrivateNetworkHostDeclaration(plugin.manifestJson.privateNetworkHosts ?? [], hostKey);
 
-    const existing = await registry.getCompanySettings(plugin.id, companyId);
-    const nextSettings = deleteStoredPrivateNetworkHost(existing?.settingsJson, hostKey);
-    await registry.upsertCompanySettings(plugin.id, companyId, {
-      enabled: existing?.enabled ?? true,
-      settingsJson: nextSettings,
-      lastError: existing?.lastError ?? null,
-    });
+    // Same atomic-patch rationale as the PUT handler above.
+    await registry.patchCompanySettingsEntry(plugin.id, companyId, "privateNetworkHosts", hostKey, null);
     await logPluginMutationActivity(req, "plugin.private_network_host.revoked", plugin.id, {
       pluginId: plugin.id,
       pluginKey: plugin.pluginKey,

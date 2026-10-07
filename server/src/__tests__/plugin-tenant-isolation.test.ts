@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import {
   companies,
   createDb,
+  pluginCompanySettings,
   pluginEntities,
   pluginJobs,
   pluginJobRuns,
@@ -58,6 +59,7 @@ describeEmbeddedPostgres("plugin tenant isolation (company_id FK)", () => {
     await db.delete(pluginJobs);
     await db.delete(pluginLogs);
     await db.delete(pluginWebhookDeliveries);
+    await db.delete(pluginCompanySettings);
     await db.delete(plugins);
     await db.delete(companies);
   });
@@ -524,5 +526,34 @@ describeEmbeddedPostgres("plugin tenant isolation (company_id FK)", () => {
       );
     expect(err).toBeInstanceOf(Error);
     expect((err as { cause?: { code?: string } }).cause?.code).toBe("23505");
+  });
+
+  it("patchCompanySettingsEntry survives a concurrent revoke of one host and approve of another", async () => {
+    // Regression for a Greptile P1 on PR #15410: the old PUT/DELETE handlers
+    // did getCompanySettings -> JS merge -> upsertCompanySettings (a
+    // read-modify-write of the whole settingsJson blob). Approving "other"
+    // could read a snapshot that still has "ha" approved, then save that
+    // stale copy after a concurrent revoke of "ha" committed, silently
+    // undoing the revoke. patchCompanySettingsEntry uses jsonb_set/`#-` in
+    // the UPDATE statement itself, so it never round-trips a stale read.
+    const pluginId = await seedPlugin();
+    const companyId = await seedCompany();
+    const registry = pluginRegistryService(db);
+
+    await registry.patchCompanySettingsEntry(pluginId, companyId, "privateNetworkHosts", "ha", {
+      host: "ha.tieredint.com",
+    });
+
+    await Promise.all([
+      registry.patchCompanySettingsEntry(pluginId, companyId, "privateNetworkHosts", "ha", null),
+      registry.patchCompanySettingsEntry(pluginId, companyId, "privateNetworkHosts", "other", {
+        host: "10.0.1.50",
+      }),
+    ]);
+
+    const settings = await registry.getCompanySettings(pluginId, companyId);
+    const hosts = settings?.settingsJson?.privateNetworkHosts as Record<string, { host: string }> | undefined;
+    expect(hosts?.ha).toBeUndefined();
+    expect(hosts?.other?.host).toBe("10.0.1.50");
   });
 });

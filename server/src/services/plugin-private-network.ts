@@ -66,7 +66,15 @@ export function normalizePrivateNetworkHostValue(hostValue: string): string {
   }
 
   if (IPV4_LITERAL_PATTERN.test(trimmed)) {
-    const octets = trimmed.split(".").map((part) => Number(part));
+    const parts = trimmed.split(".");
+    // Reject leading zeros outright rather than reformatting: the WHATWG URL
+    // parser treats a leading-zero octet as octal (e.g. "010" -> 8), so a
+    // stored value of "10.0.1.004" would never exact-match the "10.0.1.4"
+    // hostname `validateAndResolveFetchUrl` sees from the fetch target.
+    if (parts.some((part) => part.length > 1 && part.startsWith("0"))) {
+      throw badRequest("IPv4 octets must not have leading zeros — use the canonical decimal form (e.g. \"10.0.1.4\", not \"10.0.1.004\")");
+    }
+    const octets = parts.map((part) => Number(part));
     if (octets.every((octet) => octet >= 0 && octet <= 255)) {
       return trimmed;
     }
@@ -88,35 +96,6 @@ export function getStoredPrivateNetworkHosts(settingsJson: Record<string, unknow
   const hosts = (settingsJson as PluginPrivateNetworkHostSettingsJson | undefined)?.privateNetworkHosts;
   if (!hosts || typeof hosts !== "object") return {};
   return hosts;
-}
-
-export function setStoredPrivateNetworkHost(
-  settingsJson: Record<string, unknown> | null | undefined,
-  hostKey: string,
-  config: StoredPluginPrivateNetworkHostConfig,
-): PluginPrivateNetworkHostSettingsJson {
-  return {
-    ...(settingsJson ?? {}),
-    privateNetworkHosts: {
-      ...getStoredPrivateNetworkHosts(settingsJson),
-      [hostKey]: {
-        ...config,
-        updatedAt: new Date().toISOString(),
-      },
-    },
-  };
-}
-
-export function deleteStoredPrivateNetworkHost(
-  settingsJson: Record<string, unknown> | null | undefined,
-  hostKey: string,
-): PluginPrivateNetworkHostSettingsJson {
-  const remaining = { ...getStoredPrivateNetworkHosts(settingsJson) };
-  delete remaining[hostKey];
-  return {
-    ...(settingsJson ?? {}),
-    privateNetworkHosts: remaining,
-  };
 }
 
 /**

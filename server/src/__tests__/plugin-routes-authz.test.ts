@@ -8,6 +8,7 @@ const mockRegistry = vi.hoisted(() => ({
   upsertConfig: vi.fn(),
   getCompanySettings: vi.fn(),
   upsertCompanySettings: vi.fn(),
+  patchCompanySettingsEntry: vi.fn(),
 }));
 
 const mockLifecycle = vi.hoisted(() => ({
@@ -563,7 +564,7 @@ describe("plugin private network host routes", () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toContain("Private network host key is not declared");
-    expect(mockRegistry.upsertCompanySettings).not.toHaveBeenCalled();
+    expect(mockRegistry.patchCompanySettingsEntry).not.toHaveBeenCalled();
   });
 
   it("rejects a wildcard or scheme-bearing host value", async () => {
@@ -575,12 +576,24 @@ describe("plugin private network host routes", () => {
       .send({ host: "https://*.tieredint.com" });
 
     expect(res.status).toBe(400);
-    expect(mockRegistry.upsertCompanySettings).not.toHaveBeenCalled();
+    expect(mockRegistry.patchCompanySettingsEntry).not.toHaveBeenCalled();
   });
 
-  it("approves a declared host and persists it under settingsJson", async () => {
+  it("rejects an IPv4 host value with a leading-zero octet", async () => {
     readyPrivateNetworkPlugin();
-    mockRegistry.upsertCompanySettings.mockResolvedValue(undefined);
+    const { app } = await createApp(boardActor());
+
+    const res = await request(app)
+      .put(`/api/plugins/${pluginId}/companies/${companyA}/private-network-hosts/ha`)
+      .send({ host: "10.0.1.004" });
+
+    expect(res.status).toBe(400);
+    expect(mockRegistry.patchCompanySettingsEntry).not.toHaveBeenCalled();
+  });
+
+  it("approves a declared host via an atomic settings patch", async () => {
+    readyPrivateNetworkPlugin();
+    mockRegistry.patchCompanySettingsEntry.mockResolvedValue(undefined);
     const { app } = await createApp(boardActor());
 
     const res = await request(app)
@@ -589,16 +602,12 @@ describe("plugin private network host routes", () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ hostKey: "ha", host: "ha.tieredint.com" });
-    expect(mockRegistry.upsertCompanySettings).toHaveBeenCalledWith(
+    expect(mockRegistry.patchCompanySettingsEntry).toHaveBeenCalledWith(
       pluginId,
       companyA,
-      expect.objectContaining({
-        settingsJson: expect.objectContaining({
-          privateNetworkHosts: expect.objectContaining({
-            ha: expect.objectContaining({ host: "ha.tieredint.com" }),
-          }),
-        }),
-      }),
+      "privateNetworkHosts",
+      "ha",
+      expect.objectContaining({ host: "ha.tieredint.com" }),
     );
   });
 
@@ -611,26 +620,24 @@ describe("plugin private network host routes", () => {
       .send({ host: "ha.tieredint.com" });
 
     expect(res.status).toBe(403);
-    expect(mockRegistry.upsertCompanySettings).not.toHaveBeenCalled();
+    expect(mockRegistry.patchCompanySettingsEntry).not.toHaveBeenCalled();
   });
 
-  it("revokes a previously approved host", async () => {
+  it("revokes a previously approved host via an atomic settings patch", async () => {
     readyPrivateNetworkPlugin();
-    mockRegistry.upsertCompanySettings.mockResolvedValue(undefined);
+    mockRegistry.patchCompanySettingsEntry.mockResolvedValue(undefined);
     const { app } = await createApp(boardActor());
 
     const res = await request(app)
       .delete(`/api/plugins/${pluginId}/companies/${companyA}/private-network-hosts/ha`);
 
     expect(res.status).toBe(204);
-    expect(mockRegistry.upsertCompanySettings).toHaveBeenCalledWith(
+    expect(mockRegistry.patchCompanySettingsEntry).toHaveBeenCalledWith(
       pluginId,
       companyA,
-      expect.objectContaining({
-        settingsJson: expect.objectContaining({
-          privateNetworkHosts: expect.not.objectContaining({ ha: expect.anything() }),
-        }),
-      }),
+      "privateNetworkHosts",
+      "ha",
+      null,
     );
   });
 });
