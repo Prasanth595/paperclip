@@ -521,7 +521,7 @@ export function pluginRegistryService(db: Db) {
         .values({
           pluginId,
           companyId,
-          enabled: true,
+          enabled: true, // paperclip:allow-private-info: schema column default, not a leak
           settingsJson: initialSettingsJson,
         })
         .onConflictDoUpdate({
