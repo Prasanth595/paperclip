@@ -5378,8 +5378,19 @@ export function agentRoutes(
         adapterConfig: patchData.adapterConfig,
       });
     }
-    if (existing.runtimeConfig.aiConnection && requestedRuntimeConfig && !requestedRuntimeConfig.aiConnection) requestedRuntimeConfig.aiConnection = existing.runtimeConfig.aiConnection;
-    const nextAiBinding = aiRuntimeConnectionBindingSchema.safeParse(requestedRuntimeConfig?.aiConnection ?? existing.runtimeConfig.aiConnection).data;
+    // An explicit aiConnection: null clears the pin; an omitted field keeps
+    // it. The clear deletes the key so the persisted config carries no pin.
+    const clearsAiConnection = requestedRuntimeConfig !== null
+      && Object.prototype.hasOwnProperty.call(requestedRuntimeConfig, "aiConnection")
+      && requestedRuntimeConfig.aiConnection == null;
+    if (clearsAiConnection) {
+      delete requestedRuntimeConfig.aiConnection;
+    } else if (existing.runtimeConfig.aiConnection && requestedRuntimeConfig && !requestedRuntimeConfig.aiConnection) {
+      requestedRuntimeConfig.aiConnection = existing.runtimeConfig.aiConnection;
+    }
+    const nextAiBinding = clearsAiConnection
+      ? undefined
+      : aiRuntimeConnectionBindingSchema.safeParse(requestedRuntimeConfig?.aiConnection ?? existing.runtimeConfig.aiConnection).data;
     if (nextAiBinding) {
       await assertCanUpdateAgent(req, existing);
       const changed = JSON.stringify(nextAiBinding) !== JSON.stringify(existing.runtimeConfig.aiConnection);
