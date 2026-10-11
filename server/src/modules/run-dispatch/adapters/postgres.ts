@@ -398,16 +398,20 @@ export function createPostgresRunDispatchAdapter(
         // identifies that episode, not the older parked-summary state snapshot.
         // Still recheck every active/wait/ownership gate before promotion.
         const episode = legacyDispositionEpisode({ id: input.runId, contextSnapshot: input.contextSnapshot });
-        const sourceId = readNonEmptyString(input.contextSnapshot.dispositionRepairSourceRunId)
-          ?? readNonEmptyString(input.contextSnapshot.retryOfRunId);
-        const source = sourceId ? await dbOrTx.select().from(heartbeatRuns).where(and(
-          eq(heartbeatRuns.id, sourceId), eq(heartbeatRuns.companyId, input.companyId),
-        )).limit(1).then(rows => rows[0]) : null;
-        validSource = Boolean(source && source.status === "succeeded" && source.agentId === input.agentId
-          && (source.contextSnapshot?.issueId ?? source.contextSnapshot?.taskId) === issueId
-          && legacyDispositionEpisode(source).id === episode.id
-          && episode.attempt >= 1 && episode.attempt <= episode.maxAttempts);
-        currentFingerprint = legacyDispositionFingerprint(input.companyId, issueId, input.agentId, episode.id);
+        if (!episode) {
+          validSource = false;
+        } else {
+          const sourceId = readNonEmptyString(input.contextSnapshot.dispositionRepairSourceRunId)
+            ?? readNonEmptyString(input.contextSnapshot.retryOfRunId);
+          const source = sourceId ? await dbOrTx.select().from(heartbeatRuns).where(and(
+            eq(heartbeatRuns.id, sourceId), eq(heartbeatRuns.companyId, input.companyId),
+          )).limit(1).then(rows => rows[0]) : null;
+          validSource = Boolean(source && source.status === "succeeded" && source.agentId === input.agentId
+            && (source.contextSnapshot?.issueId ?? source.contextSnapshot?.taskId) === issueId
+            && legacyDispositionEpisode(source)?.id === episode.id
+            && episode.attempt >= 1 && episode.attempt <= episode.maxAttempts);
+          currentFingerprint = legacyDispositionFingerprint(input.companyId, issueId, input.agentId, episode.id);
+        }
       }
       facts.dispositionRepair = {
         expectedFingerprintPresent: expectedFingerprint !== null,

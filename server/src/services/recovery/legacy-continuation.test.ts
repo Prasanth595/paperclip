@@ -49,4 +49,19 @@ describe("legacy continuation authority", () => {
   it("leaves native finalization to its own authority", () => {
     expect(decideLegacyContinuation({ ...input, run: { ...input.run, runtimeMode: "native" } }).kind).toBe("skip");
   });
+  it("does not classify a run with no legacy markers as a legacy episode", () => {
+    // The documented five-attempt schedule applies to these runs; the legacy
+    // cap must not be reached through the episode fallback.
+    expect(legacyDispositionEpisode({ id: "run-1" })).toBeUndefined();
+    expect(legacyDispositionEpisode({ id: "run-1", contextSnapshot: {} })).toBeUndefined();
+    expect(legacyDispositionEpisode({ id: "run-1", contextSnapshot: { issueId: "issue" }, continuationAttempt: 0 })).toBeUndefined();
+  });
+  it("still derives an episode for marked or partly spent pre-upgrade runs", () => {
+    expect(legacyDispositionEpisode({ id: "old", contextSnapshot: { dispositionRepairFingerprint: "old-episode" } }))
+      .toMatchObject({ id: "old-episode", attempt: 0, maxAttempts: 2 });
+    expect(legacyDispositionEpisode({ id: "old", contextSnapshot: { livenessContinuationSourceRunId: "source-run" } }))
+      .toMatchObject({ id: "source-run", attempt: 0, maxAttempts: 2 });
+    expect(legacyDispositionEpisode({ id: "old", continuationAttempt: 1 }))
+      .toMatchObject({ id: "old", attempt: 1, maxAttempts: 2 });
+  });
 });

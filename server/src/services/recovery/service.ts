@@ -3796,6 +3796,7 @@ export function recoveryService(
     if (!run || !parseObject(context.legacyDispositionEpisode).id) return null;
     if (!["queued", "running", "scheduled_retry"].includes(run.status)) return "repair_not_active";
     const episode = legacyDispositionEpisode(run);
+    if (!episode) return "invalid_repair_binding";
     // Infrastructure retries retain the successful disposition source even
     // though their immediate retryOfRunId points at a failed repair attempt.
     const sourceId = readNonEmptyString(context.dispositionRepairSourceRunId) ?? readNonEmptyString(context.retryOfRunId);
