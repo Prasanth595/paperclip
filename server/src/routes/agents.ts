@@ -5380,11 +5380,14 @@ export function agentRoutes(
     }
     // An explicit aiConnection: null clears the pin; an omitted field keeps
     // it. The clear deletes the key so the persisted config carries no pin.
-    const clearsAiConnection = requestedRuntimeConfig !== null
+    let clearsAiConnection = false;
+    if (
+      requestedRuntimeConfig !== null
       && Object.prototype.hasOwnProperty.call(requestedRuntimeConfig, "aiConnection")
-      && requestedRuntimeConfig.aiConnection == null;
-    if (clearsAiConnection) {
+      && requestedRuntimeConfig.aiConnection == null
+    ) {
       delete requestedRuntimeConfig.aiConnection;
+      clearsAiConnection = true;
     } else if (existing.runtimeConfig.aiConnection && requestedRuntimeConfig && !requestedRuntimeConfig.aiConnection) {
       requestedRuntimeConfig.aiConnection = existing.runtimeConfig.aiConnection;
     }
