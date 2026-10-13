@@ -6,11 +6,15 @@ import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   agents,
+  aiProviderDefaults,
   companies,
   companyMemberships,
+  connectionGrants,
   createDb,
   heartbeatRuns,
   principalPermissionGrants,
+  toolApplications,
+  toolConnections,
 } from "@paperclipai/db";
 
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
@@ -60,6 +64,24 @@ describeEmbeddedPostgres("agent PATCH aiConnection pin", () => {
       // fixture does not depend on role-default materialization.
       { companyId, principalType: "user", principalId: userId, permissionKey: "agents:configure" },
     ]);
+    // A runtimeConfig PATCH re-resolves the kept pin, and resolution for a
+    // responsible_user binding needs the owner's personal default
+    // connection. Seed one so the fixture models a resolvable pin.
+    const [app] = await db.insert(toolApplications).values({
+      companyId, applicationKey: `ai-pin-fixture-${companyId.slice(0, 8)}`, name: "AI pin fixture", type: "mcp_http", metadata: { sourceTemplateKey: "anthropic" },
+    }).returning();
+    const [connection] = await db.insert(toolConnections).values({
+      companyId, applicationId: app!.id, name: "Personal Claude API", uid: `ai-${randomUUID()}`,
+      connectionPurpose: "ai", transport: "runtime_auth", authKind: "api_key", credentialPolicy: "per_user",
+      healthStatus: "ok", status: "active", enabled: true,
+      config: { sourceTemplateKey: "anthropic", ai: { provider: "anthropic", method: "api_key" } },
+    }).returning();
+    const [grant] = await db.insert(connectionGrants).values({
+      companyId, connectionId: connection!.id, kind: "user", subjectUserId: userId, createdByUserId: userId,
+    }).returning();
+    await db.insert(aiProviderDefaults).values({
+      companyId, userId, provider: "anthropic", grantId: grant!.id,
+    });
     await db.insert(agents).values({
       id: agentId,
       companyId,
