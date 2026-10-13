@@ -53,9 +53,13 @@ describeEmbeddedPostgres("agent PATCH aiConnection pin", () => {
     await db.insert(companyMemberships).values({
       companyId, principalType: "user", principalId: userId, membershipRole: "owner", status: "active",
     });
-    await db.insert(principalPermissionGrants).values({
-      companyId, principalType: "user", principalId: userId, permissionKey: "agents:create",
-    });
+    await db.insert(principalPermissionGrants).values([
+      { companyId, principalType: "user", principalId: userId, permissionKey: "agents:create" },
+      // The responsible-user authorization check reads explicit grants;
+      // grant the configure permission this PATCH requires directly so the
+      // fixture does not depend on role-default materialization.
+      { companyId, principalType: "user", principalId: userId, permissionKey: "agents:configure" },
+    ]);
     await db.insert(agents).values({
       id: agentId,
       companyId,
