@@ -14,6 +14,7 @@ import {
   heartbeatRuns,
   principalPermissionGrants,
   toolApplications,
+  toolConnectionInstalls,
   toolConnections,
 } from "@paperclipai/db";
 
@@ -81,6 +82,9 @@ describeEmbeddedPostgres("agent PATCH aiConnection pin", () => {
     }).returning();
     await db.insert(aiProviderDefaults).values({
       companyId, userId, provider: "anthropic", grantId: grant!.id,
+    });
+    await db.insert(toolConnectionInstalls).values({
+      companyId, connectionId: connection!.id, targetType: "company", targetId: companyId,
     });
     await db.insert(agents).values({
       id: agentId,
