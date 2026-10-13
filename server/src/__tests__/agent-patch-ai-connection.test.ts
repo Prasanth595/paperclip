@@ -67,11 +67,11 @@ describeEmbeddedPostgres("agent PATCH aiConnection pin", () => {
     // A runtimeConfig PATCH re-resolves the kept pin, and resolution for a
     // responsible_user binding needs the owner's personal default
     // connection. Seed one so the fixture models a resolvable pin.
-    const [app] = await db.insert(toolApplications).values({
+    const [toolApp] = await db.insert(toolApplications).values({
       companyId, applicationKey: `ai-pin-fixture-${companyId.slice(0, 8)}`, name: "AI pin fixture", type: "mcp_http", metadata: { sourceTemplateKey: "anthropic" },
     }).returning();
     const [connection] = await db.insert(toolConnections).values({
-      companyId, applicationId: app!.id, name: "Personal Claude API", uid: `ai-${randomUUID()}`,
+      companyId, applicationId: toolApp!.id, name: "Personal Claude API", uid: `ai-${randomUUID()}`,
       connectionPurpose: "ai", transport: "runtime_auth", authKind: "api_key", credentialPolicy: "per_user",
       healthStatus: "ok", status: "active", enabled: true,
       config: { sourceTemplateKey: "anthropic", ai: { provider: "anthropic", method: "api_key" } },
