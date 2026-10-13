@@ -90,7 +90,7 @@ describeEmbeddedPostgres("agent PATCH aiConnection pin", () => {
     await connectionService.save(companyId, userId, {
       provider: "anthropic", method: "api_key", ownership: "personal",
       name: "Personal Claude API", loginSessionId: "fixture", agentIds: [], allAgents: true,
-    }, "fixture-api-key");
+    }, randomUUID());
     const [seeded] = await connectionService.list(companyId, userId);
     await connectionService.setDefault(companyId, userId, seeded!.grantId);
     const existingInstalls = await db.select().from(toolConnectionInstalls)
