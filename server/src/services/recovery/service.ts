@@ -3796,15 +3796,13 @@ export function recoveryService(
     if (!run || !parseObject(context.legacyDispositionEpisode).id) return null;
     if (!["queued", "running", "scheduled_retry"].includes(run.status)) return "repair_not_active";
     const episode = legacyDispositionEpisode(run);
-    if (!episode) return "invalid_repair_binding";
     // Infrastructure retries retain the successful disposition source even
     // though their immediate retryOfRunId points at a failed repair attempt.
     const sourceId = readNonEmptyString(context.dispositionRepairSourceRunId) ?? readNonEmptyString(context.retryOfRunId);
     const issueId = readNonEmptyString(context.issueId);
     if (!sourceId || !issueId || episode.attempt < 1 || episode.attempt > episode.maxAttempts) return "invalid_repair_binding";
     const [source] = await db.select().from(heartbeatRuns).where(and(eq(heartbeatRuns.id, sourceId), eq(heartbeatRuns.companyId, run.companyId))).limit(1);
-    const sourceEpisode = source ? legacyDispositionEpisode(source) : undefined;
-    if (!source || source.agentId !== run.agentId || !sourceEpisode || sourceEpisode.id !== episode.id) return "invalid_repair_source";
+    if (!source || source.agentId !== run.agentId || legacyDispositionEpisode(source).id !== episode.id) return "invalid_repair_source";
     const [issue] = await db.select().from(issues).where(and(eq(issues.id, issueId), eq(issues.companyId, run.companyId))).limit(1);
     if (!issue) return "missing_issue";
     const state = await collectDispositionRepairSourceState(db, { issue, excludeRunId: run.id, excludeWakeupRequestId: run.wakeupRequestId ?? undefined });

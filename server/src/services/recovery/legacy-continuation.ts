@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { DISPOSITION_REPAIR_MAX_ATTEMPTS } from "./disposition-repair.js";
 
 /** This contract deliberately has no narrative, liveness label or progress count. */
 export interface LegacyContinuationInput {
@@ -39,7 +40,7 @@ export function legacyDispositionEpisode(run: {
   id: string;
   contextSnapshot?: unknown;
   continuationAttempt?: number | null;
-}): LegacyDispositionEpisode | undefined {
+}): LegacyDispositionEpisode {
   const context = record(run.contextSnapshot);
   const episode = record(context.legacyDispositionEpisode);
   if (typeof episode.id === "string" && episode.id) {
@@ -50,15 +51,18 @@ export function legacyDispositionEpisode(run: {
   const handoff = context.wakeReason === "finish_successful_run_handoff" || context.handoffRequired === true;
   const oldRecovery = context.source === "issue.productive_terminal_continuation_recovery";
   const attempt = Math.max(count(run.continuationAttempt), count(context.livenessContinuationAttempt), count(context.dispositionRepairAttempt), handoff ? count(context.handoffAttempt) || 1 : 0, oldRecovery ? 1 : 0);
-  // A run with no legacy markers and no consumed attempts is not a legacy
-  // episode at all: it has spent nothing under any older scheme, so the
-  // caller's documented disposition-repair budget applies instead of the
-  // legacy cap. Returning an episode here silently capped every new run
-  // at the legacy allowance.
+  // A run with no legacy markers and no consumed attempts has spent
+  // nothing under any older scheme, so it is a new episode and gets the
+  // documented disposition-repair budget, not the legacy cap. The episode
+  // object still exists: repair dispatch relies on it for the persisted
+  // binding, the issue state guard, and source-identity checks, and those
+  // semantics must not depend on which budget a run falls under.
   const hasLegacyMarker = handoff || oldRecovery
     || typeof context.dispositionRepairFingerprint === "string"
     || typeof context.livenessContinuationSourceRunId === "string";
-  if (!hasLegacyMarker && attempt === 0) return undefined;
+  if (!hasLegacyMarker && attempt === 0) {
+    return { id: run.id, attempt: 0, maxAttempts: DISPOSITION_REPAIR_MAX_ATTEMPTS };
+  }
   return {
     id: typeof context.dispositionRepairFingerprint === "string" ? context.dispositionRepairFingerprint : typeof context.livenessContinuationSourceRunId === "string" ? context.livenessContinuationSourceRunId : run.id,
     attempt,

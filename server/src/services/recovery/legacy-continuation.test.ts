@@ -40,7 +40,7 @@ describe("legacy continuation authority", () => {
       { id: "old", contextSnapshot: { dispositionRepairAttempt: 3, dispositionRepairMaxAttempts: 5, dispositionRepairFingerprint: "old-episode" } },
       { id: "old", contextSnapshot: { wakeReason: "finish_successful_run_handoff", handoffAttempt: 1 } },
       { id: "old", contextSnapshot: { source: "issue.productive_terminal_continuation_recovery" } },
-    ]) expect(decideLegacyContinuation({ ...input, episode: legacyDispositionEpisode(run)! }).kind).toBe("exhausted");
+    ]) expect(decideLegacyContinuation({ ...input, episode: legacyDispositionEpisode(run) }).kind).toBe("exhausted");
   });
   it("keeps replay identity stable while a genuinely new episode gets its own identity", () => {
     expect(decideLegacyContinuation(structuredClone(input))).toEqual(decideLegacyContinuation(input));
@@ -49,12 +49,15 @@ describe("legacy continuation authority", () => {
   it("leaves native finalization to its own authority", () => {
     expect(decideLegacyContinuation({ ...input, run: { ...input.run, runtimeMode: "native" } }).kind).toBe("skip");
   });
-  it("does not classify a run with no legacy markers as a legacy episode", () => {
-    // The documented five-attempt schedule applies to these runs; the legacy
-    // cap must not be reached through the episode fallback.
-    expect(legacyDispositionEpisode({ id: "run-1" })).toBeUndefined();
-    expect(legacyDispositionEpisode({ id: "run-1", contextSnapshot: {} })).toBeUndefined();
-    expect(legacyDispositionEpisode({ id: "run-1", contextSnapshot: { issueId: "issue" }, continuationAttempt: 0 })).toBeUndefined();
+  it("gives a run with no legacy markers the documented five-attempt budget", () => {
+    // Such a run has spent nothing under the legacy scheme, so the legacy
+    // cap must not apply to it through the episode fallback.
+    expect(legacyDispositionEpisode({ id: "run-1" }))
+      .toMatchObject({ id: "run-1", attempt: 0, maxAttempts: 5 });
+    expect(legacyDispositionEpisode({ id: "run-1", contextSnapshot: {} }))
+      .toMatchObject({ id: "run-1", attempt: 0, maxAttempts: 5 });
+    expect(legacyDispositionEpisode({ id: "run-1", contextSnapshot: { issueId: "issue" }, continuationAttempt: 0 }))
+      .toMatchObject({ id: "run-1", attempt: 0, maxAttempts: 5 });
   });
   it("still derives an episode for marked or partly spent pre-upgrade runs", () => {
     expect(legacyDispositionEpisode({ id: "old", contextSnapshot: { dispositionRepairFingerprint: "old-episode" } }))
