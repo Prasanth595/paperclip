@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import express from "express";
 import request from "supertest";
 import { eq } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   agents,
   companies,
@@ -18,6 +18,25 @@ import { aiConnectionService } from "../services/ai-connections.js";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 import { agentRoutes } from "../routes/agents.js";
 import { errorHandler } from "../middleware/index.js";
+
+// A runtimeConfig PATCH revalidates the kept pin, and validation ends in
+// a managed environment probe that exercises the selected credential
+// against the live provider. A fixture credential cannot pass that probe,
+// and the probe is not what this file tests: stub only the probe result.
+// Selection, authorization, config merging, and persistence all run for
+// real against the test database.
+vi.mock("../services/agent-environment-test.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/agent-environment-test.js")>();
+  return {
+    ...actual,
+    agentEnvironmentTestService: (
+      ...args: Parameters<typeof actual.agentEnvironmentTestService>
+    ): ReturnType<typeof actual.agentEnvironmentTestService> => ({
+      ...actual.agentEnvironmentTestService(...args),
+      testManagedEnvironment: async () => ({ status: "pass", checks: [] }),
+    }),
+  };
+});
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -71,7 +90,7 @@ describeEmbeddedPostgres("agent PATCH aiConnection pin", () => {
     await connectionService.save(companyId, userId, {
       provider: "anthropic", method: "api_key", ownership: "personal",
       name: "Personal Claude API", loginSessionId: "fixture", agentIds: [], allAgents: true,
-    }, "sk-ant-fixture");
+    }, "fixture-api-key");
     const [seeded] = await connectionService.list(companyId, userId);
     await connectionService.setDefault(companyId, userId, seeded!.grantId);
     const existingInstalls = await db.select().from(toolConnectionInstalls)
