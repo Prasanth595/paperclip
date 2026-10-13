@@ -6,17 +6,14 @@ import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   agents,
-  aiProviderDefaults,
   companies,
   companyMemberships,
-  connectionGrants,
   createDb,
   heartbeatRuns,
   principalPermissionGrants,
-  toolApplications,
   toolConnectionInstalls,
-  toolConnections,
 } from "@paperclipai/db";
+import { aiConnectionService } from "../services/ai-connections.js";
 
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 import { agentRoutes } from "../routes/agents.js";
@@ -67,25 +64,23 @@ describeEmbeddedPostgres("agent PATCH aiConnection pin", () => {
     ]);
     // A runtimeConfig PATCH re-resolves the kept pin, and resolution for a
     // responsible_user binding needs the owner's personal default
-    // connection. Seed one so the fixture models a resolvable pin.
-    const [toolApp] = await db.insert(toolApplications).values({
-      companyId, applicationKey: `ai-pin-fixture-${companyId.slice(0, 8)}`, name: "AI pin fixture", type: "mcp_http", metadata: { sourceTemplateKey: "anthropic" },
-    }).returning();
-    const [connection] = await db.insert(toolConnections).values({
-      companyId, applicationId: toolApp!.id, name: "Personal Claude API", uid: `ai-${randomUUID()}`,
-      connectionPurpose: "ai", transport: "runtime_auth", authKind: "api_key", credentialPolicy: "per_user",
-      healthStatus: "ok", status: "active", enabled: true,
-      config: { sourceTemplateKey: "anthropic", ai: { provider: "anthropic", method: "api_key" } },
-    }).returning();
-    const [grant] = await db.insert(connectionGrants).values({
-      companyId, connectionId: connection!.id, kind: "user", subjectUserId: userId, createdByUserId: userId,
-    }).returning();
-    await db.insert(aiProviderDefaults).values({
-      companyId, userId, provider: "anthropic", grantId: grant!.id,
-    });
-    await db.insert(toolConnectionInstalls).values({
-      companyId, connectionId: connection!.id, targetType: "company", targetId: companyId,
-    });
+    // connection. Seed one through the connection service so the
+    // connection, grant, credential, and installs are all consistent,
+    // then point the provider default at its grant.
+    const connectionService = aiConnectionService(db);
+    await connectionService.save(companyId, userId, {
+      provider: "anthropic", method: "api_key", ownership: "personal",
+      name: "Personal Claude API", loginSessionId: "fixture", agentIds: [], allAgents: true,
+    }, "sk-ant-fixture");
+    const [seeded] = await connectionService.list(companyId, userId);
+    await connectionService.setDefault(companyId, userId, seeded!.grantId);
+    const existingInstalls = await db.select().from(toolConnectionInstalls)
+      .where(eq(toolConnectionInstalls.connectionId, seeded!.id));
+    if (!existingInstalls.length) {
+      await db.insert(toolConnectionInstalls).values({
+        companyId, connectionId: seeded!.id, targetType: "company", targetId: companyId,
+      });
+    }
     await db.insert(agents).values({
       id: agentId,
       companyId,
