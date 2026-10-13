@@ -80,6 +80,11 @@ describe("legacy continuation persisted authority", () => {
   });
   it.each(["silent", "comments", "tool-calls"])("ACCT-02 full recovery sweep cannot replenish an exhausted episode with %s", async noise => {
     const f = await fixture();
+    // Stamp a genuine pre-upgrade episode: exhaustion finality is pinned
+    // here under the legacy bound (marker-less runs now get five attempts).
+    await db.update(heartbeatRuns).set({
+      contextSnapshot: { issueId: f.issueId, legacyDispositionEpisode: { id: f.runId, attempt: 0, maxAttempts: 2 } },
+    }).where(eq(heartbeatRuns.id, f.runId));
     await f.createRecovery().reconcileLegacyContinuation(f.runId);
     const first = (await f.runs()).find(r => r.id !== f.runId)!;
     await f.finish(first);
@@ -144,6 +149,11 @@ describe("legacy continuation persisted authority", () => {
 
   it.each(["foreign-source", "changed-episode", "exhausted-slot"])("ACCT-04 rejects a delayed repair with %s", async mutation => {
     const f = await fixture();
+    // Stamp a genuine pre-upgrade episode so the exhausted-slot mutation
+    // (attempt 3) exceeds the episode bound it is rejected against.
+    await db.update(heartbeatRuns).set({
+      contextSnapshot: { issueId: f.issueId, legacyDispositionEpisode: { id: f.runId, attempt: 0, maxAttempts: 2 } },
+    }).where(eq(heartbeatRuns.id, f.runId));
     await f.createRecovery().reconcileLegacyContinuation(f.runId);
     const first = (await f.runs()).find(r => r.id !== f.runId)!;
     await f.finish(first);
