@@ -59,6 +59,12 @@ describe("legacy continuation authority", () => {
     expect(legacyDispositionEpisode({ id: "run-1", contextSnapshot: { issueId: "issue" }, continuationAttempt: 0 }))
       .toMatchObject({ id: "run-1", attempt: 0, maxAttempts: 5 });
   });
+  it("keeps the budget a persisted episode record was written with", () => {
+    expect(legacyDispositionEpisode({ id: "old", contextSnapshot: { legacyDispositionEpisode: { id: "ep", attempt: 1, maxAttempts: 2 } } }))
+      .toMatchObject({ id: "ep", attempt: 1, maxAttempts: 2 });
+    expect(legacyDispositionEpisode({ id: "new", contextSnapshot: { legacyDispositionEpisode: { id: "ep", attempt: 1, maxAttempts: 5 } } }))
+      .toMatchObject({ id: "ep", attempt: 1, maxAttempts: 5 });
+  });
   it("still derives an episode for marked or partly spent pre-upgrade runs", () => {
     expect(legacyDispositionEpisode({ id: "old", contextSnapshot: { dispositionRepairFingerprint: "old-episode" } }))
       .toMatchObject({ id: "old-episode", attempt: 0, maxAttempts: 2 });

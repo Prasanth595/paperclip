@@ -44,7 +44,13 @@ export function legacyDispositionEpisode(run: {
   const context = record(run.contextSnapshot);
   const episode = record(context.legacyDispositionEpisode);
   if (typeof episode.id === "string" && episode.id) {
-    return { id: episode.id, attempt: count(episode.attempt), maxAttempts: Math.max(1, Math.min(LEGACY_DISPOSITION_REPAIR_MAX_ATTEMPTS, count(episode.maxAttempts) || LEGACY_DISPOSITION_REPAIR_MAX_ATTEMPTS)) };
+    // The persisted record is authoritative for its own budget. Records
+    // written under the legacy scheme carry its cap and keep it, so a
+    // pre-upgrade episode is never granted a fresh budget. Records
+    // written under the documented scheme carry that budget and keep it
+    // too; clamping them here would silently re-cap new episodes at the
+    // legacy allowance from their second attempt on.
+    return { id: episode.id, attempt: count(episode.attempt), maxAttempts: Math.max(1, count(episode.maxAttempts) || LEGACY_DISPOSITION_REPAIR_MAX_ATTEMPTS) };
   }
   // Pre-upgrade repairs have already consumed their old (possibly tighter)
   // allowance. A classifier/key migration must not grant them a fresh budget.
