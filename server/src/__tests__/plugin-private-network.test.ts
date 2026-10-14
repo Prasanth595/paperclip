@@ -53,11 +53,6 @@ describe("plugin private network host allowlist", () => {
     });
 
     it("rejects an IPv4 literal with a leading-zero octet", () => {
-      // The WHATWG URL parser treats a leading-zero octet as octal (e.g.
-      // "010" -> decimal 8), so a stored value with leading zeros would
-      // never exact-match the hostname `validateAndResolveFetchUrl` sees
-      // from the actual fetch target. Reject at the source instead of
-      // trying to replicate octal canonicalization here.
       expect(() => normalizePrivateNetworkHostValue("10.0.1.004")).toThrow();
       expect(() => normalizePrivateNetworkHostValue("010.0.1.4")).toThrow();
     });
@@ -107,7 +102,6 @@ describe("plugin private network host allowlist", () => {
     it("only approves hosts that are both declared and stored", () => {
       const stored = {
         ha: { host: "ha.tieredint.com" },
-        // No matching declaration for this key — must never be honored.
         leftover: { host: "evil.example.com" },
       };
       const approved = buildApprovedPrivateNetworkHostSet(declarations, stored);

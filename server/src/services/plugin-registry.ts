@@ -491,21 +491,6 @@ export function pluginRegistryService(db: Db) {
       });
     },
 
-    /**
-     * Atomically set (or, with `entryValue: null`, delete) one entry under a
-     * top-level key of a company's settings JSON via `jsonb_set`/`#-`,
-     * instead of read-modify-write on the whole blob. A concurrent patch to
-     * a different entry — or a different top-level key, such as
-     * `localFolders` — survives untouched because the database never
-     * round-trips the full JSON through application code. `jsonb_set`'s
-     * `create_missing` only creates the final path element, not an absent
-     * parent, so the top-level key is materialized (to its current value,
-     * or `{}`) in a nested `jsonb_set` before the entry itself is set.
-     * `lastError`, when passed, is written in the same statement so callers
-     * that previously did settings-column read-modify-write (e.g.
-     * local-folders) can move onto this atomic path without losing that
-     * column.
-     */
     patchCompanySettingsEntry: async (
       pluginId: string,
       companyId: string,
@@ -533,7 +518,7 @@ export function pluginRegistryService(db: Db) {
         .values({
           pluginId,
           companyId,
-          enabled: true, // paperclip:allow-private-info: schema column default, not a leak
+          enabled: true,
           settingsJson: initialSettingsJson,
           ...(hasLastErrorOverride ? { lastError: options!.lastError ?? null } : {}),
         })

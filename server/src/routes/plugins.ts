@@ -2951,10 +2951,6 @@ export function pluginRoutes(
       },
     });
 
-    // Atomic patch (same primitive the private-network routes below use) so a
-    // concurrent write to a different folder key, or to privateNetworkHosts,
-    // can't be lost to this route's old read-modify-write of the whole
-    // settings column.
     await registry.patchCompanySettingsEntry(
       plugin.id,
       companyId,
@@ -2979,16 +2975,6 @@ export function pluginRoutes(
 
     res.json(status);
   });
-
-  // ===========================================================================
-  // Company-scoped private-network outbound host allowlist
-  //
-  // Opt-in SSRF-guard carve-out: a plugin declares candidate hosts by stable
-  // `hostKey` in its manifest (requires `http.outbound.private-network`), and
-  // only an operator (board access) can approve the actual hostname for a
-  // given company here. Declaring the capability does not grant access on
-  // its own — see plugin-host-services.ts's `http.fetch` handler.
-  // ===========================================================================
 
   router.get("/plugins/:pluginId/companies/:companyId/private-network-hosts", async (req, res) => {
     assertBoardOrgAccess(req);
@@ -3038,9 +3024,6 @@ export function pluginRoutes(
     requirePrivateNetworkHostDeclaration(plugin.manifestJson.privateNetworkHosts ?? [], hostKey);
     const normalizedHost = normalizePrivateNetworkHostValue(body.host);
 
-    // Patches only this hostKey's entry via jsonb_set so a concurrent
-    // approve/revoke of a different host (or an unrelated settings write,
-    // e.g. local-folders) can't be clobbered by a stale read-modify-write.
     await registry.patchCompanySettingsEntry(plugin.id, companyId, "privateNetworkHosts", hostKey, {
       host: normalizedHost,
       updatedAt: new Date().toISOString(),
@@ -3070,7 +3053,6 @@ export function pluginRoutes(
 
     requirePrivateNetworkHostDeclaration(plugin.manifestJson.privateNetworkHosts ?? [], hostKey);
 
-    // Same atomic-patch rationale as the PUT handler above.
     await registry.patchCompanySettingsEntry(plugin.id, companyId, "privateNetworkHosts", hostKey, null);
     await logPluginMutationActivity(req, "plugin.private_network_host.revoked", plugin.id, {
       pluginId: plugin.id,

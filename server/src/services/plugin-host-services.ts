@@ -170,7 +170,6 @@ interface ValidatedFetchTarget {
   useTls: boolean;
 }
 
-/** @internal exported only for the plugin-host-services SSRF guard tests. */
 export async function validateAndResolveFetchUrl(
   urlString: string,
   approvedPrivateNetworkHosts?: Set<string>,
@@ -221,9 +220,6 @@ export async function validateAndResolveFetchUrl(
       );
     }
 
-    // An operator-approved private-network host is expected to resolve to a
-    // private IP — use the private result directly instead of the (empty)
-    // safe-results filter in that case.
     const resolved = (safeResults.length > 0 ? safeResults : results)[0]!;
     return {
       parsedUrl: parsed,
@@ -974,14 +970,6 @@ export function buildHostServices(
       storedConfig: await getStoredLocalFolderConfig(companyId, folderKey),
     });
 
-  /**
-   * Resolve the set of private-network hostnames this plugin may reach for
-   * one company. Returns an empty set unless the plugin both declares
-   * `http.outbound.private-network` and has at least one operator-approved
-   * host stored for that company — the SSRF guard's default-deny applies to
-   * everyone else, including a plugin with the capability but no approved
-   * host yet.
-   */
   const getApprovedPrivateNetworkHosts = async (companyId: string | undefined): Promise<Set<string>> => {
     if (!companyId) return new Set();
     if (!options.manifest?.capabilities?.includes("http.outbound.private-network")) return new Set();
@@ -1623,10 +1611,6 @@ export function buildHostServices(
           },
         });
 
-        // Atomic patch (same primitive the private-network allowlist routes
-        // use) so a concurrent write to a different folder key, or to
-        // privateNetworkHosts, can't be lost to a stale read-modify-write of
-        // the whole settings column.
         await registry.patchCompanySettingsEntry(
           pluginId,
           companyId,
@@ -1761,8 +1745,6 @@ export function buildHostServices(
 
     http: {
       async fetch(params) {
-        // SSRF protection: validate protocol whitelist + block private IPs,
-        // unless this exact host is operator-approved for this plugin+company.
         // Resolve once, then connect directly to that IP to prevent DNS rebinding.
         const approvedPrivateNetworkHosts = await getApprovedPrivateNetworkHosts(params.companyId);
         const target = await validateAndResolveFetchUrl(params.url, approvedPrivateNetworkHosts);
