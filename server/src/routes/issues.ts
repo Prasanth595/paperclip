@@ -6663,7 +6663,7 @@ export function issueRoutes(
           addedBlockerIds.map((id) => svc.getById(id)),
         );
         if (
-          addedBlockers.some(
+          addedBlockers.every(
             (blocker) =>
               blocker?.companyId === issue.companyId &&
               !isClosedIssueStatus(blocker.status),

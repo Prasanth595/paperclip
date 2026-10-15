@@ -1874,6 +1874,45 @@ describe("agent issue mutation checkout ownership", () => {
     expect(mockIssueRecoveryActionService.resolveActiveForIssue).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["terminal", "done", companyId],
+    ["cross-company", "in_progress", "other-company-id"],
+  ])("rejects mixed unresolved and %s blocker additions", async (_label, secondStatus, secondCompanyId) => {
+    const sourceIssue = makeIssue({ status: "blocked", assigneeAgentId: null, assigneeUserId: null });
+    const existingBlocker = makeIssue({ id: existingBlockerId, status: "in_progress" });
+    const cleanupBlocker = makeIssue({ id: cleanupBlockerId, status: "in_progress" });
+    const secondBlockerId = "00000000-0000-4000-8000-000000000099";
+    const secondBlocker = makeIssue({
+      id: secondBlockerId,
+      status: secondStatus,
+      companyId: secondCompanyId,
+    });
+    mockIssueService.getById.mockImplementation(async (id: string) => {
+      if (id === issueId) return sourceIssue;
+      if (id === existingBlockerId) return existingBlocker;
+      if (id === cleanupBlockerId) return cleanupBlocker;
+      if (id === secondBlockerId) return secondBlocker;
+      return null;
+    });
+    mockIssueService.getRelationSummaries.mockResolvedValue({
+      blockedBy: [existingBlocker],
+      blocks: [],
+    });
+    mockIssueRecoveryActionService.getActiveForIssue.mockResolvedValue({
+      id: recoveryActionId,
+      ownerType: "board",
+      ownerAgentId: null,
+    });
+
+    const res = await request(await createApp(peerActor()))
+      .patch(`/api/issues/${issueId}`)
+      .send({ blockedByIssueIds: [existingBlockerId, cleanupBlockerId, secondBlockerId] });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    expect(res.body.error).toBe("Agent cannot resolve another owner's recovery action");
+    expect(mockIssueService.update).not.toHaveBeenCalled();
+  });
+
   it("rejects peer-agent recovery resolution on a board-owned source issue", async () => {
     mockIssueService.getById.mockResolvedValue(
       makeIssue({ status: "blocked", assigneeAgentId: null, assigneeUserId: "board-user" }),
