@@ -11637,6 +11637,14 @@ export function toolAccessService(
               },
             };
             const updated = await db.transaction(async (tx) => {
+              const [current] = await tx.select({ id: connectionGrants.id }).from(connectionGrants)
+                .where(and(eq(connectionGrants.id, grant.id), eq(connectionGrants.companyId, grant.companyId),
+                  eq(connectionGrants.status, "active"),
+                  sql`${connectionGrants.providerTenant} -> 'oauth' -> 'refreshLease' ->> 'id' = ${lease.leaseId}`))
+                .for("update");
+              if (!current) throw conflict("OAuth credentials changed while refresh was in progress", {
+                code: "oauth_refresh_superseded", retryable: true,
+              });
               const txSecrets = secretService(tx);
               await txSecrets.rotate(
                 accessRef.secretId,
@@ -13724,6 +13732,9 @@ export function toolAccessService(
         const attemptedConnection = connectionRow;
         try {
           await db.transaction(async (tx) => {
+            if (revivedGrantMutation) await tx.select({ id: connectionGrants.id }).from(connectionGrants)
+              .where(and(eq(connectionGrants.id, revivedGrantMutation.current.id), eq(connectionGrants.companyId, companyId)))
+              .for("update");
             const [latestConnection] = await tx
               .select()
               .from(toolConnections)
@@ -15801,7 +15812,8 @@ export function toolAccessService(
                 : eq(connectionGrants.isDefault, true),
           ),
         )
-        .limit(1);
+        .limit(1)
+        .for("update");
       await tx.select({ id: toolApplications.id }).from(toolApplications)
         .where(and(eq(toolApplications.id, connection.applicationId), eq(toolApplications.companyId, connection.companyId)))
         .for("update");
@@ -16435,7 +16447,8 @@ export function toolAccessService(
               eq(connectionGrants.subjectUserId, stateRow.subjectUserId!),
             ),
           )
-          .limit(1);
+          .limit(1)
+          .for("update");
         await tx.select({ id: toolApplications.id }).from(toolApplications)
           .where(and(eq(toolApplications.id, connection.applicationId), eq(toolApplications.companyId, connection.companyId)))
           .for("update");
@@ -16755,6 +16768,10 @@ export function toolAccessService(
           "Only a company owner, admin, or member with connection-manager permission can share credentials with the organization.",
         );
       }
+      await tx.select({ id: connectionGrants.id }).from(connectionGrants)
+        .where(and(eq(connectionGrants.companyId, connection.companyId), eq(connectionGrants.connectionId, connection.id),
+          eq(connectionGrants.kind, "organization"), eq(connectionGrants.isDefault, true)))
+        .for("update");
       await tx.select({ id: toolApplications.id }).from(toolApplications)
         .where(and(eq(toolApplications.id, connection.applicationId), eq(toolApplications.companyId, connection.companyId)))
         .for("update");
@@ -17148,6 +17165,16 @@ export function toolAccessService(
         ];
         const nowAt = new Date();
         await db.transaction(async (tx) => {
+          await tx.select({ id: connectionGrants.id }).from(connectionGrants)
+            .where(and(eq(connectionGrants.companyId, companyId), eq(connectionGrants.connectionId, connection.id),
+              or(eq(connectionGrants.id, personalGrant.id), and(eq(connectionGrants.kind, "organization"), eq(connectionGrants.isDefault, true)))))
+            .orderBy(connectionGrants.id).for("update");
+          await tx.select({ id: toolApplications.id }).from(toolApplications)
+            .where(and(eq(toolApplications.id, connection.applicationId), eq(toolApplications.companyId, companyId)))
+            .for("update");
+          await tx.select({ id: toolConnections.id }).from(toolConnections)
+            .where(and(eq(toolConnections.id, connection.id), eq(toolConnections.companyId, companyId)))
+            .for("update");
           const [existingOrganizationGrant] = await tx
             .select()
             .from(connectionGrants)
@@ -18489,19 +18516,9 @@ export function toolAccessService(
         // Serialize replacements before taking the current audience snapshot.
         // Otherwise a second replacement could read the old rows, wait behind
         // an in-flight replacement, and then miss locking a newly-added member.
-        await tx
-          .select({ id: connectionGrants.id })
-          .from(connectionGrants)
-          .where(
-            and(
-              eq(connectionGrants.id, grant.id),
-              eq(connectionGrants.companyId, connection.companyId),
-              eq(connectionGrants.connectionId, connection.id),
-            ),
-          )
-          .for("update");
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${"paperclip.connection_grant_audience:" + grant.id}, 0))`);
         const existingAudience = await tx
-          .select({ subjectId: connectionGrantMembers.subjectId })
+          .select()
           .from(connectionGrantMembers)
           .where(
             and(
@@ -18564,6 +18581,19 @@ export function toolAccessService(
             );
           }
         }
+        await tx
+          .select({ id: connectionGrants.id })
+          .from(connectionGrants)
+          .where(
+            and(
+              eq(connectionGrants.id, grant.id),
+              eq(connectionGrants.companyId, connection.companyId),
+              eq(connectionGrants.connectionId, connection.id),
+            ),
+          )
+          .for("update");
+        const existingUserSet = new Set(existingUserIds);
+        if (requested.length === existingUserSet.size && requested.every(id => existingUserSet.has(id))) return existingAudience;
         await tx
           .delete(connectionGrantMembers)
           .where(
@@ -18656,11 +18686,14 @@ export function toolAccessService(
               eq(connectionGrants.status, "active"),
             ),
           )
+          .for("update")
           .limit(1);
         if (!grant)
           throw forbidden(
             "Only the active personal grant owner can create a delegation",
           );
+        await tx.select({ id: toolConnections.id }).from(toolConnections)
+          .where(eq(toolConnections.id, connection.id)).for("key share");
         const [targetAgent] = await tx
           .select({ id: agents.id })
           .from(agents)
@@ -18670,6 +18703,7 @@ export function toolAccessService(
               eq(agents.companyId, connection.companyId),
             ),
           )
+          .for("no key update")
           .limit(1);
         if (!targetAgent) throw notFound("Agent not found");
         const [existing] = await tx
@@ -18852,6 +18886,10 @@ export function toolAccessService(
         providerRevocation = "local_only_shared_client";
       }
       const grant = await db.transaction(async (tx) => {
+        const [lockedGrant] = await tx.select({ id: connectionGrants.id }).from(connectionGrants)
+          .where(and(eq(connectionGrants.id, grantId), eq(connectionGrants.companyId, connection.companyId), eq(connectionGrants.connectionId, connection.id)))
+          .for("update");
+        if (!lockedGrant) throw notFound("Connection grant not found");
         const removedDelegations = await tx
           .delete(connectionGrantDelegations)
           .where(
@@ -19274,9 +19312,9 @@ export function toolAccessService(
     configureRailwaySsh: async (connectionId: string, companyId: string, input: ConfigureRailwaySsh, actor: ActorInfo): Promise<RailwaySshSetup | null> => {
       const knownHosts = input.action === "enable" ? validateRailwayKnownHosts(input.knownHosts) : "";
       const setup = await db.transaction(async (tx) => {
+        const [grant] = await tx.select().from(connectionGrants).where(and(eq(connectionGrants.id, input.grantId), eq(connectionGrants.connectionId, connectionId), eq(connectionGrants.companyId, companyId))).for("update");
         const [connection] = await tx.select().from(toolConnections).where(and(eq(toolConnections.id, connectionId), eq(toolConnections.companyId, companyId))).for("update");
         if (!connection || !isRailwayConnection(connection) || (connection.status !== "active" && input.action !== "remove")) throw unprocessable("Connect Railway before configuring container access.");
-        const [grant] = await tx.select().from(connectionGrants).where(and(eq(connectionGrants.id, input.grantId), eq(connectionGrants.connectionId, connectionId), eq(connectionGrants.companyId, companyId))).for("update");
         if (!grant || (grant.status !== "active" && input.action !== "remove")) throw unprocessable("Select an active Railway authorization.");
         if (grant.kind === "user" && (actor.actorType !== "user" || actor.actorId !== grant.subjectUserId)) throw forbidden("Only this authorization's owner can configure its SSH key.");
         const existing = asRecord(connection.config.railwaySsh);

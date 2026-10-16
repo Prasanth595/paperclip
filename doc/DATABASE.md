@@ -1029,6 +1029,12 @@ an agent's runtime; its assignment does. Entry changes resolve standing profile
 bindings; policies resolve old and new agent selectors. Both retain scoped
 recipients. Credential-only fields remain outside this migration's coverage.
 
+Migration 0356 adds access, referenced credentials and vaults, and chat/email
+endpoint configuration to connector runtime invalidation. Grant and membership
+changes retain company scope. Agent secret bindings and new personal delegations
+use agent scope. Credential values remain outside the journal. Endpoint activity,
+vault health, and other bookkeeping fields remain excluded.
+
 ## Retired Pipelines storage
 
 The Pipelines experiment has been removed from the application, API, CLI, and

@@ -229,6 +229,19 @@ export function accessService(db: Db) {
     const connectionSecretIdsToRemove = new Set(
       ownedSecretIds.filter((secretId) => !sharedConnectionSecretIds.has(secretId)),
     );
+    const affectedGrantIds = [...new Set([...grantIds, ...grantRefs
+      .filter(grant => affectedConnections.has(grant.connectionId))
+      .map(grant => grant.id)])];
+    if (affectedGrantIds.length > 0) {
+      await tx.select({ id: connectionGrants.id }).from(connectionGrants)
+        .where(and(eq(connectionGrants.companyId, companyId), inArray(connectionGrants.id, affectedGrantIds)))
+        .orderBy(connectionGrants.id).for("update");
+    }
+    if (affectedConnectionIds.length > 0) {
+      await tx.select({ id: toolConnections.id }).from(toolConnections)
+        .where(and(eq(toolConnections.companyId, companyId), inArray(toolConnections.id, affectedConnectionIds)))
+        .orderBy(toolConnections.id).for("update");
+    }
     const removedDelegations = grantIds.length === 0 ? [] : await tx
       .delete(connectionGrantDelegations)
       .where(and(
@@ -448,10 +461,11 @@ export function accessService(db: Db) {
     grants: GrantInput[],
     grantedByUserId: string | null,
   ) {
-    const member = await getMemberById(companyId, memberId);
-    if (!member) return null;
-
-    await db.transaction(async (tx) => {
+    return db.transaction(async (tx) => {
+      const member = await tx.select().from(companyMemberships)
+        .where(and(eq(companyMemberships.companyId, companyId), eq(companyMemberships.id, memberId)))
+        .for("update").then(rows => rows[0] ?? null);
+      if (!member) return null;
       await tx
         .delete(principalPermissionGrants)
         .where(
@@ -475,9 +489,8 @@ export function accessService(db: Db) {
           })),
         );
       }
+      return member;
     });
-
-    return member;
   }
 
   async function updateMemberAndPermissions(

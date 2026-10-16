@@ -161,6 +161,32 @@ the same transaction.
 The bounded assignment snapshot remains the API described above. An invalidation
 can advance its revision without changing its assignment fields. Consumers must
 use their existing authorized readers for tool definitions and configuration.
-Credential-only changes, grants, secrets, and endpoint configuration still need
-the access hooks supplied by a later migration before consumers can rely on
-their immediate synchronization.
+
+## Access, credentials, and endpoints
+
+Migration 0356 adds connection grants, grant audiences and delegations, company
+membership and permissions, secret bindings, chat/email endpoint configuration,
+and referenced credential rotation or revocation. Vault configuration and status
+changes invalidate companies whose connector credentials reference that vault.
+Vault health checks and endpoint publication timestamps do not request work.
+Events contain no credential values, phone numbers, or provider payloads.
+
+Access changes conservatively invalidate eligible company agents because
+responsible-user and task-time access can vary across runs. Agent secret bindings
+instead invalidate their owning agent. Creating a personal grant delegation also
+invalidates only its target agent; grant revocation and membership cleanup retain
+company invalidation. Unchanged grant audiences preserve their rows after
+membership validation.
+
+OAuth persistence and membership cleanup lock affected grants before connection
+inputs and credential mutations. Each affected set is locked in ID order. Task
+completion locks existing grants before assignment inputs. Permission-only saves
+lock membership before replacing permissions, as role and status saves do.
+Personal delegation creation locks its grant, connection reference, and target
+agent before insertion. These guards accompany the hooks that require them.
+
+The runtime snapshot still excludes credentials and arbitrary configuration.
+Task-scoped profile bindings, responsible-user consent, gateway sessions,
+automatic connector skill overlays, and connection instructions remain in the
+existing run preparation path. Invalidation does not create a run identity or
+activate a provider session. Transport consumers must preserve those boundaries.
