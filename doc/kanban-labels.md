@@ -9,7 +9,8 @@ Use **Show labels** in the board toolbar to hide or show labels. The setting is
 on by default, applies to compact cards and drag previews, and is saved with the
 existing collection preferences for the current company. It is independent of
 **Columns → Tags**, which controls list rows. **Reset board density** restores
-label visibility along with the board density defaults.
+label visibility along with the board density defaults. The control works in both
+the streamlined and legacy interfaces.
 
 Labels remain part of the card link. Clicking a label opens the task, and dragging
 a card continues to move it between status columns. No server or database change

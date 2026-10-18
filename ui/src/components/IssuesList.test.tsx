@@ -1439,7 +1439,8 @@ describe("IssuesList", () => {
     });
   });
 
-  it("persists the independent board label toggle and restores its default", async () => {
+  it.each([true, false])("persists the independent board label toggle and restores its default (streamlined=%s)", async (streamlined) => {
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({ enableStreamlinedUi: streamlined });
     const key = "paperclip:test-issues";
     localStorage.setItem(`${key}:company-1`, JSON.stringify({ viewMode: "board" }));
     const board = (viewStateKey = key) => (
@@ -1460,11 +1461,9 @@ describe("IssuesList", () => {
     await expectLabels(false);
     expect(toggle().getAttribute("aria-pressed")).toBe("false");
     expect(localStorage.getItem(`${key}:company-1`)).toContain('"boardShowLabels":false');
-    // Remount reads the collection preference envelope, not just live React state.
     await act(() => root.unmount());
     ({ root } = renderWithQueryClient(board(), container));
     await expectLabels(false);
-    // Another collection and company each retain their own default.
     localStorage.setItem("paperclip:other:company-1", JSON.stringify({ viewMode: "board" }));
     await act(() => root.unmount());
     ({ root } = renderWithQueryClient(board("paperclip:other"), container));
@@ -1481,7 +1480,6 @@ describe("IssuesList", () => {
     const reset = container.querySelector<HTMLButtonElement>('button[title="Reset board density"]')!;
     await act(() => { reset.click(); });
     await expectLabels(true);
-    // List column settings remain independent of the new board setting.
     expect(JSON.parse(localStorage.getItem(taskCollectionPreferencesStorageKey({ companyId: "company-1", collectionKey: key }))!).columns).not.toContain("labels");
     await act(() => root.unmount());
   });
