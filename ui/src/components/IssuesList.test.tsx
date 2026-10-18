@@ -189,6 +189,7 @@ vi.mock("./KanbanBoard", () => ({
   KanbanBoard: (props: {
     issues: Issue[];
     compactCards?: boolean;
+    showLabels?: boolean;
     collapsedStatuses?: string[];
     initialVisibleCount?: number;
     revealIncrement?: number;
@@ -1436,6 +1437,53 @@ describe("IssuesList", () => {
     act(() => {
       root.unmount();
     });
+  });
+
+  it("persists the independent board label toggle and restores its default", async () => {
+    const key = "paperclip:test-issues";
+    localStorage.setItem(`${key}:company-1`, JSON.stringify({ viewMode: "board" }));
+    const board = (viewStateKey = key) => (
+      <IssuesList issues={[]} agents={[]} projects={[]} viewStateKey={viewStateKey} onUpdateIssue={() => undefined} />
+    );
+    let { root } = renderWithQueryClient(board(), container);
+    const expectLabels = async (showLabels: boolean) => {
+      await waitForAssertion(() => {
+        expect(mockKanbanBoard).toHaveBeenLastCalledWith(expect.objectContaining({ showLabels }));
+      });
+    };
+    await expectLabels(true);
+    const toggle = () => container.querySelector<HTMLButtonElement>('button[aria-label="Show labels"]')!;
+    expect(toggle().getAttribute("aria-pressed")).toBe("true");
+    expect(toggle().querySelector("span")?.classList.contains("hidden")).toBe(true);
+    expect(toggle().querySelector("span")?.classList.contains("sm:inline")).toBe(true);
+    await act(() => { toggle().click(); });
+    await expectLabels(false);
+    expect(toggle().getAttribute("aria-pressed")).toBe("false");
+    expect(localStorage.getItem(`${key}:company-1`)).toContain('"boardShowLabels":false');
+    // Remount reads the collection preference envelope, not just live React state.
+    await act(() => root.unmount());
+    ({ root } = renderWithQueryClient(board(), container));
+    await expectLabels(false);
+    // Another collection and company each retain their own default.
+    localStorage.setItem("paperclip:other:company-1", JSON.stringify({ viewMode: "board" }));
+    await act(() => root.unmount());
+    ({ root } = renderWithQueryClient(board("paperclip:other"), container));
+    await expectLabels(true);
+    await act(() => root.unmount());
+    companyState.selectedCompanyId = "company-2";
+    localStorage.setItem(`${key}:company-2`, JSON.stringify({ viewMode: "board" }));
+    ({ root } = renderWithQueryClient(board(), container));
+    await expectLabels(true);
+    await act(() => root.unmount());
+    companyState.selectedCompanyId = "company-1";
+    ({ root } = renderWithQueryClient(board(), container));
+    await expectLabels(false);
+    const reset = container.querySelector<HTMLButtonElement>('button[title="Reset board density"]')!;
+    await act(() => { reset.click(); });
+    await expectLabels(true);
+    // List column settings remain independent of the new board setting.
+    expect(JSON.parse(localStorage.getItem(taskCollectionPreferencesStorageKey({ companyId: "company-1", collectionKey: key }))!).columns).not.toContain("labels");
+    await act(() => root.unmount());
   });
 
   it("lets board users choose the per-column page size", async () => {
