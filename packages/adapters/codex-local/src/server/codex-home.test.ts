@@ -4,6 +4,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { prepareAdapterExecutionTargetRuntime } from "@paperclipai/adapter-utils/execution-target";
 import { runChildProcess } from "@paperclipai/adapter-utils/server-utils";
+import { execute as executeCodex } from "./execute.js";
+import { buildProviderObservabilityLaunch } from "@paperclipai/adapter-utils/agent-observability";
+import { randomUUID } from "node:crypto";
 import {
   CODEX_SYNC_ALLOWLIST,
   buildCodexHomeRefreshProvision,
@@ -1117,6 +1120,54 @@ describe("stageCodexHomeForSync", () => {
 
     return { home, authBytes, skillBytes };
   }
+
+  it.each([
+    { extraArgs: ["--profile", "selected"], args: ["--profile", "ignored"], expectedModel: "selected-model" },
+    { extraArgs: ["--full-auto"], args: ["--profile", "ignored"], expectedModel: undefined },
+    { extraArgs: [], args: ["--profile", "legacy"], expectedModel: "legacy-model" },
+  ])("uses effective CLI arguments when materializing an export profile: %j", async ({ extraArgs, args, expectedModel }) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-codex-profile-policy-"));
+    const companyId = randomUUID();
+    const home = path.join(root, "instances", "default", "companies", companyId, "codex-home");
+    const captured = path.join(root, "captured-profile.json");
+    try {
+      vi.stubEnv("PAPERCLIP_HOME", root); vi.stubEnv("PAPERCLIP_INSTANCE_ID", "default");
+      vi.stubEnv("CODEX_HOME", path.join(root, "source-home"));
+      await fs.mkdir(home, { recursive: true });
+      for (const name of ["selected", "ignored", "legacy"]) {
+        await fs.writeFile(path.join(home, `${name}.config.toml`), `model = "${name}-model"\n`);
+      }
+      const command = path.join(root, "fake-codex");
+      await fs.writeFile(command, `#!${process.execPath}
+const fs = require("node:fs"), path = require("node:path");
+if (process.argv.includes("--version")) { console.log("codex-cli 0.160.0"); process.exit(0); }
+process.stdin.resume();
+process.stdin.on("end", () => {
+  const argv = process.argv.slice(2), index = argv.indexOf("--profile");
+  const profile = index < 0 ? null : fs.readFileSync(path.join(process.env.CODEX_HOME, argv[index + 1] + ".config.toml"), "utf8");
+  fs.writeFileSync(${JSON.stringify(captured)}, JSON.stringify({ argv, profile }));
+  console.log(JSON.stringify({ type: "thread.started", thread_id: "fixture-session" }));
+  console.log(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1, output_tokens: 1 } }));
+});
+`, { mode: 0o700 });
+      const result = await executeCodex({
+        runId: randomUUID(), agent: { id: randomUUID(), companyId, adapterType: "codex_local", name: "Profile fixture", adapterConfig: {} },
+        runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null }, context: {}, config: { engine: "cli", command, cwd: root, extraArgs, args,
+          env: { CODEX_HOME: home, OPENAI_API_KEY: "fake-provider-key" }, paperclipSkillSync: { desiredSkills: [] } },
+        observability: buildProviderObservabilityLaunch({ kind: "codex", companyId, agentId: "fixture-agent", revision: "revision", compatibilityKey: "fixture",
+          enabled: true, capture: { userPrompts: true, assistantResponses: true, toolDetails: true, toolContent: true },
+          logsEndpoint: "https://collector.example/v1/logs", tracesEndpoint: "https://collector.example/v1/traces", headers: {} }),
+        onLog: async () => {}, onMeta: async () => {},
+      });
+      expect(result.exitCode).toBe(0);
+      const output = JSON.parse(await fs.readFile(captured, "utf8"));
+      expect(output.argv.filter((arg: string) => arg === "--profile")).toHaveLength(1);
+      expect(output.profile.match(/^model = "([^"]+)"$/m)?.[1]).toBe(expectedModel);
+      expect(output.profile).toContain("log_user_prompt = true");
+      expect(output.profile).toContain("log_agent_responses = true");
+      expect(output.argv).not.toContain("ignored");
+    } finally { vi.unstubAllEnvs(); await fs.rm(root, { recursive: true, force: true }); }
+  });
 
   it.each([false, true])("preserves remote conversations through real exporter restaging (subscription=%s)", async (mergeAuth) => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-codex-restage-"));

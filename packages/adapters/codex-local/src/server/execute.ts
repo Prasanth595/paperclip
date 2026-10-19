@@ -787,7 +787,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       if (isManagedCodexHomePath(process.env, agent.companyId, effectiveCodexHome)) {
         try {
           observabilityProfile = await prepareCodexObservabilityProfile({ home: effectiveCodexHome, runId,
-            launch: ctx.observability, sourceProfile: selectedCodexProfile([...asStringArray(config.extraArgs), ...asStringArray(config.args)]) });
+            launch: ctx.observability, sourceProfile: selectedCodexProfile(buildCodexExecArgs(config).args) });
         } catch {
           observabilityPreparationFailed = true;
           await onLog("stderr", "[paperclip] Company observability configuration could not be prepared; execution continues with export disabled.\n");
