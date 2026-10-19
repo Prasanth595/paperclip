@@ -494,10 +494,13 @@ is unique, so retries return the original accepted action. Provider source
 ordering fences duplicate and stale updates, and a cleared projection retains
 its revision/cursor tombstone so an older provider event cannot resurrect it.
 
-Issue `status_version` advances only when `status` changes. The JavaScript backup
-path includes user-defined functions and triggers so a restored database keeps
-that invariant. Removing or disabling a future native rollout flag must not
-delete these records; persisted experimental runs remain available for recovery
+Issue `status_version` advances when `status`, `assignee_agent_id`, or
+`assignee_user_id` changes. A combined status and assignment write advances it
+once. Writing the same assignee alone does not advance it. A new blocking
+decision can also advance the revision. The assignment trigger has its own name so replay of the historical status migration cannot remove it. The
+JavaScript backup path includes user-defined functions and triggers so a restored
+database keeps that invariant. Removing or disabling a future native rollout
+flag must not delete these records; persisted experimental runs remain available for recovery
 and inspection.
 
 `native_run_finalizations` also stores restart ownership and recovery state.

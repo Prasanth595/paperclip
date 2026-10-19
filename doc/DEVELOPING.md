@@ -2296,11 +2296,17 @@ unless `allowLocalPathSources` is set by the caller.
 An integration can create a task in `backlog`, save its initial documents, and
 then promote it with `PATCH /api/issues/{id}`. Send exactly
 `{ "status": "todo", "expectedStatusVersion": N }`, using the `statusVersion`
-from the task whose initialization the integration owns. The server checks the
+from the task whose initialization the integration owns. Capture that version
+on a server that already advertises this guard, before preparing the task.
+Older servers did not track every assignment path; reconcile older initialization
+intents instead of promoting them automatically after an upgrade. The server checks the
 version and backlog state under the task row lock. A status or assignment change
 returns `409` with `details.code: "issue_status_version_changed"`; mixed mutation
 fields return `422`. The guard is optional and applies only to this promotion.
 It does not provide a general conditional lifecycle or execution-control API.
+Assignment changes advance the revision at the database boundary, including
+release, administrative release, and direct service writes. A no-op assignment
+keeps the revision. Migration 0358 adds this trigger without rewriting tasks.
 
 Persist the original version with the integration's initialization intent so a
 later retry cannot override a person's intervening decision. A caller still needs
