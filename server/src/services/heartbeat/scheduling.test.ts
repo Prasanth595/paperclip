@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Db } from "@paperclipai/db";
 import {
-  agents, agentSessionGoalActions, agentTaskSessions, companies, createDb,
+  activityLog, agents, agentSessionGoalActions, agentTaskSessions, companies, createDb,
   EMBEDDED_POSTGRES_TEST_TIMEOUT_MS, heartbeatRuns, issues,
 } from "@paperclipai/db";
 import { eq, sql } from "drizzle-orm";
@@ -199,6 +199,30 @@ describe.skipIf(!postgres.supported)("heartbeat scheduling database boundary", (
     await f.scheduler.tickTimers(now);
     expect(await readIssue(f.issue.id)).toMatchObject({ monitorNextCheckAt: dueAt, monitorWakeRequestedAt: null });
     expect(await f.scheduler.tickTimers(now)).toEqual({ checked: 1, enqueued: 1, skipped: 0 });
+  });
+
+  it("records bounded dispatch failure diagnostics while retaining the schedule", async () => {
+    const f = await fixture();
+    f.deps.enqueueWakeup.mockRejectedValue(new Error("PRIVATE_PROVIDER_FAILURE"));
+    await f.scheduler.tickTimers(now);
+    await f.scheduler.tickTimers(new Date(now.getTime() + 30_000));
+    expect(await readIssue(f.issue.id)).toMatchObject({ monitorNextCheckAt: dueAt, monitorWakeRequestedAt: null, monitorAttemptCount: 0 });
+    const events = await db.select().from(activityLog).where(eq(activityLog.entityId, f.issue.id));
+    expect(events.filter(event => event.action === "issue.monitor_dispatch_failed")).toHaveLength(1);
+    expect(events[0]?.details).toMatchObject({ reason: "monitor_dispatch_failed", nextCheckAt: dueAt.toISOString(), attemptCount: 0 });
+    expect(JSON.stringify(events)).not.toContain("PRIVATE_PROVIDER_FAILURE");
+  });
+
+  it("does not attach old dispatch diagnostics to a replacement monitor", async () => {
+    const f = await fixture();
+    const replacement = new Date(now.getTime() + 60_000);
+    f.deps.enqueueWakeup.mockImplementationOnce(async () => {
+      await db.update(issues).set({ monitorNextCheckAt: replacement, monitorWakeRequestedAt: null }).where(eq(issues.id, f.issue.id));
+      return null;
+    });
+    await f.scheduler.tickTimers(now);
+    expect(await readIssue(f.issue.id)).toMatchObject({ monitorNextCheckAt: replacement });
+    expect(await db.select().from(activityLog).where(eq(activityLog.entityId, f.issue.id))).toHaveLength(0);
   });
 
   it("leaves monitors alone while a native run owns the issue", async () => {
