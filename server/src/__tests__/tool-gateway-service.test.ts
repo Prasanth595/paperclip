@@ -1209,6 +1209,42 @@ describeEmbeddedPostgres("tool gateway service", () => {
     expect(provider).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ["initialize", 401],
+    ["initialize", 403],
+    ["initialize", 503],
+    ["notifications/initialized", 401],
+    ["notifications/initialized", 403],
+    ["notifications/initialized", 503],
+  ] as const)("gates only authentication failures during %s with HTTP %s", async (method, status) => {
+    const { company, agent, run } = await createRunFixture(db);
+    const { connection } = await createRemoteMcpToolFixture(db, company.id);
+    await db.update(toolConnections).set({
+      config: { ...connection.config, mcpSessionRequired: true },
+    }).where(eq(toolConnections.id, connection.id));
+    await db.insert(toolPolicies).values(readPolicyRow(company, "Allow read tools"));
+    const methods: string[] = [];
+    const gateway = createTestToolGatewayService(db, { remoteHttpRequest: async (_url, init) => {
+      const request = JSON.parse(String(init.body));
+      methods.push(request.method);
+      if (request.method === method) return new Response("Rejected", { status });
+      return Response.json({ jsonrpc: "2.0", id: request.id, result: {
+        protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "fixture", version: "1" },
+      } }, { headers: { "mcp-session-id": "setup-session" } });
+    } });
+    const session = await gateway.createSession(runSessionInput(company, agent, run));
+    const tool = (await gateway.listToolsForSession(session.token)).find((entry) => entry.connectionId === connection.id)!;
+
+    await expect(gateway.executeTool({ sessionToken: session.token, tool: tool.name, parameters: {} }))
+      .rejects.toMatchObject({ reasonCode: "mcp_remote_fetch_failed" });
+    const [updated] = await db.select().from(toolConnections).where(eq(toolConnections.id, connection.id));
+    const authenticationFailure = status === 401 || status === 403;
+    expect(updated.healthStatus).toBe(authenticationFailure ? "error" : "ok");
+    const listed = (await gateway.listToolsForSession(session.token)).filter((entry) => entry.connectionId === connection.id);
+    expect(listed).toHaveLength(authenticationFailure ? 0 : 1);
+    expect(methods).toEqual(method === "initialize" ? ["initialize"] : ["initialize", "notifications/initialized"]);
+  });
+
   it("maps remote MCP elicitation to a durable issue interaction", async () => {
     const { company, agent, run } = await createRunFixture(db);
     await createRemoteMcpToolFixture(db, company.id);

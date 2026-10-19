@@ -119,6 +119,7 @@ import {
   forgetMcpHttpSession,
   readMcpHttpResponse,
   McpHttpResponseError,
+  McpHttpInitializationError,
   mcpHttpRequestHeaders,
   parseMcpHttpResponseBody,
 } from "./mcp-http.js";
@@ -6444,6 +6445,9 @@ export function createToolGatewayService(
             execution,
           },
         );
+      }
+      if (error instanceof McpHttpInitializationError && (error.status === 401 || error.status === 403)) {
+        await markCallHealth("error", "Remote MCP session authorization failed.");
       }
       if (mcpSession) forgetMcpHttpSession(mcpSession);
       throw new ToolGatewayHttpError(
