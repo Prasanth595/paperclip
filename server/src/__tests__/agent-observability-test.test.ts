@@ -13,6 +13,8 @@ let root: protobuf.Root;
 beforeAll(async () => {
   root = protobuf.parse(await readFile(new URL("./fixtures/otlp-observability.proto", import.meta.url), "utf8")).root;
   server = createServer(async (req, res) => {
+    // Fault scenarios must not leave pooled sockets for the next scenario.
+    res.setHeader("connection", "close");
     const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(Buffer.from(chunk));
     requests.push({ path: req.url!, headers: req.headers, body: Buffer.concat(chunks) });
     if (responseMode === "hang") return;
