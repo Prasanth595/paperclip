@@ -21,9 +21,9 @@ import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } fro
 const support = await getEmbeddedPostgresTestSupport();
 const describePostgres = support.supported ? describe : describe.skip;
 type Db = ReturnType<typeof createDb>;
+let activityRoutes: typeof import("../routes/activity.js").activityRoutes;
 
 async function createApp(db: Db, actor: Express.Request["actor"]) {
-  const { activityRoutes } = await import("../routes/activity.js");
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
@@ -42,9 +42,10 @@ describePostgres("agent action audit routes", () => {
   let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
 
   beforeAll(async () => {
+    ({ activityRoutes } = await import("../routes/activity.js"));
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-agent-action-audit-");
     db = createDb(tempDb.connectionString);
-  }, 20_000);
+  });
 
   afterEach(async () => {
     await db.delete(activityLog);
