@@ -75,6 +75,7 @@ import {
 } from "../hot-restart.js";
 import { serverVersion } from "../../version.js";
 import { adapterExecutionControls, waitForAdapterStop } from "../adapter-execution-control.js";
+import { readRunCancellation } from "../run-cancellation.js";
 import { allowLegacyShutdownWorkspaceCleanup, beginLegacyShutdownWorkspaceSettlement, finishLegacyShutdownWorkspaceSettlement, maintainLegacyShutdownWorkspaceSettlement, sweepLegacyShutdownWorkspaceSettlements } from "../legacy-shutdown-workspace-settlement.js";
 
 import type { environmentService } from "../environments.js";
@@ -82,6 +83,7 @@ import type { environmentRuntimeService, ProviderResourceDisposition } from "../
 import type { agentInstructionWorkingCopyService } from "../agent-instruction-working-copies.js";
 import type { createHeartbeatRunState } from "./run-state.js";
 import type { HeartbeatRetryDependencies, createHeartbeatRetries } from "./retries.js";
+import type { CancelRunOptions } from "./run-control.js";
 
 type HeartbeatRun = typeof heartbeatRuns.$inferSelect;
 type HeartbeatRetries = ReturnType<typeof createHeartbeatRetries>;
@@ -144,7 +146,7 @@ export interface HeartbeatRecoveryDependencies extends Pick<HeartbeatRetryDepend
   acknowledgeRemoteStop: (runId: string, companyId: string) => Promise<void>;
   resumeRemoteStopComments: (run: HeartbeatRun) => Promise<void>;
   dispatchPendingNativeStatusWakeups: () => Promise<unknown>;
-  cancelRunInternal: (runId: string, reason?: string, options?: { resultJson?: Record<string, unknown> }) => Promise<unknown>;
+  cancelRunInternal: (runId: string, reason?: string, options?: Pick<CancelRunOptions, "resultJson" | "expectedStatus" | "errorCode">) => Promise<unknown>;
   startNextQueuedRunForAgent: (agentId: string) => Promise<unknown>;
 }
 
@@ -1916,6 +1918,31 @@ export function createHeartbeatRecovery(db: Db, dependencies: HeartbeatRecoveryD
     await preserveCancelledNativeWorkspaces(db);
     const staleThresholdMs = opts?.staleThresholdMs ?? 0;
     const now = new Date();
+    // A parked retry has no executor to finish a cancellation after a restart
+    // or a failed status write. Consume its durable intent through normal run
+    // control; the guarded CAS and terminal settlement make competing sweeps
+    // safe, and dispatch cannot promote a fenced retry in the meantime.
+    const interruptedRetryCancellations = await db.select().from(heartbeatRuns)
+      .where(and(
+        eq(heartbeatRuns.status, "scheduled_retry"),
+        sql`jsonb_typeof(${heartbeatRuns.resultJson}->'startupCancellation') = 'object'`,
+      ))
+      .orderBy(asc(heartbeatRuns.updatedAt), asc(heartbeatRuns.id))
+      .limit(20);
+    for (const run of interruptedRetryCancellations) {
+      const cancellation = readRunCancellation(run.resultJson);
+      if (!cancellation?.expected) continue;
+      try {
+        await cancelRunInternal(run.id, cancellation.reason, {
+          expectedStatus: "scheduled_retry",
+          errorCode: readNonEmptyString(parseObject(run.resultJson?.startupCancellation).errorCode) ?? "cancelled",
+          resultJson: parseObject(run.resultJson),
+        });
+      } catch (error) {
+        // Leave the durable intent for the next bounded periodic sweep.
+        logger.warn({ err: error, runId: run.id }, "failed to finish interrupted retry cancellation");
+      }
+    }
     // Recovery never launches a provider or infers stopped ownership from
     // terminal status. Uncaptured local copies require durable stop evidence.
     await instructionCopies.recoverStopped().catch(error => {

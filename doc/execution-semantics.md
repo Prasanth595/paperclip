@@ -242,6 +242,17 @@ The **Retry now** action returns `waiting` with the saved retry schedule while
 cleanup holds ownership. Its controls show the wait without claiming that a run
 started, and another click can check the gate again.
 
+A human comment may supersede a retry only while it remains `scheduled_retry`.
+Queued and running retries retain their execution and receive the comment through
+normal wake coalescing. Supersession rechecks the scheduled status atomically with
+the cancellation fence; a concurrent promotion must not cancel the active run or
+move its task back to `todo`. Explicit Stop and Interrupt keep their authority.
+Once cancellation wins that fence, due-retry promotion respects its claim until
+the cancellation owner finishes settlement. Startup and periodic recovery finish
+persisted cancellations of parked retries through the normal guarded cancellation
+path if the original owner stops or its final database write fails. They preserve
+the original cancellation request and never start a provider turn for that work.
+
 Recovery instructions in a wake describe only an active or escalated recovery
 action. Resolving or cancelling that action removes its repair instructions from
 subsequent wakes, so the original worker can resume the task. This prompt change
@@ -422,6 +433,14 @@ An external wait counts as a live or waiting path only when the next move surviv
 - a delegated child issue with a responsible owner and its own healthy action path, plus a blocker edge when the source issue must wait for that child; `parentId` alone is not a dependency
 
 A one-shot issue monitor consumes its persisted `nextCheckAt` when it dispatches the assignee wake. If that monitor-consuming run is lost before it records a new disposition or future monitor, Paperclip restores exactly one bounded continuation using the existing process-loss retry limit; if that continuation is also lost, the normal recovery-action escalation owns the next step instead of creating another monitor loop.
+
+Native `set_task_monitor` arguments put scheduling fields inside `monitor`:
+`{ "idempotencyKey": "check-ci", "monitor": { "nextCheckAt": "<future UTC timestamp>", "notes": "Check pending CI." } }`.
+Use `monitor: null` to clear a schedule. A runner schema rejection executes no
+Paperclip mutation. It returns bounded schema locations and repair guidance,
+without submitted values. Correct the arguments and retry; the rejection is not
+evidence that the scheduling service is unavailable. Confirm the persisted
+receipt before reporting a scheduled wait.
 
 A native provider may omit `continuation` (or send `null`) when it reports
 `yielded` after saving a monitor. The controller reads current authorized task
