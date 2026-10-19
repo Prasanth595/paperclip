@@ -77,7 +77,8 @@ The board-only read API is `GET /api/companies/:companyId/agent-commentary`
 `GET /api/companies/:companyId/agent-commentary/:id`. Both require company access
 and `audit:view_agent_actions`. Source-task privacy filters previews, counts and
 details. List results contain at most 280 characters
-per message; the full body is loaded only on opening a message.
+per message; the full body is loaded only on opening a message. Feedback whose
+source task was deleted stays hidden, using the task binding retained on its run.
 
 There is no notification, automatic task creation, or external forwarding.
 This is separate from first-party Telemetry, OpenTelemetry

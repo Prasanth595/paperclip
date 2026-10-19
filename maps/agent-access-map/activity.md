@@ -177,6 +177,7 @@ continues through the existing POST and native submit tools.
 
 Policy: Company membership, `audit:view_agent_actions`, and source-task visibility. Counts and previews
 use the same visibility predicate as full messages; cross-company IDs return 404.
+Feedback stays hidden after source-task deletion, even when its task foreign key clears.
 
 Evidence: `source-only` — [routes](../../server/src/routes/agent-commentary.ts) and
 [reader](../../server/src/services/agent-commentary-reader.ts).

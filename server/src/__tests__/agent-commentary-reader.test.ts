@@ -96,6 +96,22 @@ describe("agent commentary browsing", () => {
     expect((await reader.list(companyId, query(), sql`true`)).items.map((item) => item.id)).not.toContain(foreignId);
   });
 
+  it.each(["legacy", "native"])("keeps %s feedback hidden after its source task is deleted", async (transport) => {
+    const taskId = randomUUID(), runId = randomUUID(), id = randomUUID();
+    await db.insert(issues).values({ id: taskId, companyId, title: "Deleted private task" });
+    await db.insert(heartbeatRuns).values({
+      id: runId, companyId, agentId: firstAgentId, status: "succeeded",
+      ...(transport === "native" ? { nativeIssueId: taskId } : { contextSnapshot: { issueId: taskId } }),
+    });
+    await db.insert(agentCommentary).values({
+      id, companyId, agentId: firstAgentId, runId, issueId: taskId, kind: "complaint",
+      body: "Deleted private task feedback", idempotencyKey: "deleted", payloadHash: "hash",
+    });
+    await db.delete(issues).where(eq(issues.id, taskId));
+    expect(await reader.get(companyId, id, eq(issues.id, visibleTaskId))).toBeNull();
+    expect((await reader.list(companyId, query({ q: "Deleted private task feedback" }), eq(issues.id, visibleTaskId))).total).toBe(0);
+  });
+
   it("enforces board membership, audit permission and filter bounds at the HTTP boundary", async () => {
     let actor: Record<string, unknown> = { type: "board", source: "local_implicit", userId: "operator" };
     const app = express();

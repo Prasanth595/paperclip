@@ -1,5 +1,5 @@
 import { and, count, desc, eq, ilike, isNull, or, sql, type SQL } from "drizzle-orm";
-import { agentCommentary, agents, issues, type Db } from "@paperclipai/db";
+import { agentCommentary, agents, heartbeatRuns, issues, type Db } from "@paperclipai/db";
 import type { AgentCommentaryDetail, AgentCommentaryEntry, AgentCommentaryPage, AgentCommentaryQuery } from "@paperclipai/shared";
 
 const entryFields = {
@@ -16,13 +16,21 @@ export function agentCommentaryReader(db: Db) {
   function visible(companyId: string, readCondition: SQL) {
     return and(
       eq(agentCommentary.companyId, companyId),
-      or(isNull(agentCommentary.issueId), and(sql`${issues.id} is not null`, readCondition)),
+      or(
+        and(isNull(agentCommentary.issueId), sql`coalesce(
+          ${heartbeatRuns.nativeIssueId}::text,
+          ${heartbeatRuns.contextSnapshot}->>'issueId',
+          ${heartbeatRuns.contextSnapshot}->>'taskId'
+        ) is null`),
+        and(sql`${issues.id} is not null`, readCondition),
+      ),
     );
   }
 
   function entries() {
     return db.select(entryFields).from(agentCommentary)
       .innerJoin(agents, and(eq(agents.id, agentCommentary.agentId), eq(agents.companyId, agentCommentary.companyId)))
+      .innerJoin(heartbeatRuns, and(eq(heartbeatRuns.id, agentCommentary.runId), eq(heartbeatRuns.companyId, agentCommentary.companyId)))
       .leftJoin(issues, and(eq(issues.id, agentCommentary.issueId), eq(issues.companyId, agentCommentary.companyId)));
   }
 
@@ -38,6 +46,7 @@ export function agentCommentaryReader(db: Db) {
         entries().where(where).orderBy(desc(agentCommentary.createdAt), desc(agentCommentary.id)).limit(query.limit).offset(query.offset),
         db.select({ total: count() }).from(agentCommentary)
           .innerJoin(agents, and(eq(agents.id, agentCommentary.agentId), eq(agents.companyId, agentCommentary.companyId)))
+          .innerJoin(heartbeatRuns, and(eq(heartbeatRuns.id, agentCommentary.runId), eq(heartbeatRuns.companyId, agentCommentary.companyId)))
           .leftJoin(issues, and(eq(issues.id, agentCommentary.issueId), eq(issues.companyId, agentCommentary.companyId)))
           .where(where),
       ]);
@@ -52,6 +61,7 @@ export function agentCommentaryReader(db: Db) {
     async get(companyId: string, id: string, readCondition: SQL): Promise<AgentCommentaryDetail | null> {
       const [row] = await db.select({ ...entryFields, body: agentCommentary.body }).from(agentCommentary)
         .innerJoin(agents, and(eq(agents.id, agentCommentary.agentId), eq(agents.companyId, agentCommentary.companyId)))
+        .innerJoin(heartbeatRuns, and(eq(heartbeatRuns.id, agentCommentary.runId), eq(heartbeatRuns.companyId, agentCommentary.companyId)))
         .leftJoin(issues, and(eq(issues.id, agentCommentary.issueId), eq(issues.companyId, agentCommentary.companyId)))
         .where(and(visible(companyId, readCondition), eq(agentCommentary.id, id))).limit(1);
       return row ? { ...row, createdAt: row.createdAt.toISOString() } : null;
