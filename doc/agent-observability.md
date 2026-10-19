@@ -55,7 +55,7 @@ tool-acknowledgment or settlement paths.
 ## Credentials and access
 
 Only board users with Manage connections permission can read or change this
-configuration. Agents cannot retrieve it. The destination stores no credential
+configuration. Agents cannot retrieve it through the settings API. The destination stores no credential
 values. Authentication headers live in one encrypted Paperclip-managed company
 secret, bound to the system consumer company-observability. Updates rotate that
 secret; removal uses the secret service to retire it. Braintrust project
@@ -68,7 +68,12 @@ entered secrets. Revisions prevent another administrator's edit being silently
 overwritten. Credential values are excluded from task environment manifests,
 run/config snapshots, argv, activity records, recovery configuration and query
 cache data. Export credentials are necessarily accessible to the exporting
-harness itself.
+harness itself. Claude Code supplies these headers through its process environment,
+which its tools can inherit or inspect. Codex can read its managed configuration.
+This feature does not isolate export credentials from agent code. Use a credential
+limited to telemetry ingestion for the selected destination; do not supply a broad
+organization administration key. A user-operated collector can hold upstream
+credentials when a deployment requires a separate trust boundary.
 
 ## Connection tests
 

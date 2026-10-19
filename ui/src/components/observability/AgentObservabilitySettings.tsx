@@ -121,6 +121,7 @@ export function AgentObservabilitySettingsView(props: AgentObservabilitySettings
             </div>)}
           </div>
         </>}
+        <p className="text-xs text-muted-foreground">The agent harness receives these credentials. Use a key limited to telemetry ingestion.</p>
         <ToggleField label="Enable export" checked={enabled} onChange={setEnabled} hint="Applies to executions that start preparation after saving." />
         <details><summary className="cursor-pointer text-sm font-medium">Content capture</summary>
           <div className="space-y-3 pt-3">{captureLabels.map(row => <ToggleField key={row.key} label={row.label} checked={capture[row.key]} onChange={value => setCapture(current => ({ ...current, [row.key]: value }))} />)}
