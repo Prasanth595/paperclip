@@ -52,7 +52,8 @@ export function resolveNewAgentRunner(input: AgentRunnerSelection): { adapterTyp
     if (config.codexPermissionMode !== undefined && config.codexPermissionMode !== "never") incompatible(["codexPermissionMode"]);
     if (config.lifecycleMode !== undefined && config.lifecycleMode !== "per_turn") incompatible(["lifecycleMode"]);
     for (const key of ["provider", "codexPermissionMode", "opencodePermissionMode", "acpxPermissionMode", "lifecycleMode", "idleTimeoutMs"]) delete config[key];
-    return { adapterType: "codex_local", adapterConfig: { ...config, dangerouslyBypassApprovalsAndSandbox: config.dangerouslyBypassApprovalsAndSandbox ?? config.dangerouslyBypassSandbox ?? false } };
+    const legacyBypass = config.dangerouslyBypassApprovalsAndSandbox ?? config.dangerouslyBypassSandbox;
+    return { adapterType: "codex_local", adapterConfig: { ...config, ...(legacyBypass === undefined ? {} : { dangerouslyBypassApprovalsAndSandbox: legacyBypass }) } };
   }
   if (native && harness !== "codex_local" && choice === "paperclip") return { adapterType, adapterConfig: normalizeLegacyRunnerProvider(config) };
   if (availability.defaultRunner !== "paperclip") throw unprocessable(input.target?.driver === "sandbox"
