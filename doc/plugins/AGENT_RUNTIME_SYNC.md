@@ -174,9 +174,9 @@ Events contain no credential values, phone numbers, or provider payloads.
 
 Access changes conservatively invalidate eligible company agents because
 responsible-user and task-time access can vary across runs. Agent secret bindings
-instead invalidate their owning agent. Creating a personal grant delegation also
-invalidates only its target agent; grant revocation and membership cleanup retain
-company invalidation. Unchanged grant audiences preserve their rows after
+instead invalidate their owning agent. Personal delegation creation, reassignment, and revocation invalidate only
+their old and new target agents. Whole-grant revocation and membership cleanup
+retain company invalidation. Unchanged grant audiences preserve their rows after
 membership validation.
 
 OAuth persistence and membership cleanup lock affected grants before connection
@@ -184,9 +184,12 @@ inputs and credential mutations. Each affected set is locked in ID order. Task
 completion locks existing grants before assignment inputs. Permission-only saves
 lock membership before replacing permissions, as role and status saves do.
 Personal delegation creation locks its grant, connection reference, and target
-agent before insertion. Static-key reconnect locks grants and connection inputs
+agent before insertion. Delegation revocation locks its grant and target before
+deletion. Whole-grant and membership cleanup lock eligible company agents in ID
+order before deleting scoped delegations. Static-key reconnect locks grants and connection inputs
 before credential writes. Secret removal locks company agents in ID order before
-cascading into bindings. It tries the secret lock without waiting, releases its
+cascading into bindings. Plugin instance secrets cannot use ordinary bindings,
+so their removal retains its owner lock without a company sweep. It tries the secret lock without waiting, releases its
 transaction locks if that lock is busy, and retries up to three times. Continued
 contention returns a retryable conflict. Provider deletion stays outside that
 transaction; retrying resumes removal of the already disabled secret. These

@@ -3434,8 +3434,10 @@ export function secretService(db: Db | DbTransaction) {
     for (let attempt = 0; ; attempt++) {
       try {
         await db.transaction(async tx => {
-          await tx.select({ id: agents.id }).from(agents)
-            .where(eq(agents.companyId, secret.companyId)).orderBy(agents.id).for("no key update");
+          if (secret.scope !== "instance") {
+            await tx.select({ id: agents.id }).from(agents)
+              .where(eq(agents.companyId, secret.companyId)).orderBy(agents.id).for("no key update");
+          }
           await tx.select({ id: companySecrets.id }).from(companySecrets)
             .where(eq(companySecrets.id, secretId)).for("update", { noWait: true });
           await tx.delete(companySecrets).where(eq(companySecrets.id, secretId));
