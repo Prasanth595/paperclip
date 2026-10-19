@@ -13549,14 +13549,17 @@ export function issueRoutes(
 
   router.patch(
     "/issues/:id",
-    validateIssueMutationBody(updateIssueRouteSchema),
-    async (req, res) => {
-      if (req.body.expectedStatusVersion !== undefined && (
+    (req, _res, next) => {
+      if (req.body?.expectedStatusVersion !== undefined && (
         req.body.status !== "todo" ||
         Object.keys(req.body).some(key => key !== "status" && key !== "expectedStatusVersion")
       )) {
         throw unprocessable("expectedStatusVersion requires a status-only backlog-to-todo promotion");
       }
+      next();
+    },
+    validateIssueMutationBody(updateIssueRouteSchema),
+    async (req, res) => {
       // Snapshot-guarded writes are policy-only. Do not admit task-control
       // actions that can stop execution before the service takes its row lock.
       if (req.body.expectedExecutionPolicy !== undefined && (
@@ -14025,7 +14028,9 @@ export function issueRoutes(
         req.body.executionPolicy !== undefined && monitorChanged,
       );
 
-      const transition = applyIssueExecutionPolicyTransition({
+      const transition: ReturnType<typeof applyIssueExecutionPolicyTransition> = expectedStatusVersion !== undefined
+        ? { patch: {} }
+        : applyIssueExecutionPolicyTransition({
         issue: existing,
         policy: nextExecutionPolicy,
         previousPolicy: previousExecutionPolicy,

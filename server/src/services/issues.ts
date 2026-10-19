@@ -156,6 +156,7 @@ import {
   retryNativeChatReviewPresentation,
 } from "./native-runtime/native-chat-review-presentation.js";
 import {
+  applyIssueExecutionPolicyTransition,
   buildInitialIssueMonitorFields,
   normalizeIssueExecutionPolicy,
 } from "./issue-execution-policy.js";
@@ -11110,6 +11111,25 @@ export function issueService(db: Db) {
           throw conflict("The task status or assignment changed. Read the task again before starting work.", {
             code: "issue_status_version_changed",
           });
+        }
+        if (expectedStatusVersion !== undefined) {
+          const policy = normalizeIssueExecutionPolicy(receiptExisting.executionPolicy ?? null);
+          const transition = applyIssueExecutionPolicyTransition({
+            issue: receiptExisting,
+            policy,
+            previousPolicy: policy,
+            requestedStatus: "todo",
+            requestedAssigneePatch: {},
+            actor: { agentId: actorAgentId ?? null, userId: actorUserId ?? null },
+            allowBoardOverride: workspaceSelectionActor?.type === "board" && workspaceSelectionActor.source !== "mcp_oauth",
+          });
+          if (transition.decision ||
+            (transition.patch.status !== undefined && transition.patch.status !== "todo") ||
+            (transition.patch.assigneeAgentId !== undefined && transition.patch.assigneeAgentId !== receiptExisting.assigneeAgentId) ||
+            (transition.patch.assigneeUserId !== undefined && transition.patch.assigneeUserId !== receiptExisting.assigneeUserId)) {
+            throw unprocessable("expectedStatusVersion requires a status-only backlog-to-todo promotion");
+          }
+          Object.assign(patch, transition.patch);
         }
         if (issueData.executionWorkspaceId !== undefined || issueData.projectWorkspaceId !== undefined ||
             issueData.executionWorkspacePreference !== undefined || issueData.executionWorkspaceSettings !== undefined) {
