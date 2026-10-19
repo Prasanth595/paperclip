@@ -715,7 +715,9 @@ backend Sentry DSN and the audited SDK. Set `PAPERCLIP_SENTRY_RUN_FAILURES` to:
 
 Missing, blank, or unrecognized values keep run reporting off. Expected operator
 stops, shutdown interruptions, successful runs, and queued work do not report in
-either enabled mode. The mode does not change run status, retries, recovery,
+either enabled mode. A native run that is `failed` while it waits for a same-run
+retry (`nativePhase` `retryable_failure`) does not report either. It reports once
+if a later write ends the retry as a terminal failure. The mode does not change run status, retries, recovery,
 Telemetry, or OpenTelemetry export. It is process-wide, so an operator can enable
 it on one staging instance without enabling it on other deployments. Restart the
 server after changing deployment environment variables.

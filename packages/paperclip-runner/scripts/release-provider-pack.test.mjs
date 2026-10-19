@@ -128,3 +128,22 @@ test("both remote pack identities bind one source and remain separated during as
     assert.throws(() => releaseProviderPackManifest(root, revision), /exactly both/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test("frozen image validation uses release profiles rather than the newer workflow checkout", () => {
+  const frozenProfiles = structuredClone(profiles);
+  const frozenDistributions = structuredClone(distributions);
+  frozenProfiles.acpxVersion = "frozen-acpx";
+  for (const agent of ["claude", "codex", "grok", "cursor"]) frozenProfiles.profiles[agent].commandDigest = digest;
+  frozenProfiles.profiles.cursor.agentServerVersion = "frozen-cursor";
+  frozenDistributions.platforms["linux-x64"].closureSha256 = "c".repeat(64);
+  const payload = fixture();
+  payload.pins.acpx = frozenProfiles.acpxVersion;
+  for (const agent of ["claude", "codex", "grok"]) payload.acpxProfileDigests[agent] = digest;
+  Object.assign(payload.providers.cursor, { version: "frozen-cursor", profileDigest: digest, closureDigest: "sha256:" + "c".repeat(64) });
+  const pack = seal(payload);
+  const expected = { profiles: frozenProfiles, distributions: frozenDistributions };
+  assert.throws(() => verifyReleaseProviderPack(pack, revision), /profiles/);
+  assert.equal(verifyReleaseProviderPack(pack, revision, "linux-x64", expected), pack);
+  payload.acpxProfileDigests.claude = "sha256:" + "d".repeat(64);
+  assert.throws(() => verifyReleaseProviderPack(seal(payload), revision, "linux-x64", expected), /profiles/);
+});

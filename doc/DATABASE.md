@@ -301,6 +301,12 @@ completed lookups and the separate liveness backfill are not replayed. Projectio
 callers that use a transaction retain single-attempt reads. The opt-in is only
 for a pooled database handle outside a transaction.
 
+The heartbeat run read check uses the same bounded retries. Routes call it with
+the pooled database handle. Its issue existence lookup and its `issue:read`
+authorization decision retry separately, so a disconnect in the decision does not
+replay the completed lookup. Both steps only read. Missing issues, denied
+decisions, and other errors keep their usual behavior.
+
 ## Tool profile reads
 
 Tool profile list, detail, and new-tool review queries select only the catalog
@@ -1014,6 +1020,14 @@ company invalidation within the mutation transaction. Agent runtime journaling
 uses ordered `FOR NO KEY UPDATE` locks, which remain compatible with foreign-key
 references while excluding runtime readers' `FOR SHARE` locks. Connector feature
 switches use the same journal; process-start overlays receive a delivery baseline.
+
+Migration 0355 extends connector invalidation to tool definitions and
+configuration. Statement triggers cover applications, connections, catalogs,
+profiles and entries, bindings, policies, and MCP gateways. They ignore health
+bookkeeping and trust-rule usage counters. Profile creation alone does not change
+an agent's runtime; its assignment does. Entry changes resolve standing profile
+bindings; policies resolve old and new agent selectors. Both retain scoped
+recipients. Credential-only fields remain outside this migration's coverage.
 
 ## Retired Pipelines storage
 

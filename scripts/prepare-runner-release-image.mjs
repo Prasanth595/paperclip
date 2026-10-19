@@ -52,6 +52,15 @@ export function validateImageBindings({ source, pack, publicPack, receipt, relea
   return sha256;
 }
 
+export function decodeReleaseJson(file, path) {
+  if (file?.type !== 'file' || file.path !== path || file.encoding !== 'base64'
+    || !Number.isSafeInteger(file.size) || file.size < 1 || file.size > 1024 * 1024
+    || typeof file.content !== 'string') throw Error('Invalid frozen release JSON');
+  const bytes = Buffer.from(file.content, 'base64');
+  if (bytes.length !== file.size) throw Error('Frozen release JSON size mismatch');
+  return JSON.parse(bytes.toString('utf8'));
+}
+
 const digestFile = async file => {
   const hash = createHash('sha256');
   for await (const chunk of createReadStream(file)) hash.update(chunk);
@@ -119,7 +128,13 @@ z.extractall(dest)
     dirs.push(dir);
   }
   const pack = JSON.parse(await readFile(join(dirs[0], 'linux-x64/provider-pack.json'), 'utf8'));
-  verifyReleaseProviderPack(pack, source, 'linux-x64');
+  // The workflow source can be newer than the immutable release being consumed.
+  // Read data from that release commit, never execute source from the artifact.
+  const [profiles, distributions] = await Promise.all(['acpx-profiles.json', 'cursor-distributions.json'].map(async name => {
+    const path = `packages/paperclip-runner/${name}`;
+    return decodeReleaseJson(await api(`contents/${path}?ref=${source}`), path);
+  }));
+  verifyReleaseProviderPack(pack, source, 'linux-x64', { profiles, distributions });
   const packages = JSON.parse(await readFile(join(dirs[2], 'manifest.json'), 'utf8'));
   if (packages.schema !== 'paperclip.runner.public-packages/v1' || packages.sourceRevision !== source) throw Error('Wrong public-package source');
   const server = packages.archives?.filter(a => a.name === '@paperclipai/server');
