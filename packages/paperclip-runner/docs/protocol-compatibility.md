@@ -317,3 +317,17 @@ including master's OpenRouter attribution. The prior branch profile 24 is
 preserved separately from master's published profile 24.
 Provider executable bytes remain unchanged. These new source identities require
 fresh compatibility checks; earlier provider runs retain their original identities.
+
+## Claude essential task tools
+
+Claude's runner-owned MCP bridge marks `set_task_title`, `paperclip_finish` and
+`paperclip_block` with `_meta["anthropic/alwaysLoad"]: true`. The pinned SDK can
+include these definitions in its first request without a ToolSearch round trip.
+Other public tools keep their existing deferral policy. Private operations stay
+undiscoverable, and incoming tool definitions cannot set this metadata themselves.
+The host enables this only for Claude; Codex and Copilot catalogs are unchanged.
+No server-wide tool preloading, model change or permission change is introduced.
+
+The shared bridge's source binding advances pending Copilot profile 22 to 23.
+Profile 22 remains decodable and its fixture is immutable. Copilot remains pending;
+the revision does not qualify a new provider or change its executable closure.

@@ -624,6 +624,16 @@ pnpm test:e2e:runner:unit
 pnpm test:e2e:runner:typecheck
 ```
 
+The unit command removes ambient `NODE_PATH` and `NODE_OPTIONS` when it starts
+the actual Vitest and Node test processes. It invokes Vitest's JavaScript entry
+directly so pnpm's generated bin shim cannot inject `NODE_PATH` again. Installed
+CLI guards still reject ambient injection and repository-only resolution. Test
+file filters and Vitest options can follow `pnpm test:e2e:runner:unit`; the Node
+prerequisite tests still run after Vitest succeeds. Missing dependencies or an
+unavailable/terminated test process produce a `launcher/environment failure`
+diagnostic and exit 2. Assertion failures retain the test runner's exit status
+and output; assess installed-product failures from those assertions separately.
+
 The OpenRouter ranking snapshot is tracked in `openrouter-models.json`; nightly
 runs never mutate it. Refresh it deliberately, review the source/capture/hash
 diff, and rerun credential-free checks:

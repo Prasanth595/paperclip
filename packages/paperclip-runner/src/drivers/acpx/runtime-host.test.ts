@@ -906,6 +906,31 @@ describe("ACPX runtime host", () => {
     expect(fixture.commandClose).toHaveBeenCalledOnce();
   });
 
+  it.each(["claude", "codex", "copilot"] as const)("preloads essential task tools only for Claude through the host (%s)", async agent => {
+    const fixture = await hostFixture();
+    const model = agent === "claude" ? "claude-opus-5-5" : "gpt-5.6-sol";
+    let bridge: Extract<AcpxRuntimePortOpenOptions["mcpServers"][number], { url: string }> | undefined;
+    const environment = agent === "claude" ? { ANTHROPIC_API_KEY: "fixture-not-a-real-credential" }
+      : agent === "copilot" ? { COPILOT_GITHUB_TOKEN: "fixture-not-a-real-credential" }
+        : { PAPERCLIP_ACPX_CODEX_AUTH_JSON_SECRET: "{}" };
+    const host = await AcpxRuntimeHost.open({
+      ...fixture.options, agent, model, permissionMode: "deny-all", environment,
+      semanticTools: { tools: [{ name: "set_task_title", inputSchema: { type: "object", properties: {} } }], handler: async () => ({}) },
+    }, fixture.dependencies({ openRuntime: async options => {
+      bridge = options.mcpServers.find((server): server is NonNullable<typeof bridge> => "url" in server && server.runnerOwned);
+      return runtimePort({ getStatus: async () => ({ models: { currentModelId: model, availableModelIds: [model] } }) });
+    } }));
+    try {
+      const response = await fetch(bridge!.url, {
+        method: "POST", headers: { Authorization: `Bearer ${bridge!.bearerToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+      });
+      const listed = await response.json() as { result: { tools: Array<{ name: string; _meta?: Record<string, unknown> }> } };
+      expect(listed.result.tools.filter(tool => tool._meta?.["anthropic/alwaysLoad"] === true).map(({ name }) => name))
+        .toEqual(agent === "claude" ? ["set_task_title", "paperclip_finish", "paperclip_block"] : []);
+    } finally { await host.close({ reason: "tool preload verified" }); }
+  });
+
   it("forwards semantic receipt capture through the real runtime host and authenticated bridge", async () => {
     const fixture = await hostFixture();
     const events: CanonicalProviderEvent[] = [];
