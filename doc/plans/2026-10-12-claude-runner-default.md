@@ -1966,3 +1966,35 @@ Codex environments retain their previous behavior. DB-backed snapshot/environmen
 verification passed all 232 cases, including the final metadata-preservation
 implementation. Cloud CI remains the final complete-suite gate. This remote-only change does not
 replace the source identity of the local API task pair above.
+
+
+## Local reply latency profile — 2026-10-19
+
+The user's fresh Opus 5.5/High greeting took 32.717 seconds: approximately
+1.2 seconds preparation, 15.5 startup, 13.6 agent work and 2.3 settlement.
+Local run-log spans and SDK timings establish this split; the local instance
+had no matching exported Honeycomb trace. The MCP connection itself took 23ms.
+
+Protocol commit `20d75b6f3e` removes an unused verified command snapshot after
+effort acknowledgment on a retained fresh provider. Cold control connections
+still refresh their consumed command; integrity, lifetime and effort guards stay.
+107 runtime/effort/lease tests pass, as do 53 profile checks (one skipped) and
+the TypeScript-only check/build. No local Docker/Rust build was used.
+
+Three alternating real-ACP loopback fixture samples per variant improve median
+ready time from 5.081s to 4.034s. The fixture sends no external model requests.
+A matched real API-key task improves startup from 5.533s to 4.348s, but total
+response time changes from 17.933s to 20.221s as agent time varies. This is a
+measured startup improvement, not a demonstrated total-reply speedup.
+The candidate follow-up succeeds in 20.146s and resumes the same saved session.
+No-prompt cold-resume fixture failures remain recorded; the actual product
+follow-up supplies the resume proof. Model, High effort and permissions stay.
+
+The next candidate is selective upfront loading of mandatory title/completion
+MCP tools, supported by the pinned Claude SDK. It is not implemented or timed
+here; shared tool metadata requires separate source-profile qualification.
+The canonical local evidence record is
+`/private/tmp/claude-refresh-evidence-20261019/2026-10-19-claude-default-refresh.md`.
+Three paid profiling turns add $0.415121200 estimated, leaving $0.380149800
+under this local company's unchanged $2 cap, with zero pending/unpriced runs.
+All prior aggregate qualification holds and the $50 ceiling remain in force.
