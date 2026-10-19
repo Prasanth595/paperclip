@@ -442,6 +442,12 @@ without submitted values. Correct the arguments and retry; the rejection is not
 evidence that the scheduling service is unavailable. Confirm the persisted
 receipt before reporting a scheduled wait.
 
+Native `call_api` text windows use `responseText.limitBytes` from 4 through
+24576 bytes, with a default of 24576. Follow `nextOffsetBytes` until it is null.
+Rejected API fallback arguments return the same bounded schema locations as
+monitor calls, with no submitted values. Correct the arguments before retrying;
+validation does not dispatch an HTTP request or relax route permissions.
+
 A native provider may omit `continuation` (or send `null`) when it reports
 `yielded` after saving a monitor. The controller reads current authorized task
 context and fills the canonical `monitor` continuation only if that same task,
