@@ -368,6 +368,7 @@ function boardRoutes(streamlinedUiEnabled: boolean, combinedInboxTasksEnabled: b
       <Route path="approvals/all" element={<Approvals />} />
       <Route path="approvals/:approvalId" element={<ApprovalDetail />} />
       <Route path="activity" element={streamlinedUiEnabled ? <CompanyActivity /> : <ProductionSurface><ProductionCompanyActivity /></ProductionSurface>} />
+      <Route path="activity/commentary" element={<AuditHub section="commentary" />} />
       {streamlinedUiEnabled ? (
         <>
           <Route path="activity/runs" element={<AuditHub section="runs" />} />
