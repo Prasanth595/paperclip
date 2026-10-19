@@ -127,6 +127,14 @@ one `issue_monitor_due` wake. [Scheduler integration coverage](../../server/src/
 uses real PostgreSQL, the native tool authority, and the heartbeat scheduler with
 a no-op process agent. It does not prove live model recovery.
 
+Monitor deferral diagnostics: an unresolved execution-recovery hold keeps a due
+schedule intact and prevents execution. Read `issue.monitor_deferred` activity
+for the safe blocker cause; unexpected dispatch failures record
+`issue.monitor_dispatch_failed`. Repeated identical diagnostics are throttled for
+five minutes. The scheduler regression proves that a held source does not replay
+and that clearing the hold permits one later wake. This is local PostgreSQL
+evidence, not live provider recovery.
+
 Gaps: Dedicated tools differ in scope and fields. Generic `call_api` forwards
 status, assignment and dependency fields to existing route authorization.
 
