@@ -7,7 +7,8 @@ const canonical = value => Array.isArray(value) ? `[${value.map(canonical).join(
     : JSON.stringify(value);
 
 /** Release assembly must reject a self-consistent pack built for another release. */
-export function verifyReleaseProviderPack(identity, sourceRevision, target = "linux-x64") {
+export function verifyReleaseProviderPack(identity, sourceRevision, target = "linux-x64", expected = { profiles, distributions }) {
+  const { profiles: releaseProfiles, distributions: releaseDistributions } = expected;
   const payload = identity?.payload;
   if (identity?.schema !== "paperclip-runner/remote-provider-pack/v1" || !payload
     || !["linux-x64", "linux-arm64"].includes(target)
@@ -16,8 +17,8 @@ export function verifyReleaseProviderPack(identity, sourceRevision, target = "li
   if (identity.digest !== `sha256:${createHash("sha256").update(canonical(payload)).digest("hex")}`) {
     throw new Error("Remote provider-pack payload digest mismatch");
   }
-  if (payload.pins?.acpx !== profiles.acpxVersion
-    || ["grok", "claude", "codex"].some(agent => payload.acpxProfileDigests?.[agent] !== profiles.profiles[agent].commandDigest)) {
+  if (payload.pins?.acpx !== releaseProfiles.acpxVersion
+    || ["grok", "claude", "codex"].some(agent => payload.acpxProfileDigests?.[agent] !== releaseProfiles.profiles[agent].commandDigest)) {
     throw new Error("Remote provider-pack ACPX profiles do not match this release");
   }
   if (target === "linux-arm64") {
@@ -26,10 +27,10 @@ export function verifyReleaseProviderPack(identity, sourceRevision, target = "li
     }
     return identity;
   }
-  const current = profiles.profiles.cursor;
+  const current = releaseProfiles.profiles.cursor;
   for (const cursor of [payload.providers?.cursor, ...(Object.hasOwn(payload.candidateProviders ?? {}, "cursor") ? [payload.candidateProviders.cursor] : [])]) {
     if (!cursor || cursor.version !== current.agentServerVersion || cursor.profileDigest !== current.commandDigest
-      || cursor.closureDigest !== `sha256:${distributions.platforms["linux-x64"].closureSha256}`
+      || cursor.closureDigest !== `sha256:${releaseDistributions.platforms["linux-x64"].closureSha256}`
       || cursor.qualification !== "qualified" || cursor.path !== "provider-assets/cursor/linux-x64"
       || !/^sha256:[a-f0-9]{64}$/.test(cursor.sha256 ?? "")) {
       throw new Error("Remote provider-pack Cursor identity does not match this release");

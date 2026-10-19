@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createHash } from 'node:crypto';
-import { validateReleaseRun, selectReleaseArtifacts, validateReleaseImageBase, validateImageBindings } from '../prepare-runner-release-image.mjs';
+import { validateReleaseRun, selectReleaseArtifacts, validateReleaseImageBase, validateImageBindings, decodeReleaseJson } from '../prepare-runner-release-image.mjs';
 
 const source = 'a'.repeat(40);
 const run = { head_sha: source, conclusion: 'success', path: '.github/workflows/release-smoke.yml', repository: { full_name: 'paperclipai/paperclip' } };
@@ -70,4 +70,14 @@ test('image daemon must match source, receipt, public package and actual archite
   const digest = 'sha256:' + createHash('sha256').update(wrongArch).digest('hex');
   assert.throws(() => validateImageBindings({ ...binding, daemonBytes: wrongArch,
     receipt: { ...binding.receipt, sha256: digest }, release: { ...binding.release, platforms: { 'linux-x64': { sha256: digest } } } }));
+});
+
+test('frozen release JSON must be the bounded requested source file', () => {
+  const path = 'packages/paperclip-runner/acpx-profiles.json';
+  const content = Buffer.from(JSON.stringify({ acpxVersion: 'frozen' }));
+  const file = { type: 'file', path, encoding: 'base64', size: content.length, content: content.toString('base64') };
+  assert.deepEqual(decodeReleaseJson(file, path), { acpxVersion: 'frozen' });
+  for (const patch of [{ type: 'symlink' }, { path: 'other.json' }, { size: content.length + 1 }, { size: 1024 * 1024 + 1 }, { encoding: 'none' }]) {
+    assert.throws(() => decodeReleaseJson({ ...file, ...patch }, path));
+  }
 });
