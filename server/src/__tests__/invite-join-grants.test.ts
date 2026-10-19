@@ -79,6 +79,7 @@ describe("human invite roles", () => {
       { permissionKey: "tools:manage_runtime", scope: null },
       { permissionKey: "tools:use", scope: null },
       { permissionKey: "tools:admin", scope: null },
+      { permissionKey: "commentary:view", scope: null },
     ]);
   });
 
@@ -95,6 +96,7 @@ describe("human invite roles", () => {
       { permissionKey: "tools:manage_runtime", scope: null },
       { permissionKey: "tools:use", scope: null },
       { permissionKey: "tools:admin", scope: null },
+      { permissionKey: "commentary:view", scope: null },
     ]);
   });
 
@@ -113,7 +115,15 @@ describe("human invite roles", () => {
       { permissionKey: "tools:admin", scope: null },
       { permissionKey: "tools:view_audit", scope: null },
       { permissionKey: "audit:view_agent_actions", scope: null },
+      { permissionKey: "commentary:view", scope: null },
     ]);
+  });
+
+  it("lets viewers read commentary without granting agent audit access", () => {
+    expect(grantsForHumanRole("viewer")).toEqual([
+      { permissionKey: "commentary:view", scope: null },
+    ]);
+    expect(humanJoinGrantsFromDefaults(null, "viewer")).toEqual(grantsForHumanRole("viewer"));
   });
 
   it("defaults legacy or missing roles to operator", () => {

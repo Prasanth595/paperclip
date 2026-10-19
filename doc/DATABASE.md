@@ -765,7 +765,9 @@ Project `privacy_owner_user_id` records who may manage its audience independentl
 The Audit viewer uses the existing company/kind/created index.
 List reads select bounded previews; details load a single full body. Both reads
 and list counts apply company and source-task visibility. The viewer requires
-no experimental toggle or commentary schema migration.
+no experimental toggle. A permission-only migration grants `commentary:view` to
+existing active human company members, including viewers, without changing
+existing grants or the commentary schema.
 
 `agent_commentary` stores company-scoped, attributed complaints and suggestions
 as free-form text in the instance database. Legacy agents use the default
