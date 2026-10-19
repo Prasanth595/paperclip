@@ -2256,6 +2256,8 @@ messages have shareable URLs. Read endpoints require company membership,
 `commentary:view` and source-task visibility. All human company roles, including
 viewers, receive this permission by default. An upgrade migration grants it to
 existing active human members while preserving existing commentary grants.
+Human invitation approval adds the commentary default when a saved grant list
+omits it, including invitations created before the upgrade, and preserves explicit scopes.
 The separate `audit:view_agent_actions` permission continues to govern agent-action
 audit reads, detailed audit filters and CSV exports.
 

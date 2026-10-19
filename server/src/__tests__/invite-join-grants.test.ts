@@ -145,7 +145,17 @@ describe("human invite roles", () => {
     expect(humanJoinGrantsFromDefaults(null, "operator")).toEqual(grantsForHumanRole("operator"));
   });
 
-  it("preserves explicit human invite grants", () => {
+  it.each(["owner", "admin", "operator", "viewer"] as const)("adds commentary access to saved pre-upgrade %s invite grants", (role) => {
+    const legacyGrants = grantsForHumanRole(role).filter((grant) => grant.permissionKey !== "commentary:view");
+    expect(humanJoinGrantsFromDefaults({ human: { role, grants: legacyGrants } }, role)).toEqual(grantsForHumanRole(role));
+  });
+
+  it("preserves an explicitly scoped commentary grant", () => {
+    const grants = [{ permissionKey: "commentary:view", scope: { agentIds: ["agent-1"] } }];
+    expect(humanJoinGrantsFromDefaults({ human: { grants } }, "operator")).toEqual(grants);
+  });
+
+  it("preserves explicit human invite scopes and adds the commentary default", () => {
     expect(
       humanJoinGrantsFromDefaults(
         {
@@ -165,6 +175,7 @@ describe("human invite roles", () => {
         permissionKey: "users:invite",
         scope: { companyId: "company-1" },
       },
+      { permissionKey: "commentary:view", scope: null },
     ]);
   });
 });
