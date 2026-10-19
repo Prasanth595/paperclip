@@ -37,6 +37,15 @@ remaining operations before qualifying the whole capability.
 Gaps: Supported. Native helpers focus on the active task; generic API or explicit
 other-task tools cover additional scope.
 
+The operational skill's [document-read helper](../../skills/paperclip/scripts/paperclip-read-documents.mjs)
+uses the same current-run REST authorization for explicit issue/key references.
+Its optional bounded inline output preserves complete bodies, revision IDs and
+hashes in small sections; larger output retains complete private segments and a
+manifest fallback. It neither infers document authority nor grants access.
+[Focused real-HTTP CLI tests](../../server/src/__tests__/paperclip-read-documents-helper.test.ts)
+cover delivery bounds, Unicode reconstruction and failed reads; they do not
+qualify unrelated document mutations or native transports.
+
 ## `annotations`
 
 Review: `baseline`.
