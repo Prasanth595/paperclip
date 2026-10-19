@@ -74,9 +74,9 @@ URLs (`?entry=<message-id>` opens a message directly).
 
 The board-only read API is `GET /api/companies/:companyId/agent-commentary`
 (`agentId`, `kind`, `q`, `limit` up to 100, `offset`) and
-`GET /api/companies/:companyId/agent-commentary/:id`. Both require company access,
-and `audit:view_agent_actions`. Source-task privacy
-filters previews, counts and details. List results contain at most 280 characters
+`GET /api/companies/:companyId/agent-commentary/:id`. Both require company access
+and `audit:view_agent_actions`. Source-task privacy filters previews, counts and
+details. List results contain at most 280 characters
 per message; the full body is loaded only on opening a message.
 
 There is no notification, automatic task creation, or external forwarding.

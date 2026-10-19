@@ -5703,7 +5703,7 @@ registry.registerPath({
   path: "/api/companies/{companyId}/agent-commentary/{id}",
   tags: ["agents"],
   summary: "Read a full agent commentary message",
-  description: "Same board, permission, feature and task-privacy gates as the list. Returns the full body with agent, task and run context. Foreign-company and invisible entries return 404.",
+  description: "Same board, permission and task-privacy gates as the list. Returns the full body with agent, task and run context. Foreign-company and invisible entries return 404.",
   request: { params: z.object({ companyId: z.string(), id: z.string().uuid() }) },
   responses: { 200: r.ok(), 401: r.unauthorized, 403: r.forbidden, 404: r.notFound },
 });

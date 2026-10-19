@@ -39,7 +39,7 @@ export const ReadMessage: Story = {
     const rows = await within(canvasElement).findAllByRole("button", { name: "Read suggestion from Amy (Opus)" });
     await userEvent.click(rows[0]);
     const dialog = await within(canvasElement.ownerDocument.body).findByRole("dialog");
-    await expect(within(dialog).getByText("What would help")).toBeVisible();
+    await expect(await within(dialog).findByText("What would help")).toBeVisible();
     await expect(within(dialog).getByRole("link", { name: "View run" }).getAttribute("href")).toContain("/runs/");
   },
 };
@@ -58,7 +58,7 @@ export const LinkedMessage: Story = {
   parameters: { initialEntries: [`/PAP/activity/commentary?entry=${commentaryEntries[0].id}`] },
   play: async ({ canvasElement }) => {
     const dialog = await within(canvasElement.ownerDocument.body).findByRole("dialog");
-    await expect(within(dialog).getByText("What would help")).toBeVisible();
+    await expect(await within(dialog).findByText("What would help")).toBeVisible();
     await userEvent.click(within(dialog).getByRole("button", { name: "Close" }));
     await expect(within(canvasElement).getByRole("list", { name: "Commentary messages" })).toBeVisible();
   },

@@ -37,6 +37,7 @@ export function agentCommentaryReader(db: Db) {
       const [rows, totals] = await Promise.all([
         entries().where(where).orderBy(desc(agentCommentary.createdAt), desc(agentCommentary.id)).limit(query.limit).offset(query.offset),
         db.select({ total: count() }).from(agentCommentary)
+          .innerJoin(agents, and(eq(agents.id, agentCommentary.agentId), eq(agents.companyId, agentCommentary.companyId)))
           .leftJoin(issues, and(eq(issues.id, agentCommentary.issueId), eq(issues.companyId, agentCommentary.companyId)))
           .where(where),
       ]);
