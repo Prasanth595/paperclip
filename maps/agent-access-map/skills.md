@@ -136,6 +136,16 @@ remaining operations before qualifying the whole capability.
 Gaps: Policy administration has an explicit agent grant branch; assigning agent skills
 also checks the target's config authority.
 
+The configuration-gated `GET /api/agents/{id}/skills` reads repository cache
+locations without materializing versions or validating their support files.
+Assignment mutations and run preparation retain their existing authorization.
+The [database-backed cache tests](../../server/src/__tests__/skill-version-cache.test.ts)
+cover latest/pinned reads and full validation during execution; they do not prove
+live agent access.
+Both skill-list and skill-sync responses preserve stored version pins rather than
+returning a resolved runtime version as a pin. Latest remains unpinned across an
+assignment round trip.
+
 ## `testing`
 
 Review: `baseline`.
