@@ -10793,6 +10793,7 @@ export function issueService(db: Db) {
         companyGuard?: string;
         workspaceSelectionActor?: AuthorizationActor;
         expectedExecutionPolicy?: typeof issues.$inferInsert.executionPolicy;
+        expectedStatusVersion?: number;
       },
       dbOrTx: any = db,
       postCommitActivityPublications?: ActivityPublication[],
@@ -10842,8 +10843,15 @@ export function issueService(db: Db) {
         companyGuard,
         workspaceSelectionActor,
         expectedExecutionPolicy,
+        expectedStatusVersion,
         ...issueData
       } = data;
+      if (expectedStatusVersion !== undefined && (
+        issueData.status !== "todo" || Object.keys(issueData).some(key => key !== "status") ||
+        nextLabelIds !== undefined || blockedByIssueIds !== undefined || expectedExecutionPolicy !== undefined
+      )) {
+        throw unprocessable("expectedStatusVersion requires a status-only backlog-to-todo promotion");
+      }
       // An explicit edit claims the title, even if it keeps the same text.
       if (issueData.title !== undefined) issueData.titleNeedsGeneration = false;
       if (
@@ -11096,6 +11104,13 @@ export function issueService(db: Db) {
           .for("update")
           .then((rows: Array<typeof issues.$inferSelect>) => rows[0] ?? null);
         if (!receiptExisting) return null;
+        if (expectedStatusVersion !== undefined && (
+          receiptExisting.statusVersion !== expectedStatusVersion || receiptExisting.status !== "backlog"
+        )) {
+          throw conflict("The task status or assignment changed. Read the task again before starting work.", {
+            code: "issue_status_version_changed",
+          });
+        }
         if (issueData.executionWorkspaceId !== undefined || issueData.projectWorkspaceId !== undefined ||
             issueData.executionWorkspacePreference !== undefined || issueData.executionWorkspaceSettings !== undefined) {
           Object.assign(patch, await executionWorkspaceService(db).prepareTaskWorkspaceUpdate({

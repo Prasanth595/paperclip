@@ -839,6 +839,8 @@ export type IssueSummary = Pick<
 };
 
 export interface Issue {
+  /** Status/assignment revision on current API responses; absent in older snapshots. */
+  statusVersion?: number;
   /** True only while the title is the provisional slice of the initial prompt. */
   titleNeedsGeneration?: boolean;
   conversationAgentId?: string | null;
