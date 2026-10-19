@@ -13574,8 +13574,6 @@ export function issueRoutes(
       );
       if (!existing) return;
       if (!(await assertIssueReadAllowed(req, res, existing))) return;
-      // Reject stale preparation before ownership checks can adopt and audit a
-      // checkout on a task that another run has already started.
       if (req.body.expectedStatusVersion !== undefined && (
         existing.statusVersion !== req.body.expectedStatusVersion || existing.status !== "backlog"
       )) {

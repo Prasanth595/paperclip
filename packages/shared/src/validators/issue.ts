@@ -923,7 +923,6 @@ export const updateIssueSchema = objectWithoutDefaults(
 )
   .partial()
   .extend({
-    /** Only valid for a status-only backlog-to-todo promotion. */
     expectedStatusVersion: z.number().int().nonnegative().optional(),
     /** Reject a policy write if the policy changed after the caller read it. */
     expectedExecutionPolicy: z.record(z.string(), z.unknown()).optional().nullable(),
