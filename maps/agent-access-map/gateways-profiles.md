@@ -58,6 +58,11 @@ own policy and access review.
 
 Gaps: Agent access to tools does not permit profile editing.
 
+Backend evidence: [profile entry validation](../../server/src/__tests__/tool-profile-entry-validation.test.ts)
+covers company-scoped selector references and bounded reads for a large immutable
+runtime assignment. Batched validation retains the checks before profile and
+entry writes. It grants no profile-management authority to agents.
+
 ## `client-connect`
 
 Review: `baseline`.
@@ -140,3 +145,27 @@ own policy and access review.
 
 Gaps: Audit management API exists but broad audit visibility is not an agent use-path
 guarantee.
+
+### Execution-host stdio assignments
+
+Runner registers verified, session-local stdio servers from the execution host
+with native Codex and through the shared ACPX runtime. ACPX clients must support
+stdio MCP assignments. The transport uses each implementation's own schemas and
+responses. Each binding requires a private Unix socket to identify the shared
+resource whose calls are serialized. This is a separate binding alongside the
+HTTP gateway; it does not create gateway/profile administration
+authority. Tasks cannot supply these reserved environment inputs. Read-only
+sessions omit them.
+ACPX adapters use their applicable ACPX permission policy. Host-assigned native
+Codex tools run without a new per-call prompt, matching existing execution-host shell
+utilities. Explicit deny/prompt rules remain effective; requested approvals use
+PRP with active thread/turn checks and one-time decisions. Preconfigured Claude
+rejects interactive approval requests. See the [Runner contract](../../packages/paperclip-runner/README.md#assigned-local-mcp-servers).
+
+Local fixture coverage: [binding validation](../../packages/paperclip-runner/src/drivers/stdio-mcp.test.ts),
+[relay processes and cancellation](../../packages/paperclip-runner/runner/crates/runner-core/tests/stdio_mcp.rs),
+and [approval projection](../../packages/paperclip-runner/src/drivers/codex/codex-question-adapter.test.ts).
+Provider-client image and approval smoke tests used native Codex and Claude SDK;
+that coverage is not an exhaustive adapter compatibility test.
+Vendor-client evidence belongs in the PR. These checks do not
+certify live external credentials, deployment isolation or gateway revocation.

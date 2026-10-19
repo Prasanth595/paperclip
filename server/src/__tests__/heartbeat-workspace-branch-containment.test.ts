@@ -46,6 +46,7 @@ import { buildEffectiveRunWorkspaceConfigMetadata, heartbeatService } from "../s
 import { resolveManagedProjectWorkspaceDir } from "../home-paths.js";
 import { noticeMetadataReferencesRecoveryAction } from "../services/recovery/index.ts";
 import { instanceSettingsService } from "../services/instance-settings.ts";
+import { waitForPendingRunFailureReports } from "../services/run-failure-report.ts";
 import {
   WORKSPACE_WORKTREE_REQUIRES_PROJECT_CODE,
   WORKSPACE_WORKTREE_REQUIRES_PROJECT_MESSAGE,
@@ -100,6 +101,13 @@ const adapterExecute = vi.hoisted(() =>
     model: "test-model",
   })),
 );
+
+const mockCaptureRunFailure = vi.hoisted(() => vi.fn());
+
+vi.mock("../sentry.ts", async () => {
+  const actual = await vi.importActual<typeof import("../sentry.ts")>("../sentry.ts");
+  return { ...actual, captureRunFailure: mockCaptureRunFailure };
+});
 
 vi.mock("../adapters/index.js", () => ({
   getServerAdapter: () => ({
@@ -1066,6 +1074,39 @@ describeEmbeddedPostgres("heartbeat workspace branch containment", () => {
       expect(await readFile(path.join(seeded.replacement, "replacement.txt"), "utf8")).toBe("replacement source must stay untouched\n");
     },
   );
+
+  it("blocks a reused shared-checkout workspace with the owner action once a restricted task worktree shares it", async () => {
+    vi.stubEnv("PAPERCLIP_SENTRY_RUN_FAILURES", "unexpected");
+    const seeded = await seedRetainedSourceRun("deleted");
+    const [privateIssue] = await db.insert(issues).values({ companyId: seeded.companyId, projectId: seeded.projectId,
+      title: "Private work", visibility: "private" }).returning();
+    const privateCwd = path.join(seeded.owner, ".paperclip", "worktrees", "restricted-task");
+    await runGit(seeded.owner, ["worktree", "add", "-b", "restricted-task", privateCwd]);
+    const [privateWorkspace] = await db.insert(executionWorkspaces).values({ companyId: seeded.companyId, projectId: seeded.projectId,
+      sourceIssueId: privateIssue.id, name: "Private workspace", mode: "isolated_workspace", strategyType: "git_worktree",
+      providerType: "git_worktree", cwd: privateCwd, providerRef: privateCwd, branchName: "restricted-task", status: "idle" }).returning();
+    await db.update(issues).set({ executionWorkspaceId: privateWorkspace.id }).where(eq(issues.id, privateIssue.id));
+
+    const heartbeat = heartbeatService(db);
+    await heartbeat.resumeQueuedRuns();
+    const run = await waitForRunToFinish(heartbeat, seeded.runId);
+    await heartbeat.waitForRunExecutionDrain(seeded.runId);
+    await waitForPendingRunFailureReports();
+
+    expect(run).toMatchObject({ status: "failed", errorCode: "configuration_incomplete", resultJson: {
+      configurationIncomplete: { reason: "workspace_source_restricted", issueId: seeded.issueId },
+      executionRecovery: { kind: "bootstrap", providerWorkStarted: false } } });
+    expect(adapterExecute).not.toHaveBeenCalled();
+    expect(mockCaptureRunFailure).not.toHaveBeenCalled();
+    const [issue] = await db.select().from(issues).where(eq(issues.id, seeded.issueId));
+    expect(issue).toMatchObject({ status: "blocked", executionRunId: null, executionWorkspaceId: seeded.executionWorkspaceId });
+    const comments = await db.select({ body: issueComments.body }).from(issueComments).where(eq(issueComments.issueId, seeded.issueId));
+    expect(comments.map(comment => comment.body).join("\n")).toContain("shared project checkout that also holds another task's workspace");
+    const actions = await db.select({ nextAction: issueRecoveryActions.nextAction }).from(issueRecoveryActions)
+      .where(eq(issueRecoveryActions.sourceIssueId, seeded.issueId));
+    expect(actions.map(action => action.nextAction).join("\n")).toContain("select a new workspace");
+    expect(await readFile(path.join(seeded.worktree, "retained.txt"), "utf8")).toBe("unexported original task edits\n");
+  });
 
   it("blocks projectless isolated git-worktree issues before dispatch", async () => {
     const companyId = randomUUID();

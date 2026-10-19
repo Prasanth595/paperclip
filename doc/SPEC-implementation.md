@@ -68,6 +68,12 @@ V1 implementation extends this baseline into a company-centric, governance-aware
 
 ## 5.1 In Scope
 
+Company administrators may opt in to native Codex and Claude Code logs/traces
+through [company agent observability](agent-observability.md), using a single
+company destination and encrypted credentials. This is separate from first-party
+Telemetry and infrastructure tracing.
+
+
 - Company lifecycle (create/list/get/update/archive)
 - Goal hierarchy linked to company mission
 - Agent lifecycle with org structure and adapter configuration
@@ -651,7 +657,7 @@ conversation lifecycles, and protection against replaying superseded requests.
 
 Human invitations default to the Operator role. Its default grants allow agent
 creation and configuration, skill editing, environment management, invitations,
-task assignment, pipeline editing, connection and tool management/use, and tool
+task assignment, connection and tool management/use, and tool
 and agent-action audit views. Operators do not receive `joins:approve` or
 `users:manage_permissions`. Explicit invitation grants remain authoritative.
 Creating a human invitation also requires any of these two membership powers
@@ -1206,6 +1212,7 @@ Invites tab does not hide this Cloud action.
 ## 10.4 Tasks (Issues)
 
 - `GET /companies/:companyId/issues`
+- `GET /companies/:companyId/issues/summaries?ids=<uuid>,<uuid>`
 - `POST /companies/:companyId/issues`
 - `GET /issues/:issueId`
 - `PATCH /issues/:issueId`
@@ -1239,6 +1246,17 @@ revision, and a negotiated action; they return `202`, replay the original result
 for a duplicate request id, and return `409` with the current projection for a
 stale revision or an unconfirmed unfinished-goal replacement. These controls do
 not create issue comments.
+
+The task-summary endpoint accepts one to five comma-separated UUIDs, normalizes
+case and whitespace, and removes duplicates after validating the five-entry
+bound. It returns accessible, non-hidden tasks in request order with only ID,
+company ID, title, identifier, status, update time, and external-conversation
+state. Missing, foreign-company and unauthorized tasks are omitted. Company
+access and normal task-read authorization apply; task-bridge keys are denied.
+Only the `ids` query parameter is accepted. Malformed, repeated, nested, empty
+and oversized ID parameters return `400`, including mixed scalar/nested syntax.
+Responses are private and not stored by HTTP caches. Reads do not trigger
+full-detail enrichment, workspace inspection or execution recovery.
 
 ### 10.4.1 Atomic Checkout Contract
 
@@ -1399,6 +1417,20 @@ explicit selection. Environment tests report the same engine availability error
 as execution. Codex CLI defaults permit workspace writes and network access for
 Paperclip coordination without disabling its sandbox; explicit operator
 restrictions and execution-target network denials remain effective.
+
+### Experimental personal Muse Runner provider
+
+The `paperclip_runner` adapter can select `provider: "muse"` behind the default-off
+Muse and native Runner gates. This connects personal Meta Muse through a
+company- and named-agent-bound receiver, distinct from human-authorized MCP.
+Pairing, detector contact, and a verified background reply are separate setup
+milestones. Idle first-party collaboration retains both agent and authorizing
+user permissions; task execution additionally requires the admitted native run.
+Only one assignment may execute per connection, and unresolved remote work or
+native effects block overlap across cancellation, reconnect, and provider changes.
+Remote interruption and external usage remain unconfirmed or unavailable unless
+supported by evidence. Release requires the live journeys and bounded cadence
+qualification in [Personal Muse receiver](muse-personal-agent.md).
 
 ## 11.2 Process Adapter
 
@@ -1912,6 +1944,19 @@ when the run fails, before generic recovery retries. Reconnect preserves account
 identity and permissions. Compatible legacy agents may explicitly adopt a
 validated connection inline; late failures must not invalidate newer credentials.
 
+### External channel failure scope
+
+Publication, provider-reply, and form-open permission failures fail the affected
+operation. An unclassified provider 403 does not establish that the whole
+connection is unusable. Known destination failures quarantine only that resource;
+provider rate limits retain their retry deadlines. Confirmed authentication
+failures put the endpoint in attention and mark connection health failed without
+changing the connection's enabled setting. Admission and background reconciliation
+block sends, assigned channel tools, and background receiver restart until
+credentials are repaired. Signed provider lifecycle events remain admissible so
+installation revocation still takes effect during an authentication stop.
+Explicit disable and disconnect retain their existing behavior.
+
 ### Task-bound email
 
 AgentMail is a default connection and does not require the experimental chat
@@ -2084,6 +2129,12 @@ unavailable. Preserve current ownership and newer-work fences. See
   and history. New key collisions cannot overwrite unrelated skills. Only changed package
   bytes or executable modes create versions. Library reads, tests, and subsequent unpinned
   runs use local installed snapshots; pinned/active runs retain their versions.
+- Runtime version directories are disposable caches. An hourly, bounded sweep may
+  evict non-current copies unused for one hour, preserving active and unresolved
+  execution pins. Selection, materialization, and pin persistence serialize with
+  eviction across processes. Missing copies rebuild from immutable database bytes
+  without upstream access. See [recoverable disk cleanup](recoverable-disk-cleanup.md)
+  for rollout controls, legacy grace periods, and interrupted cleanup recovery.
 - Manually selected sources retain reviewed selection, with new candidates checked by default and
   explicit folder exclusions retained. Upstream deletion keeps installed content with
   removed status; moves are removal plus discovery. Deselect retains content
@@ -2199,6 +2250,11 @@ their existing operator recovery requirements.
 
 ## Internal agent commentary
 
+Audit → Commentary is a board-only page with agent/type filters, text search,
+50-message pages and full-message dialogs. Filters, page offsets and selected
+messages have shareable URLs. Read endpoints require company membership,
+`audit:view_agent_actions` and source-task visibility.
+
 `agent_commentary` stores company-scoped, attributed complaints and suggestions
 as free-form text in the instance database. Legacy agents use the default
 `complain` and `suggestion-box` runtime skills; native runs use dedicated tools
@@ -2286,3 +2342,10 @@ reservation per attempt. Failed downloads and package fallback keep the full
 reservation. Successfully linked small imports refund unused measured work.
 Completed bindings do not reset company credits; waiting jobs retry on refill.
 The company_skill_import_budgets table stores no credentials or source contents.
+
+### Retired Pipelines experiment (2026-10-19)
+
+Pipelines, its review queue and learnings, stage automation, REST API, CLI commands,
+and experimental setting are removed. Existing database tables and records remain
+for data preservation; there is no migration that drops or rewrites them. The
+independent Cases and Routines features remain available.

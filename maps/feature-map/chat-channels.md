@@ -48,11 +48,69 @@ top-level replies to top-level DMs. Channel messages and thread replies still
 require a mention when that setting is enabled. Disable direct messages and
 confirm a plain DM is rejected. Use a private channel for threaded conversations.
 
+For Slack acknowledgement latency, mention the bot with and without an attachment.
+Eyes should appear after authorized task/comment persistence, independently of
+file preparation, subscription and agent startup. Duplicate delivery must keep
+one receipt; the final reply must remove only its source message's eyes. Record
+live mention-to-reaction timing separately from the PostgreSQL fixture tests and
+the `chat.slack.receipt` transport span described in [Observability](../../doc/observability.md).
+
+During a top-level DM run, verify that the bot adds eyes to the source message
+and removes them when the final reply arrives. The pinned Slack SDK encodes a
+linear DM with an empty thread timestamp; receipt transport accepts that address
+while still validating the channel and the source message timestamp.
+
+For an agent with two linked Slack endpoints, compare assignment preparation and
+tool discovery in the run trace. Endpoint checks may overlap in pairs. Confirm
+that both permitted tool sets remain available, then revoke one linked identity
+and confirm that the next preparation excludes it. The
+[database regression](../../server/src/__tests__/slack-tool-preparation.test.ts)
+uses real PostgreSQL with one connection and controlled credential resolution;
+it does not prove live provider latency or an end-to-end response target.
+
+Catalog discovery rechecks live authority and current credentials without
+computing the unused compatibility fingerprint. Assignment snapshots and
+governed calls retain full revision resolution. The same regression verifies
+identical catalog membership, absence of digest SQL during discovery, and
+revocation on the next preparation. A faster component is not proof of a faster
+Slack reaction or final reply; measure those separately on the deployed revision.
+
+For GitHub and Slack tool continuity, start a task from the channel, then admit
+a later monitor or retry run for the same task. Check that the later run can
+discover and call its channel tools without a new inbound message. For GitHub,
+also continue from a board message by the same accepted requester and complete
+the review in the original conversation, including when the original source is
+recorded only in legacy wake metadata. Revoke the linked identity and check
+that the next call fails. Repeat the boundary checks with another task, agent,
+company, and requester. The channel and provenance fixtures above cover these
+contracts with synthetic providers; record a live journey separately.
+For a long-lived task, repeat more than 100 continuations and check that tool
+access remains available. Fail a later GitHub run after a final answer and
+check that the earlier answer remains intact.
+
 ### `endpoint-management`
 
 Automated: [channel integration](../../server/src/__tests__/chat-channels.integration.test.ts) covers shared endpoint/delivery behavior; live credential repair and provider ownership remain manual checks.
 
 Manual: Inspect the bound agent and identity, recent activity, and delivery failure details. Repair a disposable credential, retry a safe message when offered, and verify exactly one external reply. Disable the endpoint and confirm new traffic is not silently processed.
+
+For publication failures, reject one operation with a provider 403 and verify
+that its failure remains visible while unrelated tools and publications continue.
+Repeat with an authentication failure: the endpoint must require attention and
+stop provider traffic, while the connection's enabled setting remains unchanged.
+Reconcile persistent receivers and restart the service; authentication failures
+must remain stopped while transient disconnections can still recover.
+The PostgreSQL suite uses controlled provider failures for these cases; live
+provider credential repair remains a separate acceptance check.
+
+GitHub connections in attention or revoked state show a repair notice above the
+settings. **Reconnect GitHub → Reconnect saved App** checks the same App with
+stored credentials and repairs delivery. **Replace App credentials** is the
+fallback, with the saved App ID, a link to its GitHub settings, and PEM upload or
+paste instructions. The production management Storybook's **04 Recovery** group
+covers these views, pending/failure/success, mobile, and light theme with simulated
+provider responses. Verify actual credential validity and restored delivery
+separately against GitHub; a Storybook success does not establish live recovery.
 
 For GitHub, submit a disposable PR and verify the summary heading uses the bot's
 display name and the check remains **Paperclip Review**. For two separate bots on one PR, verify
@@ -60,7 +118,11 @@ their App-scoped checks and comments remain independent.
 
 For GitHub publication recovery, interrupt a response after GitHub accepts a
 write and verify one summary, finding, and App-scoped check. Retry the same tool
-call and verify it returns the saved receipt. Leave a transient failure queued,
+call and verify it returns the saved receipt. Include text longer than 500
+characters and coverage with more than 50 entries. Change only the text suffix
+or final coverage entry and verify rejection without another write. Remove the
+durable publication and verify that a retry cannot dispatch a new write.
+Leave a transient failure queued,
 restart the instance, and verify publication resumes at its saved deadline
 without another inbound message. Revoked access and permanent rejections must
 stop retries. These recipes are separate from live provider proof.

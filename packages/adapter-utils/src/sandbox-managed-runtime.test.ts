@@ -416,6 +416,42 @@ function recordingFilesystemClient(
 describe("sandbox managed runtime", () => {
   const cleanupDirs: string[] = [];
 
+  it.each([
+    { isolation: undefined, detect: false },
+    { isolation: undefined, detect: true },
+    { isolation: "worker" as const, detect: false },
+    { isolation: "worker" as const, detect: true },
+  ])("keeps snapshot workers opt-in through command preparation: %j", async ({ isolation, detect }) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "paperclip-snapshot-mode-"));
+    cleanupDirs.push(root);
+    const local = path.join(root, "local"), remote = path.join(root, "remote");
+    await mkdir(local);
+    await writeFile(path.join(local, "file.txt"), "before");
+    const mergeDirectoryWithBaseline = restoreMerge.mergeDirectoryWithBaseline;
+    const capture = vi.spyOn(restoreMerge, "captureDirectorySnapshotOffThread")
+      .mockImplementation(restoreMerge.captureDirectorySnapshot);
+    const merge = vi.spyOn(restoreMerge, "mergeDirectoryWithBaseline")
+      .mockImplementation(input => mergeDirectoryWithBaseline({ ...input, workspaceSnapshotIsolation: undefined }));
+    try {
+      const prepared = await prepareCommandManagedRuntime({
+        runner: makeInlineSpawnRunner(),
+        spec: { remoteCwd: remote, timeoutMs: 30_000 },
+        adapterKey: "test",
+        workspaceLocalDir: local,
+        workspaceSnapshotIsolation: isolation,
+        workspaceCheckpoint: true,
+        ...(detect ? { installCommand: "exit 99", detectCommand: "sh" } : {}),
+      });
+      expect(capture.mock.calls.length > 0).toBe(isolation === "worker");
+      expect(await readFile(path.join(remote, "file.txt"), "utf8")).toBe("before");
+      await writeFile(path.join(remote, "file.txt"), "after");
+      await prepared.restoreWorkspace();
+      expect(merge).toHaveBeenCalled();
+      expect(merge.mock.calls.every(([input]) => input.workspaceSnapshotIsolation === isolation)).toBe(true);
+      expect(await readFile(path.join(local, "file.txt"), "utf8")).toBe("after");
+    } finally { capture.mockRestore(); merge.mockRestore(); }
+  });
+
   it.each(["host_current", "adopt_remote", "durable_seed"] as const)("stages and restores both project repositories with independent Git histories (%s)", async (mode) => {
     const root = await mkdtemp(path.join(os.tmpdir(), "paperclip-multi-repo-"));
     cleanupDirs.push(root);
@@ -2907,7 +2943,11 @@ describe("sandbox managed runtime", () => {
     // The workspace stage task opens its own `stage.workspace` span, and the
     // host tarball build opens the `pack` span inside it. The two pre-task
     // sub-steps stay ahead of the task.
-    expect(openedSpans).toEqual(["snapshot.git", "snapshot.baseline", "stage.workspace", "pack"]);
+    expect(openedSpans).toEqual([
+      "workspace.source_root", "snapshot.git", "workspace.repositories", "workspace.ignore_rules",
+      "snapshot.baseline", "workspace.inbound_barrier", "stage.workspace", "pack",
+      "workspace.progress", "workspace.overlay_archive", "workspace.transfer", "workspace.progress",
+    ]);
     // The tarball build still lands the workspace inside the span, so the wrap
     // changes no staging behavior.
     await expect(readFile(path.join(remoteWorkspaceDir, "README.md"), "utf8")).resolves.toBe("workspace body\n");
@@ -2966,8 +3006,11 @@ describe("sandbox managed runtime", () => {
     expect(packSpan!.ended).toBe(true);
     // The workspace stage task opens its own `stage.workspace` span under
     // `stage.sync`, and the `pack` span nests under `stage.workspace`.
-    expect(workspaceSpan!.parentName).toBe("stage.sync");
+    expect(workspaceSpan!.parentName).toBe("workspace.inbound_barrier");
     expect(packSpan!.parentName).toBe("stage.workspace");
+    expect(spans.find(span => span.name === "workspace.inbound_barrier")?.parentName).toBe("stage.sync");
+    expect(spans.find(span => span.name === "workspace.overlay_archive")?.parentName).toBe("pack");
+    expect(spans.find(span => span.name === "workspace.transfer")?.parentName).toBe("stage.workspace");
 
     // The two pre-`pack` staging sub-steps nest under `stage.sync` the same way,
     // so the previously hidden gap at the head of the step is now attributed.

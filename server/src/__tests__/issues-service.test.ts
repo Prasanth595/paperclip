@@ -42,6 +42,7 @@ import { instanceSettingsService } from "../services/instance-settings.ts";
 import {
   clampIssueListLimit,
   deriveIssueCommentRunLogAttribution,
+  MAX_CHILD_ISSUES_CREATED_BY_HELPER,
   ISSUE_LIST_MAX_LIMIT,
   issueService,
   readIssueCommentRunLogText,
@@ -885,6 +886,17 @@ describeEmbeddedPostgres("issueService.list participantAgentId", () => {
         requestingAgentId: agentId, requestingAgentName: "ConnectionRequester", phase: "authorizing",
       },
     }).returning();
+    // A second pending request on the same issue asks for an AI account. The
+    // expiry must tell the two apart: only the AI one blocks the run.
+    const [aiInteraction] = await db.insert(issueThreadInteractions).values({
+      companyId, issueId: issue.id, kind: "connection_intent", status: "pending",
+      createdByAgentId: agentId, addresseeUserId: "local-board",
+      payload: {
+        version: 1, purpose: "ai", serviceSlug: "connection:claude_local",
+        serviceName: "Claude", requestingAgentId: agentId,
+        requestingAgentName: "ConnectionRequester", phase: "authorizing",
+      },
+    }).returning();
     const oauthState = randomUUID();
     await db.insert(toolOauthStates).values({
       state: oauthState, companyId, connectionId: connection!.id, issueId: issue.id,
@@ -900,8 +912,21 @@ describeEmbeddedPostgres("issueService.list participantAgentId", () => {
     await expect(db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.id, interaction!.id)))
       .resolves.toEqual([expect.objectContaining({
         status: "expired",
-        result: { version: 1, outcome: "expired", reason: "The task assignment changed" },
+        result: {
+          version: 1,
+          outcome: "expired",
+          reason: "The task was reassigned before the connection request was answered, so the Notion connection is still not connected. Reconnect it or choose an available connection.",
+        },
         resolvedAt: expect.any(Date),
+      })]);
+    await expect(db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.id, aiInteraction!.id)))
+      .resolves.toEqual([expect.objectContaining({
+        status: "expired",
+        result: {
+          version: 1,
+          outcome: "expired",
+          reason: "The task was reassigned before the connection request was answered, so the AI account is still not connected. Reconnect it or choose an available connection.",
+        },
       })]);
     await expect(db.select().from(toolOauthStates).where(eq(toolOauthStates.state, oauthState))).resolves.toEqual([]);
   });
@@ -3921,6 +3946,62 @@ describeEmbeddedPostgres("issueService.create workspace inheritance", () => {
     });
 
     expect(child.requestDepth).toBe(MAX_ISSUE_REQUEST_DEPTH);
+  });
+
+  it("counts only non-terminal children toward the helper child limit", async () => {
+    const companyId = randomUUID();
+    const parentIssueId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(issues).values({
+      id: parentIssueId,
+      companyId,
+      title: "Recurring coordinator",
+      status: "in_progress",
+      priority: "high",
+    });
+
+    const terminalChildren = Array.from(
+      { length: MAX_CHILD_ISSUES_CREATED_BY_HELPER },
+      (_, index) => ({
+        id: randomUUID(),
+        companyId,
+        parentId: parentIssueId,
+        title: `Terminal child ${index + 1}`,
+        status: index % 2 === 0 ? "done" as const : "cancelled" as const,
+        priority: "medium" as const,
+      }),
+    );
+    const activeChildren = Array.from(
+      { length: MAX_CHILD_ISSUES_CREATED_BY_HELPER - 1 },
+      (_, index) => ({
+        id: randomUUID(),
+        companyId,
+        parentId: parentIssueId,
+        title: `Active child ${index + 1}`,
+        status: "todo" as const,
+        priority: "medium" as const,
+      }),
+    );
+    await db.insert(issues).values([...terminalChildren, ...activeChildren]);
+
+    const { issue: finalActiveChild } = await svc.createChild(parentIssueId, {
+      title: "Final active child",
+      status: "todo",
+    });
+
+    expect(finalActiveChild.parentId).toBe(parentIssueId);
+    await expect(svc.createChild(parentIssueId, {
+      title: "Over active limit",
+      status: "todo",
+    })).rejects.toThrow(
+      `Parent issue already has the maximum ${MAX_CHILD_ISSUES_CREATED_BY_HELPER} active child issues for this helper`,
+    );
   });
 });
 

@@ -43,6 +43,30 @@ launch context does not travel with each policy or parent-report check. JSON
 types, task-key precedence, and company and agent identity checks are preserved.
 Each decision still reads current data; this is not an authorization cache.
 
+Repository-root checks load retained run, agent and task identities in batches
+of at most 500 IDs. They keep each run's task binding, responsible user and saved
+policy separate, even when several runs use the same agent. Project settings and
+saved policies for batched read authorization are also loaded once per operation.
+The next admission or publication reloads these records and permission grants.
+The queries exclude run results and unused launch context.
+
+The initial agent JWT run lookup reads only the cancellation state and
+conversation flag from saved run JSON. It does not transfer the full context or
+result. Run status, responsible-user identity, company and agent boundaries,
+and the cancellation response remain unchanged. Later identity refreshes keep
+their existing transaction and data reads.
+
+To measure authentication query responses on disposable synthetic data:
+
+```sh
+pnpm --filter @paperclipai/server exec tsx ../scripts/benchmark-agent-authentication.ts --baseline-ref=06689c1b3410000bcd65ff40cb469e600209c4db
+```
+
+This compares the current query with the original query in that revision. It
+checks the complete authentication decision and reports returned JSON bytes,
+local query timings, and execution plans. It does not measure request latency
+or fleet-wide savings.
+
 To compare the real summary and full history queries with an earlier revision:
 
 ```sh
@@ -277,6 +301,24 @@ completed lookups and the separate liveness backfill are not replayed. Projectio
 callers that use a transaction retain single-attempt reads. The opt-in is only
 for a pooled database handle outside a transaction.
 
+The heartbeat run read check uses the same bounded retries. Routes call it with
+the pooled database handle. Its issue existence lookup and its `issue:read`
+authorization decision retry separately, so a disconnect in the decision does not
+replay the completed lookup. Both steps only read. Missing issues, denied
+decisions, and other errors keep their usual behavior.
+
+## Tool profile reads
+
+Tool profile list, detail, and new-tool review queries select only the catalog
+identity, selector, and review fields that they use. They do not load tool input
+or output schemas, annotations, or provider metadata. Application and connection
+lookups for these paths read only IDs and display names. Profile entries,
+bindings, counts, review descriptions, and company filters retain their existing
+behavior. The full catalog and tool execution paths still read their schemas.
+Attention counts use the same catalog projection and read only invocation IDs
+and connection IDs to associate pending requests. Summary queries also omit
+review titles and descriptions; the separate review query still returns them.
+
 ## Execution identity row locks
 
 Identity initialization, credential acquisition, and steering reconciliation lock
@@ -374,6 +416,14 @@ restart with stale provider variables on an isolated warm application first.
 Rollback by setting the marker to `0` and restarting. No schema changes are
 required. This mechanism does not sleep claimed workspaces or replace a durable
 scheduler for their background work.
+
+## Feedback history and idle sleep
+
+Automatic idle checks treat private, unshared feedback as saved data. A sent
+feedback export is history only when its completion timestamp exists and its
+failure reason is clear. Pending, failed, unknown, and inconsistent exports
+still keep the instance awake. These checks do not delete history or change
+feedback sharing and retry behavior.
 
 ## Resource membership tables
 
@@ -709,6 +759,11 @@ limits and the operator override.
 Project `privacy_owner_user_id` records who may manage its audience independently of project read membership. Creation assigns the authenticated user or run responsible user; migration recovers legacy ownership from creation audit evidence. Missing evidence leaves management with administrators.
 ## Internal agent commentary
 
+The Audit viewer uses the existing company/kind/created index.
+List reads select bounded previews; details load a single full body. Both reads
+and list counts apply company and source-task visibility. The viewer requires
+no experimental toggle or commentary schema migration.
+
 `agent_commentary` stores company-scoped, attributed complaints and suggestions
 as free-form text in the instance database. Legacy agents use the default
 `complain` and `suggestion-box` runtime skills; native runs use dedicated tools
@@ -884,6 +939,8 @@ Migration [0338_absurd_vengeance.sql](../packages/db/src/migrations/0338_absurd_
 
 Repository admission loads retained workspace and task sources in bounded batches. Readers share source rows and privacy evaluation for identical principals, but each retained run receives its own trust and responsible-user decision. The snapshot lasts only for one read batch; later admission and publication reload current authority. Keep source-loading query counts bounded as both workspace history and retained reader counts grow.
 
+Each physical-root scan resolves duplicate workspace paths once, with bounded concurrency for distinct paths. Alias results are discarded after that scan so later admission and publication recheck symlink targets. Provenance identities select overlapping root records through the company/root index; source retention writes use bounded batches under the existing company lock, including deny-only ownership retained after a failed copy authorization.
+
 Git-source capture checks the actual common Git storage directory and verified
 checkout owners. Separately stored metadata does not make its parent a checkout.
 When a linked worktree cannot identify its primary checkout, the service verifies
@@ -948,3 +1005,46 @@ This disposable fixture compares the real ownership, recovery-action and status
 delivery queries, including complete positional results and database plans.
 All data is synthetic. Query timings exclude process liveness probes, HTTP and
 provider work.
+
+### Agent runtime synchronization journal
+
+Migration 0347 adds the opt-in `agent_runtime` resource stream. Database triggers
+record content-free configuration invalidations and managed file audit events in
+`resource_lifecycle_events`. They share the mutation transaction and fail the
+mutation if journal insertion fails. An INSERT trigger sends an empty PostgreSQL
+notification on `paperclip_plugin_lifecycle` after commit. The host subscribes
+only when a ready runtime subscriber is installed. This feature requires a
+session-compatible database connection; do not enable it through a transaction
+pooler. Reconnection scans the durable journal. Existing process-local work
+signals continue to serve other delivery queues. See
+[the plugin contract](plugins/AGENT_RUNTIME_SYNC.md).
+
+Migration 0354 extends this stream to standing connection assignments. Statement
+triggers compare the fields returned by the assignment snapshot and coalesce
+company invalidation within the mutation transaction. Agent runtime journaling
+uses ordered `FOR NO KEY UPDATE` locks, which remain compatible with foreign-key
+references while excluding runtime readers' `FOR SHARE` locks. Connector feature
+switches use the same journal; process-start overlays receive a delivery baseline.
+
+Migration 0355 extends connector invalidation to tool definitions and
+configuration. Statement triggers cover applications, connections, catalogs,
+profiles and entries, bindings, policies, and MCP gateways. They ignore health
+bookkeeping and trust-rule usage counters. Profile creation alone does not change
+an agent's runtime; its assignment does. Entry changes resolve standing profile
+bindings; policies resolve old and new agent selectors. Both retain scoped
+recipients. Credential-only fields remain outside this migration's coverage.
+
+Migration 0356 adds access, referenced credentials and vaults, and chat/email
+endpoint configuration to connector runtime invalidation. Grant and membership
+changes retain company scope. Agent secret bindings and new personal delegations
+use agent scope. Credential values remain outside the journal. Endpoint activity,
+vault health, and other bookkeeping fields remain excluded.
+
+## Retired Pipelines storage
+
+The Pipelines experiment has been removed from the application, API, CLI, and
+experimental settings. Its `pipelines` and `pipeline_*` tables, schema definitions,
+and migration history remain so existing records, documents, and links are preserved
+and future schema generation does not drop them. No removal migration or data
+cleanup runs. These tables remain part of normal database backups; the separate
+Cases feature is unaffected.

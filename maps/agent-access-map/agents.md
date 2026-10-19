@@ -29,6 +29,14 @@ API: `present` — representative operation IDs:
 Agent access: `partial` — Native hire_agent; REST / CLI agent; runtime inheritance for
 native hires.
 
+Creation requests can use `runner: auto | paperclip | legacy`; the server resolves
+and persists execution configuration. Claude Auto selects the native ACPX profile
+on qualified macOS and GNU/Linux x64/ARM64 targets; unknown environment
+qualification remains Legacy. Darwin SSH defaults to Legacy while preserving
+explicit native assets and saved execution. Saved runner/model/provider overrides survive edits
+and approval activation. This selection does not grant connection access or
+bypass hiring authorization. Source: [runner resolver](../../server/src/services/agent-runner-selection.ts).
+
 Policy: Agent creation/configuration uses action grants, resource policies and change
 consent; some controls require a board actor.
 
@@ -132,6 +140,8 @@ API: `present` — representative operation IDs:
 - `POST /api/agents/{id}/pause`.
 - `POST /api/agents/{id}/resume`.
 - `POST /api/agents/{id}/terminate`.
+- `POST /api/agents/{id}/lifecycle/retry`.
+- `GET /api/agents/{id}` returns the safe failed phase/step and action in `lifecycleError`.
 
 Agent access: `partial` — REST / native `call_api` resume under agent_config:update
 change-grant authorization; pause and termination remain board-only.

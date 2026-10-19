@@ -51,6 +51,11 @@ New implicit Git workspace defaults record their project-source provenance.
 An untyped checkout binding from an older task is ambiguous and keeps the denial,
 including explicit checkout IDs and inherited parent sources. Admission rechecks
 the current binding rather than inferring a default from the selected checkout ID.
+When the denial is retained, the run stops before the agent starts with a
+`configuration_incomplete` failure (reason `workspace_source_restricted`). The task
+is blocked with a notice that tells the owner to push unpublished work and select a
+new workspace, or to grant access to the restricted task, then retry. Paperclip
+does not report this owner action to Sentry as an unexpected run failure.
 Startup validation of these recorded defaults keeps the task's effective workspace
 strategy. It does not substitute the agent's shared strategy or grant project writes.
 Workspace close and reopen use the recorded isolated source. Both operations

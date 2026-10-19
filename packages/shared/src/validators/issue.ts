@@ -1,5 +1,7 @@
 import { taskWorkspaceSelectionSchema } from "./task-workspace.js";
 import { z } from "zod";
+import { ISSUE_SUMMARIES_MAX_IDS } from "../constants.js";
+
 import {
   ISSUE_EXECUTION_DECISION_OUTCOMES,
   ISSUE_EXECUTION_MONITOR_CLEAR_REASONS,
@@ -43,6 +45,12 @@ import {
 } from "./trust-policy.js";
 import { objectWithoutDefaults } from "./partial.js";
 import { questionSetToAskUserQuestionsPayload } from "../question-set.js";
+
+export const issueSummariesQuerySchema = z.object({
+  ids: z.string().transform((value) => value.split(",").map((id) => id.trim().toLowerCase()))
+    .pipe(z.array(z.string().guid()).min(1).max(ISSUE_SUMMARIES_MAX_IDS))
+    .transform((ids) => [...new Set(ids)]),
+}).strict();
 
 export const issueBlockedInboxStateSchema = z.enum([
   "needs_attention",
@@ -297,7 +305,9 @@ export const issueExecutionWorkspaceSettingsSchema = z
 
 export const issueAssigneeAdapterOverridesSchema = z
   .object({
-    adapterConfig: z.record(z.string(), z.unknown()).optional(),
+    adapterConfig: z.record(z.string(), z.unknown())
+      .refine(config => !Object.prototype.hasOwnProperty.call(config, "homeMode"), "homeMode must be set by an operator on the agent, not on a task")
+      .optional(),
     useProjectWorkspace: z.boolean().optional(),
   })
   .strict();
@@ -569,6 +579,17 @@ export const retryWorkspaceExportSchema = z.object({
   actionId: z.string().guid(),
   runId: z.string().guid(),
   repairNote: z.string().trim().min(20).max(12000),
+}).strict();
+
+export const reconstructWorkspaceSchema = z.object({
+  actionId: z.string().guid(),
+  runId: z.string().guid(),
+  expectedStatusVersion: z.number().int().nonnegative(),
+  attachmentIds: z.array(z.string().guid()).min(1).max(20).refine(ids => new Set(ids).size === ids.length),
+  missingWork: z.string().trim().min(20).max(12000),
+  actionOutcome: z.enum(["completed", "not_performed", "mixed"]),
+  outcomeEvidence: z.string().trim().min(20).max(12000),
+  acknowledgeLostWork: z.literal(true),
 }).strict();
 
 export const resolveIssueRecoveryActionSchema = z

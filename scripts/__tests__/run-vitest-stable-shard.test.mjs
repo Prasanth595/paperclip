@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -517,5 +518,71 @@ test("filtered collection must match the exact assigned case identities, includi
     [expected[0], expected[1], caseAt(20, "renamed")],
     [expected[0], expected[1], caseAt(21, "nested > case")]]) {
     assert.throws(() => assertSelectedTests(expected, actual, lineShardFile));
+  }
+});
+
+
+test("parallel chat jobs form a complete disjoint partition", () => {
+  for (const count of [2, 3, 4]) {
+    const shards = Array.from({ length: count }, (_, index) =>
+      dryRunJson(["--mode", "general", "--group", "general-chat", "--shard-index", String(index), "--shard-count", String(count)],
+        { PAPERCLIP_TEST_DATABASE_URL: "" }).chatVitestShards,
+    );
+    assert.ok(shards.every((workers) => workers.length === 2));
+    assert.deepEqual(shards.flat().map(({ index }) => index).sort((a, b) => a - b),
+      Array.from({ length: count * 2 }, (_, index) => index));
+    assert.ok(shards.flat().every((shard) => shard.count === count * 2));
+  }
+});
+
+test("shared-database and unsharded chat runs retain one serial partition", () => {
+  for (let index = 0; index < 3; index++) {
+    const result = dryRunJson(["--mode", "general", "--group", "general-chat", "--shard-index", String(index), "--shard-count", "3"],
+      { PAPERCLIP_TEST_DATABASE_URL: "postgresql://shared/test" });
+    assert.deepEqual(result.chatVitestShards, [{ index, count: 3 }]);
+  }
+  assert.deepEqual(dryRunJson(["--mode", "general", "--group", "general-chat"],
+    { PAPERCLIP_TEST_DATABASE_URL: "" }).chatVitestShards, [{ index: 0, count: 1 }]);
+});
+
+
+test("a failed chat child fails the job after its sibling finishes", { skip: process.platform === "win32" }, () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "chat-launch-proof-"));
+  const file = path.join(repoRoot, "server/src/__tests__/chat-channels.integration.test.ts");
+  const lines = readFileSync(file, "utf8").split("\n")
+    .flatMap((line, index) => /^\s*it\(/.test(line) ? [index + 1] : []).slice(0, 6);
+  assert.equal(lines.length, 6);
+  const tests = lines.map((line) => ({ file, projectName: "@paperclipai/server",
+    name: `launcher fixture ${line}`, location: { line } }));
+  const receipt = path.join(directory, "sibling-finished");
+  const fakePnpm = path.join(directory, "pnpm");
+  try {
+    writeFileSync(fakePnpm, `#!${process.execPath}
+      const fs = require('node:fs');
+      const args = process.argv.slice(2);
+      const tests = ${JSON.stringify(tests)};
+      const selected = args.flatMap(arg => {
+        const match = arg.match(/chat-channels\\.integration\\.test\\.ts:(\\d+)$/);
+        return match ? [Number(match[1])] : [];
+      });
+      if (args.includes('list')) {
+        const output = args.find(arg => arg.startsWith('--json=')).slice(7);
+        fs.writeFileSync(output, JSON.stringify(selected.length
+          ? tests.filter(test => selected.includes(test.location.line)) : tests));
+      } else if (selected.includes(${lines[0]})) process.exit(7);
+      else setTimeout(() => fs.writeFileSync(${JSON.stringify(receipt)}, 'finished'), 200);
+    `);
+    chmodSync(fakePnpm, 0o755);
+    const result = spawnSync(process.execPath, [script, "--mode", "general", "--group", "general-chat",
+      "--shard-index", "0", "--shard-count", "3"], {
+      cwd: repoRoot, encoding: "utf8", timeout: 30_000,
+      env: { ...process.env, PATH: `${directory}${path.delimiter}${process.env.PATH}`,
+        PAPERCLIP_TEST_DATABASE_URL: "", PAPERCLIP_CI_PROFILE: "false" },
+    });
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, /failed \(7\)/);
+    assert.equal(readFileSync(receipt, "utf8"), "finished", "a failed worker must not abandon its sibling");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
   }
 });

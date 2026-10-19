@@ -5,7 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createWorkspaceManifest, WorkspaceManifestMap, workspacePathMatcher, type PathManifest, type WorkspacePaths, type WorkspaceManifestWriter } from "./workspace-manifest.js";
 import { shouldExcludePath } from "./exclude-patterns.js";
-import { resolvePaperclipInstanceRootForAdapter } from "./server-utils.js";
+import { runSnapshotThread } from "./workspace-snapshot-thread.js";
 import type { WorkspaceRestoreDiagnostic } from "./workspace-restore-diagnostics.js";
 
 export type SnapshotEntry =
@@ -492,6 +492,7 @@ function nonEmpty(value: string | undefined): string | null {
  * would follow the symlink) before any caller treats it as the lock root.
  */
 async function resolveDirectoryMergeLockRoot(env: NodeJS.ProcessEnv = process.env): Promise<string> {
+  const { resolvePaperclipInstanceRootForAdapter } = await import("./server-utils.js");
   const instanceRoot = resolvePaperclipInstanceRootForAdapter({
     homeDir: nonEmpty(env.PAPERCLIP_HOME) ?? undefined,
     instanceId: nonEmpty(env.PAPERCLIP_INSTANCE_ID) ?? undefined,
@@ -553,6 +554,16 @@ export async function withDirectoryPublicationLock<T>(
     await assertSafeLeaf();
     return fn(canonicalTargetDir);
   }, env);
+}
+
+export async function tryWithDirectoryMergeLock<T>(targetDir: string, fn: () => Promise<T>): Promise<T | undefined> {
+  const canonicalTargetDir = await fs.realpath(targetDir);
+  try {
+    return await withCanonicalDirectoryMergeLock(canonicalTargetDir, fn, process.env, undefined, 0);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === WORKSPACE_RESTORE_LOCK_TIMEOUT_CODE) return undefined;
+    throw error;
+  }
 }
 
 async function withCanonicalDirectoryMergeLock<T>(
@@ -640,6 +651,22 @@ export async function captureDirectorySnapshot(
   } finally { ignored.close(); }
 }
 
+export async function captureDirectorySnapshotOffThread(
+  rootDir: string,
+  options: { exclude?: string[]; ignoredPaths?: WorkspacePaths; diskBacked?: boolean } = {},
+): Promise<DirectorySnapshot> {
+  if (!options.diskBacked) return captureDirectorySnapshot(rootDir, options);
+  const result = await runSnapshotThread({ rootDir, exclude: options.exclude, ignoredPaths: options.ignoredPaths });
+  try {
+    const snapshot = openDirectorySnapshot(result.snapshot);
+    ownedDirectorySnapshots.set(snapshot, result.directory);
+    return snapshot;
+  } catch (error) {
+    await fs.rm(result.directory, { recursive: true, force: true });
+    throw error;
+  }
+}
+
 /** A disk-backed subset for independent nested-repository merges. */
 export async function selectDirectorySnapshot(snapshot: DirectorySnapshot, options: {
   prefix?: string; omit?: string[]; exclude: string[]; ignoredPaths?: WorkspacePaths;
@@ -716,14 +743,16 @@ export async function mergeDirectoryWithBaseline(input: {
   sourceDir: string;
   targetDir: string;
   conflictPolicy?: "reject";
+  workspaceSnapshotIsolation?: "worker";
   beforeApply?: () => Promise<void>;
   afterApply?: () => Promise<void>;
   /** Caller holds the target's writer lock and validated an immutable sparse
    * source. Unchanged entries need no payload and are never copied. */
   snapshots?: { source: DirectorySnapshot; current?: DirectorySnapshot };
 }): Promise<void> {
+  const capture = input.workspaceSnapshotIsolation === "worker" ? captureDirectorySnapshotOffThread : captureDirectorySnapshot;
   const options = { exclude: input.baseline.exclude, ignoredPaths: input.baseline.ignoredPaths, diskBacked: true };
-  const source = input.snapshots?.source ?? await captureDirectorySnapshot(input.sourceDir, options);
+  const source = input.snapshots?.source ?? await capture(input.sourceDir, options);
   try {
     await withDirectoryMergeLock(input.targetDir, async (canonicalTargetDir) => {
       await input.beforeApply?.();
@@ -733,7 +762,7 @@ export async function mergeDirectoryWithBaseline(input: {
       }
       // Strict preflight must see excluded children before a directory is
       // replaced. The merge still applies only the filtered source/baseline.
-      const current = input.snapshots?.current ?? await captureDirectorySnapshot(canonicalTargetDir,
+      const current = input.snapshots?.current ?? await capture(canonicalTargetDir,
         input.conflictPolicy === "reject" ? { exclude: [], diskBacked: true } : options);
       try {
         if (input.conflictPolicy === "reject") {

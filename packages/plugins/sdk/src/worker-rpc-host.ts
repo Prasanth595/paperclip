@@ -93,6 +93,7 @@ import type {
   RefreshExternalObjectsParams,
   PluginEnvironmentAcquireLeaseParams,
   PluginEnvironmentDestroyLeaseParams,
+  PluginEnvironmentInspectLeaseParams,
   PluginEnvironmentExecuteParams,
   PluginEnvironmentRunnerIngressEndpointParams,
   PluginEnvironmentSyncInParams,
@@ -1155,6 +1156,9 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
       },
 
       agents: {
+        async getRuntime(agentId, companyId) {
+          return callHost("agents.getRuntime", { agentId, companyId });
+        },
         async list(input) {
           return callHost("agents.list", {
             companyId: input.companyId,
@@ -1696,6 +1700,10 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
       case "environmentDestroyLease":
         return handleEnvironmentDestroyLease(params as PluginEnvironmentDestroyLeaseParams);
 
+      case "environmentInspectLease":
+        if (!plugin.definition.onEnvironmentInspectLease) throw methodNotImplemented("environmentInspectLease");
+        return plugin.definition.onEnvironmentInspectLease(params as PluginEnvironmentInspectLeaseParams);
+
       case "environmentRealizeWorkspace":
         return handleEnvironmentRealizeWorkspace(params as PluginEnvironmentRealizeWorkspaceParams);
 
@@ -1799,6 +1807,7 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
     if (plugin.definition.onEnvironmentReleaseLease) supportedMethods.push("environmentReleaseLease");
     if (plugin.definition.onEnvironmentStopLease) supportedMethods.push("environmentStopLease");
     if (plugin.definition.onEnvironmentDestroyLease) supportedMethods.push("environmentDestroyLease");
+    if (plugin.definition.onEnvironmentInspectLease) supportedMethods.push("environmentInspectLease");
     if (plugin.definition.onEnvironmentRealizeWorkspace) supportedMethods.push("environmentRealizeWorkspace");
     if (plugin.definition.onEnvironmentExecute) supportedMethods.push("environmentExecute");
     if (plugin.definition.onEnvironmentRunnerIngressEndpoint) {

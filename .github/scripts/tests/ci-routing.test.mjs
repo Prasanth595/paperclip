@@ -97,6 +97,8 @@ const stackedBase = {
 
 const routeCases = [
   ["allowlisted PR", {}, awsRunner],
+  ["allowlisted profile label", { EVENT_ACTION: "labeled", EVENT_LABEL_NAME: "profile-ci" }, awsRunner],
+  ["unrelated label", { EVENT_ACTION: "labeled", EVENT_LABEL_NAME: "documentation" }],
   ["validated stacked base", stackedBase, awsRunner],
   ["lagging PR API base snapshot", { TEST_PR_BASE_SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }, awsRunner],
   ["disabled AWS", { AWS_CI_ENABLED: "false" }],
@@ -144,6 +146,16 @@ for (const [name, stack, base, expected] of scopeCases) {
 }
 
 const files = (...paths) => JSON.stringify(paths.map((filename) => ({ filename })));
+
+test("profile-ci overrides both middle-stack and release-notes-only skips", () => {
+  for (const overrides of [
+    { STACK_JSON: JSON.stringify({ position: 2, size: 3, base: { ref: "master" } }), PR_BASE_REF: "stack-1" },
+    { STACK_JSON: "null", PR_BASE_REF: "master", TEST_COMPARE_FILES: files("releases/v2026.1015.0.md") },
+  ]) {
+    assert.equal(executeStep("Select PR CI scope", { ...overrides, PROFILE_CI: "false" }).full_ci, "false");
+    assert.equal(executeStep("Select PR CI scope", { ...overrides, PROFILE_CI: "true" }).full_ci, "true");
+  }
+});
 const manyReleaseNotes = JSON.stringify(Array.from({ length: 300 }, (_, index) => ({
   filename: `releases/beta/v2026.1012.${index}-beta.0.md`,
 })));

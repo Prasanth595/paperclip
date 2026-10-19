@@ -5,7 +5,57 @@ Run-log events write to the `heartbeat_run_events` table
 Paperclip Telemetry events, and they are not OpenTelemetry exports. A run-log
 event needs no operator endpoint.
 
+## Ordinary event persistence
+
+Events without a native source identity or retry-exhaustion receipt use one
+atomic PostgreSQL statement. The statement checks the stored run's company and
+agent, allocates its next sequence, and inserts the event. An insertion failure
+also rolls back the sequence allocation. The returned row uses the existing
+column decoders, including the lossless payload codec. Callers still wait for
+the durable write before they publish or acknowledge the event. Native-source
+replay and retry-exhaustion deduplication retain their existing transaction path.
+
+## Provider-pack preparation timing
+
+The existing `run.performance.span` event also records `provider_pack.select`,
+`provider_pack.discover`, `provider_pack.verify`, `provider_pack.verify_preinstalled`,
+`provider_pack.link_preinstalled`, `provider_pack.clear_stale`, `provider_pack.upload`,
+and `provider_pack.verify_uploaded`. Selection records `stateSource` as `staged`,
+`preinstalled`, or `uploaded`. Its closed reason is `verified_pack_reused` or
+`cached_packs_unverified`. A verification failure describes an unusable candidate;
+it does not identify a particular compatibility mismatch or a failed run.
+Harness startup also records `harness_state.inspect`, `harness_state.path_check`,
+and `harness_state.launch_material` for remote state inspection and fresh launch
+material. These events retain the existing schema and carry no paths or exception strings.
+They also become native Observability spans only with an operator OTLP endpoint.
+
 ## Native PRP Run-Log Events
+
+`auth.credentials.updated` is a runner-produced PRP event for a change to a
+supported credential store, including account identity changes and later token
+refreshes on the new account. The bundled transport awaits a host commit callback
+before acknowledging delivery, including during warm idle and provider cleanup.
+The callback writes directly to the bound run through the shared run-log writer.
+Its separate credential source namespace avoids collisions with driver-normalized
+source sequences and deduplicates retries using the original PRP event identity.
+The original envelope is retained in `prpEvent`. Its payload contains only a
+provider, an opaque binding ID, a revision, and a detection method. It contains
+no credentials, account identity, file path, or credential fingerprint. The
+consumer can use the event to read the updated credentials through its existing
+private credential channel. This run-log event stays in the instance database.
+
+
+`native.recovery.execution_reclaimed` records an atomic same-run recovery claim
+that restores a released task execution binding. The claim locks the task,
+coordinator, and original run in that order. It preserves the assignee and checks
+current execution/checkout owners, other live work, dependencies, pause holds,
+and stop/successor records before restoring the binding. Attachment authorization
+keeps its existing requirement for that exact binding. Skipped retry candidates
+wait 30 seconds before recheck so they cannot fill every bounded claim batch.
+Undated retries sort first. A failed candidate cannot discard earlier committed
+claims. Queued waiters do not block the original execution owner from recovery;
+they still wait for that owner to settle before normal queue promotion.
+This is local run-log data.
 
 Fresh remote Codex model substitution emits `runner.model_fallback` on the
 system stream with `warn` severity. Its payload contains `requestedModel`,
@@ -138,6 +188,14 @@ The event never includes bootstrap tickets, reconnect leases, authentication
 proofs, encryption keys, environment variables, provider credentials, command
 arguments, or an unsanitized stderr stream. Detailed failed-attempt diagnostics
 remain in the bounded `native_run_finalizations.recovery_history` ledger.
+
+`native.remote_runner_recovery_failed` records the closed `stage` and `reason`
+when remote identity verification fails, including admission failures before the
+execution coordinator opens. Unavailable probes are retried within a shared
+30-second deadline; identity conflicts are not retried. The event distinguishes
+an unreadable identity from a confirmed missing process and contains no command
+output or credentials. Saved-state read failures use `state_read_failed`; malformed
+saved JSON uses `state_invalid`. It does not itself authorize replacement or cleanup.
 
 For a prepared remote workspace interrupted before its first executor claim,
 that ledger records `remote_execution_never_claimed` with a
@@ -498,3 +556,10 @@ retries cleanup. This event preserves the run outcome and does not claim a file
 save; `instruction_save` remains authoritative for collection. The event contains
 no raw exception, host path, file contents, or lock-owner metadata. Failure to
 write the warning must not replace the provider outcome or stop lease release.
+
+## Agent observability availability
+
+`agent_observability.unavailable` is one warning for a preparation snapshot that
+cannot apply company export settings. Its payload contains only a closed reason
+and the settings revision. It carries no endpoint, credential, secret reference
+or resolver error. Recording the diagnostic never contacts a destination.

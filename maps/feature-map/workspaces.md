@@ -18,6 +18,23 @@ Agent access: [companion](../agent-access-map/workspaces.md).
 - `files-git`: inspect workspace files and repository state used for the deliverable.
 - `closure`: close/reopen or reconcile through permitted controls without losing work.
 
+For a historical failed export whose exact sandbox was destroyed, the task recovery
+notice offers **Continue from saved sources** to an authorized board operator.
+Select surviving task attachments, record lost work and external action outcomes,
+then rebuild through fresh-session admission. The old failed run remains failed.
+Bounded bootstrap retries retain this decision and recheck their system wake,
+predecessors, saved files and current execution gates before provider startup.
+Later cancelled runs require their own confirmed stop and board file repair.
+Their evidence is preserved with the reconstruction and rechecked before dispatch.
+Stop retains unfinished native files; startup also repairs missing historical
+retention without replaying the cancelled turn.
+Daytona stop-only cleanup confirms retention and accepts an already archived source.
+Cancelled native file recovery can record a verified no-action outcome. Its
+confirmation stays optional and resets when the source changes.
+Retained sandboxes keep their existing export recovery path. Automated coverage:
+[reconstruction](../../server/src/services/native-runtime/native-workspace-reconstruction.test.ts).
+Live staging acceptance remains separate from these regression tests.
+
 ## How to get to it (user POV)
 
 ### `task-workspace`
@@ -56,6 +73,15 @@ source choices changed during preparation must retain the denial. The
 and [preparation tests](../../server/src/services/heartbeat/workspace-preparation.test.ts)
 exercise the real Git isolation and lifecycle guards. They do not qualify live
 remote credentials or a provider deployment.
+
+For reconstructable Git expiration, finish a disposable task tree, run the
+internal lifecycle sweep after its 24-hour grace, and inspect candidate/reclaimed
+bytes. Advance its upstream first; use the ordinary task/workspace reopen control
+and verify the original commit, file contents, and subsequent persisted work.
+Current runs, previews, recovery, unique files and shared base clones must stay.
+The [expiration tests](../../server/src/__tests__/git-workspace-expiration.test.ts)
+exercise real local Git and database paths, interruption and concurrent reopening;
+cloud credentials and the deployed user journey require separate live evidence.
 
 For task workspace selection, use the authorized task workspace API to choose a
 task directory, project source, or existing workspace. Verify that a change

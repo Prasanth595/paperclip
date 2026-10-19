@@ -17,6 +17,17 @@
       "description": "Product requirements and review criteria for harness responsibility, minimal user-facing internals, truthful progress, and human decisions."
     },
     {
+      "path": "rules/runtime-dependency-boundaries.mdc",
+      "description": "Dependency cost, responsiveness, and verification requirements for changed server, adapter, and runner execution paths.",
+      "scope": [
+        "server/src/**",
+        "packages/adapter-utils/src/**",
+        "packages/adapters/*/src/**",
+        "packages/paperclip-runner/src/**",
+        "packages/paperclip-runner/runner/**"
+      ]
+    },
+    {
       "path": "rules/chat-channel-platform-boundaries.mdc",
       "description": "Architecture requirements and review criteria for separating chat channel platform implementations from shared orchestration.",
       "scope": [

@@ -10,6 +10,8 @@ import { scheduleAgentLifecycle } from "../agent-lifecycle.js";
 import { logActivity } from "../activity-log.js";
 import { deliverGrokRoutineWake, validateGrokRoutineCredential, type GrokRoutineDelivery, type GrokRoutineWake } from "./webhook.js";
 
+import { grokWorkspaceInspectionCandidates, inspectGrokWorkspaceObligations } from "./workspace-inspection.js";
+
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 const fail = (message: string) => new McpOAuthError("access_denied", message, 409);
 export const grokWakeAcknowledgementSchema = z.object({ correlationId: z.uuid(), bindingId: z.uuid(),
@@ -44,7 +46,7 @@ export function grokRoutineService(db: Db, deliver: Delivery = deliverGrokRoutin
     const [uncertain] = await db.select({ id: dispatches.id }).from(dispatches).innerJoin(routines, eq(routines.id, dispatches.routineId))
       .where(and(eq(dispatches.companyId, companyId), eq(routines.agentId, agentId),
         or(eq(dispatches.status, "unknown"), and(eq(dispatches.status, "sending"), lte(dispatches.updatedAt, new Date(Date.now() - 30_000))), and(eq(dispatches.status, "accepted"), lte(dispatches.expiresAt, new Date()))))).limit(1);
-    return !!held || !!uncertain;
+    return !!held || !!uncertain || (await grokWorkspaceInspectionCandidates(db, companyId, agentId)).length > 0;
   }
 
   async function recover(companyId: string, agentId: string, operatorId: string) {
@@ -65,6 +67,10 @@ export function grokRoutineService(db: Db, deliver: Delivery = deliverGrokRoutin
       await logActivity(tx as unknown as Db, { companyId, actorType: "user", actorId: operatorId, action: "grok.recovery_inspected",
         entityType: "agent", entityId: agentId, details: { inspectedRemoteWork: true, remoteTerminationConfirmed: false, requiresVerification: true } });
     });
+    // Commit loss of readiness before retiring task holds. If inspection fails
+    // or waits for a task lock, the old verification cannot admit new work.
+    // The remaining task hold also prevents verification during this gap.
+    await inspectGrokWorkspaceObligations(db, companyId, agentId, operatorId);
     return { recovered: true, requiresVerification: true, remoteTerminationConfirmed: false };
   }
 

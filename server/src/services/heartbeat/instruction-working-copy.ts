@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { and, eq, sql } from "drizzle-orm";
 import { heartbeatRuns, type Db } from "@paperclipai/db";
+import { adapterExecutionTargetEnablesSandboxDuplexBridge } from "@paperclipai/adapter-utils/execution-target";
 import { parseObject } from "../../adapters/utils.js";
 import { logger } from "../../middleware/logger.js";
 import { AgentDirectoryReuseInvalidatedError, isAgentDirectoryCopy } from "../agent-directory-working-copies.js";
@@ -52,6 +53,7 @@ export function createHeartbeatInstructionCopyRelease(
 }
 
 interface InstructionWorkingCopyInput {
+  observabilityCompatibilityKey?: string;
   db: Db;
   instructionCopies: Copies;
   // The executor replaces its run row before preparation. Callbacks must see it.
@@ -78,6 +80,7 @@ export function createHeartbeatInstructionWorkingCopy(input: InstructionWorkingC
   let instructionSave: Record<string, unknown> | null = null;
   const instructionPreparationKey = createHash("sha256").update(JSON.stringify({
     adapterType: agent.adapterType, adapterConfig: agent.adapterConfig, runtimeConfig: agent.runtimeConfig, sessionConfigMetadata,
+    duplexBridge: adapterExecutionTargetEnablesSandboxDuplexBridge(executionTarget),
     workspace: nativeSessionWorkspaceScope({
       binding: { runId: readRun().id, executionWorkspaceId: persistedExecutionWorkspace?.id ?? readRun().id },
       workspace: executionWorkspace,
@@ -142,11 +145,13 @@ export function createHeartbeatInstructionWorkingCopy(input: InstructionWorkingC
         if (warmFiles && taskSessionForRun?.lastRunId) {
           nativeInstructionReservation = await reserveWarmNativeInstructionDirectory({ companyId: agent.companyId, agentId: agent.id,
             previousRunId: taskSessionForRun.lastRunId, runId: readRun().id, target: executionTarget,
+            observabilityCompatibilityKey: input.observabilityCompatibilityKey,
             canReuse: () => instructionCopies.canReuseWarm(agent.companyId, agent.id, taskSessionForRun!.lastRunId!),
           });
         }
         if (!warmFiles && nativeRuntimeResolution.kind === "native" && priorWorkingCopy.kind === "agent_files" && taskSession) {
           releaseWarmInstructionPreparation = await claimWarmNativeInstructionCopy({
+            observabilityCompatibilityKey: input.observabilityCompatibilityKey,
             priorExecution: parseNativeExecutionInput(priorFileInput), companyId: agent.companyId, agentId: agent.id,
             executionWorkspaceId: persistedExecutionWorkspace?.id ?? readRun().id, workspace: executionWorkspace,
             environmentId: executionTarget?.environmentId ?? null, runId: readRun().id, preparationKey: instructionPreparationKey, forceRetirement: !taskSessionForRun,

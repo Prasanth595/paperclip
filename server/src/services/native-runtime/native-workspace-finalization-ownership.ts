@@ -1,3 +1,4 @@
+import { beginRunPhase } from "../execution-preparation-timing.js";
 import { logActivity } from "../activity-log.js";
 import { issueRecoveryActionService } from "../issue-recovery-actions.js";
 import { nativeSha256 } from "./canonical.js";
@@ -70,6 +71,7 @@ export async function withNativeWorkspaceFinalizationOwnership<T>(
   const owned = and(scope, sql`${heartbeatRuns.runnerProfileJson}->${OWNER_KEY}->>'token' = ${owner.token}`);
   let claimed = false;
   let actionPromise: Promise<T> | undefined;
+  const finishAcquisition = beginRunPhase("execution.workspace_ownership_wait");
   try {
     return await withDedicatedDbConnection(input.db, (dedicated) => dedicated.transaction(async (lock) => {
       const rows = await lock.execute(sql`select pg_try_advisory_xact_lock(hashtextextended(${`native-workspace-finalization:${input.companyId}:${input.runId}`}, 0)) as acquired,
@@ -213,13 +215,18 @@ export async function withNativeWorkspaceFinalizationOwnership<T>(
           eq(issueRecoveryActions.fingerprint, nativeSha256({ runId: input.runId, owner: rawPrior })),
           inArray(issueRecoveryActions.status, ["active", "escalated"]),
         ));
+        finishAcquisition();
         actionPromise = action(ownership);
         const value = await actionPromise;
         await ownership.assertHeld();
         return { acquired: true, value } as const;
       });
     }));
+  } catch (error) {
+    finishAcquisition(true);
+    throw error;
   } finally {
+    finishAcquisition();
     // postgres.js may reject the transaction when the socket dies before the
     // callback settles. Join that callback before releasing its durable fence.
     await actionPromise?.catch(() => undefined);

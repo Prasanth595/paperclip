@@ -98,6 +98,7 @@ export function skillSourceService(db: Db) {
     return `github/${scan.repositoryId}/${identity}/${normalizeAgentUrlKey(name) || 'skill'}`;
   }
   async function publish(tx: Tx, source: SourceRow, scan: ScannedSkillSource, selectedPaths: string[], excludedFolders: string[], context: SkillSourceContext, selectionReviewed: boolean): Promise<Omit<SkillSourceRefreshResult, 'source'>> {
+    await tx.execute(sql`SET CONSTRAINTS paperclip_skill_runtime_changed DEFERRED`);
     const mode = scan.packageMode ?? 'skills';
     if (mode === 'repository' && scan.skills.length > 0 && (scan.repositoryPackage?.error || !scan.repositoryFiles?.length)) {
       throw unprocessable(scan.repositoryPackage?.error ?? 'Repository package has no files. Scan it again before importing.');
@@ -396,6 +397,7 @@ export function skillSourceService(db: Db) {
     const directories: string[] = [];
     try {
       return await db.transaction(async tx => {
+        await tx.execute(sql`SET CONSTRAINTS paperclip_skill_runtime_changed DEFERRED`);
         await lock(tx);
         for (const skillId of skillIds) await skills.makeImportedSkillEditable(companyId, skillId, context.actor, folderId, tx, directories);
         await remove(tx, skillIds.length, 0);

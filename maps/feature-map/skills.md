@@ -57,6 +57,18 @@ Automated: [policy service](../../server/src/__tests__/company-skill-policy-serv
 
 Manual: Enable the skill for one test agent and leave another without access. Run a small task on each, inspect the available skill context, then change the release/policy and verify the next eligible run uses the intended version.
 
+A Paperclip Runner run with no selected skills must proceed while another run
+holds the company skill-cache lock. A saved empty selection remains empty after
+later assignments. Selected skills and the legacy operational skill retain cache
+exclusion through version pinning. The [configuration regression](../../server/src/__tests__/heartbeat-execution-configuration.test.ts)
+uses a real PostgreSQL lock; live provider latency remains a separate check.
+
+Concurrent selected-skill preparations share one in-flight company inventory
+refresh before cache locking. Each run retains its own selection and durable
+version pins. The [concurrency regression](../../server/src/__tests__/company-skills-runtime-concurrency.test.ts)
+checks shared work and separate actor access; the cache tests check that cleanup
+cannot remove a snapshot before the run stores its pins.
+
 ## Gotchas
 
 - The release picker requires `enableBetaSkills`. Do not invent an Instructions
@@ -65,6 +77,10 @@ Manual: Enable the skill for one test agent and leave another without access. Ru
 - Installed does not mean enabled for every agent.
 - Read-only GitHub/bundled skills may require a writable copy rather than an in-place edit.
 - Studio interaction coverage is in [questions and approvals](./questions-and-approvals.md); a passing mock is not a live harness test.
+- Old version disk caches may expire; saved versions remain available. Verify a pinned
+  version is restored through normal execution with upstream unavailable. Current
+  and in-use versions stay materialized. See [cleanup controls](../../doc/recoverable-disk-cleanup.md)
+  and the [database-backed cache tests](../../server/src/__tests__/skill-version-cache.test.ts).
 
 ### Project repository source behavior
 
@@ -111,3 +127,9 @@ Sources: Source: [SkillStudio.tsx](../../ui/src/pages/SkillStudio.tsx), [company
 ### Documentation scope: Skills, Skill Studio, and teams
 
 Main library/Studio/source/policy and CLI team-install paths are mapped. Full source-provider conflicts, harness sync, and remote package variants remain; catalog UI is not a current top-level route.
+
+
+Installed skill updates and assignments can drive opt-in plugin runtime
+synchronization. Version pins remain effective. See
+[contract](../../doc/plugins/AGENT_RUNTIME_SYNC.md#skills) and
+[database coverage](../../server/src/__tests__/agent-runtime-skills.test.ts).

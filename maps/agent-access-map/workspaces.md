@@ -2,6 +2,18 @@
 
 Product map: [Execution workspaces, services, and files](../feature-map/workspaces.md).
 
+Lost-source reconstruction adds the board-only
+`POST /api/issues/{id}/recovery-actions/reconstruct-workspace` action. It requires
+`runtime:manage` and ordinary task visibility. Agents cannot authorize it. The
+result is a durable fresh-session admission request, subject to current execution
+gates. It grants no additional tool access, budget, work window or permission to
+repeat completed actions. Attachments must belong to the same task and company.
+The original failed run and lost-export evidence remain unchanged.
+Later native run-only cancellations can coexist only with confirmed lease stops,
+board file-only repair and an external-action outcome of `not_performed`.
+Their immutable evidence is checked again at dispatch. Historical cancellation
+retention runs internally and grants no new agent operation or authority.
+
 Review date: 2026-10-12. Source commit: `58e16dbddfc9c8d0cf60867f9d9847f0feda055b`.
 Native REST transport reconciled in this change; see the
 [shared transport contract](README.md#native-rest-transport).
@@ -51,12 +63,23 @@ retain the original denial without cloning or replacing their unpublished commit
 New implicit Git defaults record project-source provenance. Untyped explicit,
 inherited and older ambiguous checkout bindings retain the denial; admission reads
 the current company-scoped binding before considering the fallback.
+A retained denial blocks the task as `configuration_incomplete`
+(`workspace_source_restricted`) before dispatch; it grants no access and names the
+owner action on the task.
 Local paths, unsupported transports and credential-bearing URLs are not fallback
 sources. Company/task/remote bindings, real paths, Git storage and the exact origin
 are revalidated for reuse, cleanup and reopening. A failed save removes only the
 owned task worktree. The [isolated-source service](../../server/src/services/isolated-remote-workspace-source.ts)
 and its local regression tests establish source and lifecycle boundaries; live
 agent/provider qualification remains separate.
+Reconstructable Git expiration adds no agent endpoint or permission. It records
+company/workspace/repository identity and an exact commit before removing owned
+cache files. Existing task/workspace reopening retains current company, source,
+and trust checks. Missing upstream access returns a retryable error; it does not
+choose a newer commit or grant access to another company's source. Shared project
+bases and unresolved recovery remain protected. Local lifecycle evidence is in
+[expiration tests](../../server/src/__tests__/git-workspace-expiration.test.ts).
+
 Writable aliases must also be compatible with current and retained physical
 source projects' trust boundaries. Incompatible choices are rejected before
 dispatch; a projectless alias cannot bypass required sandbox containment.

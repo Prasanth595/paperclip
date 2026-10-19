@@ -8,6 +8,8 @@ on:
         value: ${{ jobs.gate.outputs.runner }}
       full_ci:
         value: ${{ jobs.gate.outputs.full_ci }}
+      profile_ci:
+        value: ${{ jobs.gate.outputs.profile_ci }}
 
 permissions:
   actions: read
@@ -22,6 +24,7 @@ jobs:
     outputs:
       runner: ${{ steps.route.outputs.runner }}
       full_ci: ${{ steps.scope.outputs.full_ci }}
+      profile_ci: ${{ steps.profile.outputs.profile_ci }}
 
     steps:
       - name: Validate PR identity and select runner
@@ -35,6 +38,7 @@ jobs:
           EVENT_REPOSITORY: ${{ github.repository }}
           EVENT_REPOSITORY_ID: ${{ github.repository_id }}
           EVENT_ACTION: ${{ github.event.action }}
+          EVENT_LABEL_NAME: ${{ github.event.label.name }}
           EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
           EVENT_PR_AUTHOR_ID: ${{ github.event.pull_request.user.id }}
           EVENT_SENDER_ID: ${{ github.event.sender.id }}
@@ -76,7 +80,10 @@ jobs:
           [[ "$EVENT_REPOSITORY_ID" == '1170821064' ]] || fail_closed 'unexpected repository ID'
           [[ "$EVENT_BASE_REPOSITORY_ID" == '1170821064' ]] || fail_closed 'unexpected base repository ID'
           [[ -n "$EVENT_BASE_REF" ]] || fail_closed 'missing base branch'
-          [[ "$EVENT_ACTION" =~ ^(opened|reopened|synchronize)$ ]] || fail_closed 'unsupported pull_request action'
+          [[ "$EVENT_ACTION" =~ ^(opened|reopened|synchronize|labeled)$ ]] || fail_closed 'unsupported pull_request action'
+          if [[ "$EVENT_ACTION" == 'labeled' && "${EVENT_LABEL_NAME:-}" != 'profile-ci' ]]; then
+            fail_closed 'only the profile-ci label can request a profiling run'
+          fi
 
           jq -e '
             type == "array" and
@@ -215,6 +222,31 @@ jobs:
           echo "runner=$aws_runner" >> "$GITHUB_OUTPUT"
           echo '::notice title=AWS CI routing::Using an ephemeral RunsOn Fleet runner'
 
+      - name: Authorize CODEOWNERS CI profiling
+        id: profile
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROFILE_REQUESTED: ${{ contains(github.event.pull_request.labels.*.name, 'profile-ci') }}
+        run: |
+          set -euo pipefail
+          if [[ "$PROFILE_REQUESTED" != 'true' ]]; then
+            echo 'profile_ci=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Fetch only from canonical master, never the PR ref. Pin both the
+          # authorization program and CODEOWNERS to the same trusted revision.
+          if ! TRUSTED_PROFILE_SHA="$(gh api /repos/paperclipai/paperclip/git/ref/heads/master --jq .object.sha)" ||
+             [[ ! "$TRUSTED_PROFILE_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+             ! gh api -H 'Accept: application/vnd.github.raw+json' \
+               "/repos/paperclipai/paperclip/contents/scripts/ci-profile/authorize.mjs?ref=$TRUSTED_PROFILE_SHA" \
+               > "$RUNNER_TEMP/ci-profile-authorize.mjs"; then
+            echo 'profile_ci=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          export TRUSTED_PROFILE_SHA
+          node "$RUNNER_TEMP/ci-profile-authorize.mjs"
+
       - name: Select PR CI scope
         id: scope
         shell: bash
@@ -223,6 +255,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PROFILE_CI: ${{ steps.profile.outputs.profile_ci }}
           STACK_JSON: ${{ toJSON(github.event.pull_request.stack) }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
@@ -291,6 +324,11 @@ jobs:
              release_notes_only; then
             full_ci='false'
             reason='release notes only'
+          fi
+
+          if [[ "${PROFILE_CI:-false}" == 'true' ]]; then
+            full_ci='true'
+            reason='profile-ci requests the complete PR suite'
           fi
 
           echo "full_ci=$full_ci" >> "$GITHUB_OUTPUT"

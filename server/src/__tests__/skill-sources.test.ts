@@ -5,8 +5,8 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { agents, folders, companySkillSources, companySkillSourceEntries, companies, companySkills, companySkillVersions, companySkillRepositorySnapshots, createDb } from '@paperclipai/db';
-import { eq, sql } from 'drizzle-orm';
+import { agents, folders, companySkillSources, companySkillSourceEntries, companies, companySkills, companySkillVersions, companySkillRepositorySnapshots, resourceLifecycleEvents, createDb } from '@paperclipai/db';
+import { and, eq, sql } from 'drizzle-orm';
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from './helpers/embedded-postgres.js';
 import { unprocessable } from '../errors.js';
 import { githubFixture } from './helpers/github-skills.js';
@@ -37,6 +37,45 @@ describe.skipIf(!support.supported)('skill source persistence', () => {
     if (originalHome === undefined) delete process.env.PAPERCLIP_HOME; else process.env.PAPERCLIP_HOME = originalHome;
     await testDb?.cleanup(); if (home) await fs.rm(home, { recursive: true, force: true });
   });
+  it('publishes two assigned skills while a concurrent version save holds the second skill', async () => {
+    const companyId = randomUUID();
+    await db.insert(companies).values({ id: companyId, name: 'Concurrent skill publication', issuePrefix: 'CSP' });
+    const originals = { 'a/SKILL.md': md('a'), 'b/SKILL.md': md('b') };
+    const sourceContext = { ...context, actor: { type: 'system' as const }, read: () => githubFixture(originals, {}, sha) };
+    const created = await skillSourceService(db).create(companyId, { repositoryUrl: 'https://github.com/acme/skills', trackingRef: 'main', commitSha: sha, selectedPaths: Object.keys(originals) }, sourceContext);
+    const selected = await Promise.all(created.source.entries.map(entry => companySkillService(db).getById(companyId, entry.skillId!)));
+    const second = selected.find(skill => skill!.name === 'b')!;
+    const [agent] = await db.insert(agents).values({ companyId, name: 'Uses both skills', adapterType: 'paperclip_runner', adapterConfig: { paperclipSkillSync: { desiredSkills: selected.map(skill => skill!.key) } } }).returning();
+    const sourceDb = createDb(testDb.connectionString, { maxConnections: 1 });
+    const versionDb = createDb(testDb.connectionString, { maxConnections: 1 });
+    const [backend] = await sourceDb.execute(sql`SELECT pg_backend_pid() AS pid`);
+    let locked!: () => void; let resume!: () => void;
+    const secondLocked = new Promise<void>(resolve => { locked = resolve; });
+    const maySave = new Promise<void>(resolve => { resume = resolve; });
+    const version = versionDb.transaction(async tx => {
+      await tx.execute(sql`SET LOCAL lock_timeout = '8s'`);
+      await tx.select().from(companySkills).where(eq(companySkills.id, second.id)).for('update');
+      locked(); await maySave;
+      return companySkillService(versionDb).createVersion(companyId, second.id, {}, null, { database: tx, skipInventoryRefresh: true, skill: second, fileInventory: [{ path: 'SKILL.md', kind: 'skill', content: md('manual') }] });
+    });
+    await secondLocked;
+    const changed = { 'a/SKILL.md': `${md('a')}Changed A.`, 'b/SKILL.md': `${md('b')}Changed B.` };
+    const refresh = skillSourceService(sourceDb).refresh(companyId, created.source.id, { ...sourceContext, read: () => githubFixture(changed, {}, 'b'.repeat(40)) });
+    try {
+      await vi.waitFor(async () => {
+        const [row] = await db.execute(sql`SELECT wait_event_type FROM pg_stat_activity WHERE pid = ${Number(backend.pid)}`);
+        expect(row.wait_event_type).toBe('Lock');
+      }, { timeout: 5000 });
+    } finally {
+      resume();
+      try { await Promise.all([version, refresh]); }
+      finally { await Promise.all([sourceDb.$client.end(), versionDb.$client.end()]); }
+    }
+    expect((await refresh).updated).toHaveLength(2);
+    const runtimeEvents = await db.select().from(resourceLifecycleEvents).where(and(eq(resourceLifecycleEvents.resourceId, agent.id), eq(resourceLifecycleEvents.resourceType, 'agent_runtime')));
+    expect(runtimeEvents.length).toBeGreaterThan(1);
+  }, 20000);
+
   it('explicitly repairs a missing branch while retaining connection, selection and installed versions', async () => {
     const companyId = randomUUID();
     await db.insert(companies).values({ id: companyId, name: 'Branch repair', issuePrefix: 'BRP' });

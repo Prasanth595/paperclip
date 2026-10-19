@@ -334,6 +334,22 @@ describe("activity routes", () => {
     expect(mockActivityService.runsForIssue).not.toHaveBeenCalled();
   });
 
+  it("passes task read filtering when listing links for a readable company run", async () => {
+    mockHeartbeatService.getRun.mockResolvedValue({
+      id: "run-1", companyId: "company-1", scopeKind: "company", issueId: null,
+    });
+    mockActivityService.issuesForRun.mockResolvedValue([{ issueId: "public-issue", title: "Visible task" }]);
+    const app = await createApp({ type: "agent", companyId: "company-1", agentId: "agent-1" });
+    const res = await requestApp(app, baseUrl => request(baseUrl).get("/api/heartbeat-runs/run-1/issues"));
+    expect(res.status).toBe(200);
+    const { issueReadSqlCondition } = await import("../services/authorization.js");
+    expect(issueReadSqlCondition).toHaveBeenCalledWith({}, expect.objectContaining({
+      type: "agent", companyId: "company-1", agentId: "agent-1",
+    }));
+    expect(mockActivityService.issuesForRun).toHaveBeenCalledWith("run-1", {});
+    expect(res.body).toEqual([{ issueId: "public-issue", title: "Visible task" }]);
+  });
+
   it("returns 200 [] (not 404) when listing issues for another company's run, preserving API contract and the cross-tenant oracle", async () => {
     mockHeartbeatService.getRun.mockResolvedValue({
       id: "run-2",

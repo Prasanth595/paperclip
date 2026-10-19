@@ -137,6 +137,14 @@ export function buildConfigurationIncompleteRecoveryNoticeSeed(
       tone: "danger",
     };
   }
+  if (readNonEmptyStringField(configurationIncomplete, "reason") === "workspace_source_restricted") {
+    return {
+      title: "Workspace source restricted",
+      body: "Paperclip stopped before the agent started because this task's workspace uses a shared project checkout that also holds another task's workspace, and this run cannot read that task. Paperclip does not copy a shared checkout with restricted files.",
+      nextAction: "Push any unpublished work from this task's workspace, then select a new workspace for the task. Alternatively, have an owner grant access to the restricted task. Then retry the task.",
+      tone: "danger",
+    };
+  }
   if (readNonEmptyStringField(configurationIncomplete, "reason") === "ai_connection_unavailable") {
     return {
       title: "AI connection needs attention",

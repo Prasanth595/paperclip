@@ -47,6 +47,12 @@ Manual: Create a disposable gateway with one harmless tool, connect a client usi
 
 Automated: [profile wizard](../../ui/src/pages/tools/profiles/ProfileWizard.test.tsx) and [profile detail](../../ui/src/pages/tools/profiles/ProfileDetail.test.tsx) cover component behavior with mocks.
 
+Backend: [profile entry validation](../../server/src/__tests__/tool-profile-entry-validation.test.ts)
+uses isolated PostgreSQL to create and replace a 518-selector assignment with
+bounded reference reads. It checks exact selector retention, company boundaries,
+invalid input order, and fresh validation after deletion. This does not establish
+live client latency.
+
 Manual: Create a bounded profile, choose its offered tools and options, save or resume its draft, and reload the detail. Apply/connect it through the offered flow and inspect the actual client-visible tool set. Verify cancellation and invalid selections retain an understandable draft.
 
 ## Gotchas

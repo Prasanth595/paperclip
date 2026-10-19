@@ -136,11 +136,11 @@ const support = await getEmbeddedPostgresTestSupport();
     const probe = vi.spyOn(adapter, "testEnvironment").mockResolvedValue({ adapterType, status: "warn",
       testedAt: new Date().toISOString(), checks: [{ code: `${adapterType.split("_")[0]}_hello_probe_auth_required`, level: "warn", message: "Login required" }] });
     try {
-      const agent = await createAgentLifecycle(db).requestHire(companyId, { name: "Login test", adapterType });
+      const agent = await createAgentLifecycle(db).requestHire(companyId, { name: "Login test", adapterType, runner: "legacy" });
       const work = worker(createLifecycleDriver(db, {} as never).runHost);
       await work.process(agent.id);
       expect(probe).toHaveBeenCalled();
-      expect(await current(agent.id)).toMatchObject({ lifecycleState: "verifying", lifecycleError: "The lifecycle step failed. Retry the operation." });
+      expect(await current(agent.id)).toMatchObject({ lifecycleState: "verifying", lifecycleError: expect.stringContaining("Execution configuration check failed. Authentication failed.") });
     } finally { probe.mockRestore(); }
   });
 
