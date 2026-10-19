@@ -168,7 +168,8 @@ Migration 0356 adds connection grants, grant audiences and delegations, company
 membership and permissions, secret bindings, chat/email endpoint configuration,
 and referenced credential rotation or revocation. Vault configuration and status
 changes invalidate companies whose connector credentials reference that vault.
-Vault health checks and endpoint publication timestamps do not request work.
+Vault health checks, OAuth grant refresh leases, and endpoint publication
+timestamps do not request work.
 Events contain no credential values, phone numbers, or provider payloads.
 
 Access changes conservatively invalidate eligible company agents because
@@ -183,7 +184,13 @@ inputs and credential mutations. Each affected set is locked in ID order. Task
 completion locks existing grants before assignment inputs. Permission-only saves
 lock membership before replacing permissions, as role and status saves do.
 Personal delegation creation locks its grant, connection reference, and target
-agent before insertion. These guards accompany the hooks that require them.
+agent before insertion. Static-key reconnect locks grants and connection inputs
+before credential writes. Secret removal locks company agents in ID order before
+cascading into bindings. It tries the secret lock without waiting, releases its
+transaction locks if that lock is busy, and retries up to three times. Continued
+contention returns a retryable conflict. Provider deletion stays outside that
+transaction; retrying resumes removal of the already disabled secret. These
+guards accompany the hooks that require them.
 
 The runtime snapshot still excludes credentials and arbitrary configuration.
 Task-scoped profile bindings, responsible-user consent, gateway sessions,

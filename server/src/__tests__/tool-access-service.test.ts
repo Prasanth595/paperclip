@@ -17773,6 +17773,51 @@ describeEmbeddedPostgres("tool access service", () => {
     ]);
   });
 
+  it("orders static-key reconnect with concurrent personal grant revocation", async () => {
+    const company = await createCompany(db);
+    await createAgent(db, company.id);
+    const userId = `key-reconnect-${randomUUID()}`;
+    const actor = { actorType: "user" as const, actorId: userId };
+    const service = createTestToolAccessService(db);
+    mockToolsList([readTool("list_zaps", "List")]);
+    await withGalleryServerUrl("github", PUBLIC_MCP_FIXTURE_URL, async () => {
+      const connected = await service.connectGalleryApp(company.id, { galleryKey: "github", connectionMethodKey: "mcp-key", name: "Key reconnect fixture", grantKind: "user", credentialValues: { "credentials.authorization": "fixture-old-key" } }, actor);
+      const { grants } = await service.listConnectionGrants(connected.connectionId, company.id);
+      const grant = grants.find(row => row.kind === "user")!;
+      let locked!: () => void; let resume!: () => void; let started!: (pid: number) => void;
+      const held = new Promise<void>(resolve => { locked = resolve; });
+      const mayRevoke = new Promise<void>(resolve => { resume = resolve; });
+      const reconnectStarted = new Promise<number>(resolve => { started = resolve; });
+      const revocation = db.transaction(async tx => {
+        await tx.execute(sql`SET LOCAL lock_timeout = '8s'`);
+        await tx.select().from(connectionGrants).where(eq(connectionGrants.id, grant.id)).for("update");
+        locked(); await mayRevoke;
+        return createTestToolAccessService(tx as unknown as Db).revokeConnectionGrant(connected.connectionId, grant.id, actor);
+      });
+      await held;
+      const reconnect = db.transaction(async tx => {
+        await tx.execute(sql`SET LOCAL lock_timeout = '8s'`);
+        const [row] = await tx.execute(sql`SELECT pg_backend_pid() AS pid`);
+        started(Number(row.pid));
+        return createTestToolAccessService(tx as unknown as Db).reconnectGalleryApp(connected.connectionId, company.id, { credentialValues: { "credentials.authorization": "fixture-new-key" } }, actor);
+      });
+      const completed = Promise.allSettled([revocation, reconnect]);
+      try {
+        const pid = await reconnectStarted;
+        await vi.waitFor(async () => {
+          const [row] = await db.execute(sql`SELECT wait_event_type FROM pg_stat_activity WHERE pid = ${pid}`);
+          expect(row.wait_event_type).toBe("Lock");
+        }, { timeout: 5000 });
+      } finally { resume(); }
+      const results = await completed;
+      for (const result of results) if (result.status === "rejected") throw result.reason;
+      const [updatedGrant] = await db.select().from(connectionGrants).where(eq(connectionGrants.id, grant.id));
+      expect(updatedGrant.status).toBe("active");
+      const [secret] = await db.select().from(companySecrets).where(eq(companySecrets.id, grant.credentialSecretRefs[0]!.secretId));
+      expect(secret.latestVersion).toBe(2);
+    });
+  }, 15000);
+
   it("reconnects a personal key on the existing user grant without creating an organization credential", async () => {
     const company = await createCompany(db);
     const service = createTestToolAccessService(db);

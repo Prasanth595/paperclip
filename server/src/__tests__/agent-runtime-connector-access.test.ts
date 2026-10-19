@@ -371,6 +371,73 @@ describeDatabase("connector access runtime synchronization", () => {
     expect(await db.select().from(companySecretBindings).where(eq(companySecretBindings.targetId, higher))).toEqual([]);
     expect((await db.select().from(toolConnections).where(eq(toolConnections.id, connectionId)))[0].enabled).toBe(false);
   }, 15000);
+  it("ignores OAuth grant lease acquisition and release while retaining access changes", async () => {
+    const oauth = { scopes: ["read"], tokenEndpoint: "https://oauth.example.test/token" };
+    const [grant] = await db.insert(connectionGrants).values({ companyId, connectionId, kind: "organization", providerTenant: { oauth } }).returning();
+    const before = await events();
+    await db.update(connectionGrants).set({ providerTenant: { oauth: { ...oauth, refreshLease: { id: "fixture-lease", expiresAt: "2099-01-01T00:00:00.000Z" } } } }).where(eq(connectionGrants.id, grant.id));
+    expect(await events()).toEqual(before);
+    await db.update(connectionGrants).set({ providerTenant: { oauth } }).where(eq(connectionGrants.id, grant.id));
+    expect(await events()).toEqual(before);
+    await db.update(connectionGrants).set({ providerTenant: { oauth: { ...oauth, scopes: ["read", "write"] } } }).where(eq(connectionGrants.id, grant.id));
+    expect(await events()).toHaveLength(before.length + 2);
+  });
+  it("releases removal agent locks when a concurrent credential writer holds the secret", async () => {
+    const [secret] = await db.insert(companySecrets).values({ companyId, key: "busy-delete", name: "Busy deletion fixture", status: "deleted" }).returning();
+    await db.update(toolConnections).set({ credentialSecretRefs: [{ secretId: secret.id, configPath: "token" }] }).where(eq(toolConnections.id, connectionId));
+    let locked!: () => void; let resume!: () => void;
+    const held = new Promise<void>(resolve => { locked = resolve; });
+    const mayWrite = new Promise<void>(resolve => { resume = resolve; });
+    const writer = db.transaction(async tx => {
+      await tx.execute(sql`SET LOCAL lock_timeout = '8s'`);
+      await tx.select().from(companySecrets).where(eq(companySecrets.id, secret.id)).for("no key update");
+      locked(); await mayWrite;
+      await tx.update(companySecrets).set({ latestVersion: 2 }).where(eq(companySecrets.id, secret.id));
+    });
+    await held;
+    let result: PromiseSettledResult<unknown> | undefined;
+    const removal = Promise.allSettled([secretService(db).remove(secret.id)]).then(rows => { result = rows[0]; });
+    try {
+      await vi.waitFor(() => expect(result).toBeDefined(), { timeout: 5000 });
+      expect(result).toMatchObject({ status: "rejected", reason: { status: 409, details: { retryable: true } } });
+    } finally { resume(); await writer; await removal; }
+    const [remaining] = await db.select().from(companySecrets).where(eq(companySecrets.id, secret.id));
+    expect(remaining.latestVersion).toBe(2);
+    await expect(secretService(db).remove(secret.id)).resolves.toMatchObject({ id: secret.id });
+  }, 15000);
+  it("orders secret deletion before cascading bindings against agent configuration saves", async () => {
+    const [secret] = await db.insert(companySecrets).values({ companyId, key: "delete-bound", name: "Deletion fixture" }).returning();
+    await db.insert(companySecretBindings).values({ companyId, secretId: secret.id, targetType: "agent", targetId: agentId, configPath: "env.FIXTURE" });
+    let locked!: () => void; let resume!: () => void; let started!: (pid: number) => void;
+    const held = new Promise<void>(resolve => { locked = resolve; });
+    const maySave = new Promise<void>(resolve => { resume = resolve; });
+    const deletionStarted = new Promise<number>(resolve => { started = resolve; });
+    const save = db.transaction(async tx => {
+      await tx.execute(sql`SET LOCAL lock_timeout = '8s'`);
+      await tx.select().from(agents).where(eq(agents.id, agentId)).for("no key update");
+      locked(); await maySave;
+      return updateAgentConfigurationInTransaction(tx as unknown as Db, agentId, { adapterConfig: { env: {} } });
+    });
+    await held;
+    const deletion = db.transaction(async tx => {
+      await tx.execute(sql`SET LOCAL lock_timeout = '8s'`);
+      const [row] = await tx.execute(sql`SELECT pg_backend_pid() AS pid`);
+      started(Number(row.pid));
+      return secretService(tx as unknown as Db).remove(secret.id);
+    });
+    const completed = Promise.allSettled([save, deletion]);
+    try {
+      const pid = await deletionStarted;
+      await vi.waitFor(async () => {
+        const [row] = await db.execute(sql`SELECT wait_event_type FROM pg_stat_activity WHERE pid = ${pid}`);
+        expect(row.wait_event_type).toBe("Lock");
+      }, { timeout: 5000 });
+    } finally { resume(); }
+    const results = await completed;
+    for (const result of results) if (result.status === "rejected") throw result.reason;
+    expect(await db.select().from(companySecrets).where(eq(companySecrets.id, secret.id))).toEqual([]);
+    expect(await db.select().from(companySecretBindings).where(eq(companySecretBindings.secretId, secret.id))).toEqual([]);
+  }, 15000);
   it("captures grant revocation and referenced credential rotation without storing credentials in events", async () => {
     const [secret] = await db.insert(companySecrets).values({ companyId, key: "fixture", name: "Fixture secret" }).returning();
     const [grant] = await db.insert(connectionGrants).values({ companyId, connectionId, kind: "organization", credentialSecretRefs: [{ secretId: secret.id, configPath: "token" }] }).returning();

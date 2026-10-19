@@ -32,6 +32,10 @@ BEGIN
     END LOOP;
     RETURN NULL;
   END IF;
+  IF TG_TABLE_NAME = 'connection_grants' THEN
+    old_projection := old_projection || ' #- ''{provider_tenant,oauth,refreshLease}''';
+    new_projection := new_projection || ' #- ''{provider_tenant,oauth,refreshLease}''';
+  END IF;
   IF TG_TABLE_NAME = 'tool_policies' THEN
     old_projection := old_projection || ' #- ''{config,trustRule,hitCount}'' #- ''{config,trustRule,lastHitAt}''';
     new_projection := new_projection || ' #- ''{config,trustRule,hitCount}'' #- ''{config,trustRule,lastHitAt}''';

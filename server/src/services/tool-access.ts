@@ -14622,6 +14622,15 @@ export function toolAccessService(
     ];
 
     const updated = await db.transaction(async (tx) => {
+      await tx.select({ id: connectionGrants.id }).from(connectionGrants)
+        .where(and(eq(connectionGrants.companyId, companyId), eq(connectionGrants.connectionId, connection.id)))
+        .orderBy(connectionGrants.id).for("update");
+      await tx.select({ id: toolApplications.id }).from(toolApplications)
+        .where(and(eq(toolApplications.id, connection.applicationId), eq(toolApplications.companyId, companyId)))
+        .for("update");
+      await tx.select({ id: toolConnections.id }).from(toolConnections)
+        .where(and(eq(toolConnections.id, connection.id), eq(toolConnections.companyId, companyId)))
+        .for("update");
       for (const field of providedFields) {
         const value = input.credentialValues[field.configPath]!.trim();
         if (field.placement === "url" && !remoteUrlCredentialMatchesPublicUrl(String(connection.config.url ?? ""), value)) {
