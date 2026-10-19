@@ -149,7 +149,11 @@ describe("GET /health", () => {
 
     env.PAPERCLIP_PRIMARY_HOST = "team.staging.paperclip.app";
     const staging = await request(app).get("/health");
-    expect(staging.body.hiddenSettings).toEqual(["instance.plugins"]);
+    expect(staging.body.hiddenSettings).toContain("instance.plugins");
+    expect(staging.body.hiddenSettings).toContain("instance.experimental.enableManagedSandboxOnly");
+    expect(staging.body.hiddenSettings).toContain("instance.experimental.enableOwnerInstanceAdmin");
+    expect(staging.body.hiddenSettings).not.toContain("instance.experimental");
+    expect(staging.body.hiddenSettings).not.toContain("instance.experimental.enableChatConnectors");
 
     env.PAPERCLIP_PRIMARY_HOST = "team.paperclip.app";
     expect((await request(app).get("/health")).body.hiddenSettings).toEqual(production.body.hiddenSettings);

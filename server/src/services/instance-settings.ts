@@ -35,7 +35,7 @@ import {
 import { eq } from "drizzle-orm";
 import { getManagedInstanceConfig, type ManagedInstanceConfig } from "./managed-config.js";
 import { getOperatorSettingDefaults } from "./setting-defaults.js";
-import { isCloudStagingInstance } from "./cloud-instance.js";
+import { isCloudStagingExperimentalSetting, isCloudStagingInstance } from "./cloud-instance.js";
 
 const DEFAULT_SINGLETON_KEY = "default";
 const instanceGeneralSettingsStorageSchema = instanceGeneralSettingsSchema.strip();
@@ -437,6 +437,12 @@ export function instanceSettingsService(db: Db, options: InstanceSettingsService
   // boot in index.ts) rather than silently running without the overlay.
   const managedConfig = getManagedInstanceConfig(options.runtimeEnv ?? process.env);
   const staging = isCloudStagingInstance(options.runtimeEnv ?? process.env);
+  const enforcedManagedConfig = staging && managedConfig
+    ? {
+      ...managedConfig,
+      features: Object.fromEntries(Object.entries(managedConfig.features).filter(([key]) => !isCloudStagingExperimentalSetting(key))),
+    }
+    : managedConfig;
   // Same posture for PAPERCLIP_SETTING_DEFAULTS: parsed once, applied per
   // read, never persisted (see applyOperatorGeneralDefaults) — including on
   // the write path, where a full-GET echo of the overlaid value is stripped
@@ -448,21 +454,11 @@ export function instanceSettingsService(db: Db, options: InstanceSettingsService
   }
 
   function toExperimentalView(raw: unknown): InstanceExperimentalSettingsWithManaged {
-    if (staging) {
-      const stored = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
-      const defaults = { ...managedConfig?.features, ...stored };
-      const ownerAccess = managedConfig?.features.enableOwnerInstanceAdmin;
-      return {
-        ...applyCloudCatalogDefaults(normalizeExperimentalSettings(defaults), defaults, managedConfig),
-        ...(typeof ownerAccess === "boolean" ? { enableOwnerInstanceAdmin: ownerAccess } : {}),
-        managedKeys: typeof ownerAccess === "boolean"
-          ? { enableOwnerInstanceAdmin: { managed: true, managedBy: PAPERCLIP_CLOUD_MANAGED_BY } }
-          : {},
-      };
-    }
+    const stored = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+    const defaults = staging ? { ...managedConfig?.features, ...stored } : raw;
     const { experimental, managedKeys } = applyManagedExperimentalOverlay(
-      applyCloudCatalogDefaults(normalizeExperimentalSettings(raw), raw, managedConfig),
-      managedConfig,
+      applyCloudCatalogDefaults(normalizeExperimentalSettings(defaults), defaults, managedConfig),
+      enforcedManagedConfig,
     );
     // Self-hosted responses stay byte-identical: no managedKeys field at all.
     return managedConfig ? { ...experimental, managedKeys } : experimental;

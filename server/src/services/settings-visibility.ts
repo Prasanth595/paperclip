@@ -1,6 +1,6 @@
-import { parseHiddenSettingsList } from "@paperclipai/shared";
+import { experimentalSettingKey, INSTANCE_FEATURE_KEYS, parseHiddenSettingsList } from "@paperclipai/shared";
 import { logger } from "../middleware/logger.js";
-import { isCloudStagingInstance } from "./cloud-instance.js";
+import { isCloudStagingExperimentalSetting, isCloudStagingInstance } from "./cloud-instance.js";
 
 /**
  * Operator-hidden settings, from the `PAPERCLIP_HIDDEN_SETTINGS` env var
@@ -28,7 +28,11 @@ export function getHiddenSettings(
     );
   }
   const visibleOnStaging = (key: string) =>
-    key === "instance.experimental" || key.startsWith("instance.experimental.");
-  cache = { raw, staging, hidden: new Set(staging ? hidden.filter((key) => !visibleOnStaging(key)) : hidden) };
+    key === "instance.experimental"
+    || (key.startsWith("instance.experimental.") && isCloudStagingExperimentalSetting(key.slice("instance.experimental.".length)));
+  const expanded = staging && hidden.includes("instance.experimental")
+    ? [...hidden, ...INSTANCE_FEATURE_KEYS.map(experimentalSettingKey)]
+    : hidden;
+  cache = { raw, staging, hidden: new Set(staging ? expanded.filter((key) => !visibleOnStaging(key)) : hidden) };
   return cache.hidden;
 }

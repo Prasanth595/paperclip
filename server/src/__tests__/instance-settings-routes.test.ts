@@ -860,6 +860,20 @@ describe("instance settings routes", () => {
   describe("Cloud staging experiments", () => {
     afterEach(() => vi.unstubAllEnvs());
 
+    it.each(["instance.experimental", "instance.experimental.*"])(
+      "keeps hidden Cloud sandbox policy protected when staging reveals %s",
+      async (hidden) => {
+        vi.stubEnv("PAPERCLIP_CLOUD_TENANT_SERVER_TOKEN", "tenant-token");
+        vi.stubEnv("PAPERCLIP_PRIMARY_HOST", "team.staging.paperclip.app");
+        vi.stubEnv("PAPERCLIP_HIDDEN_SETTINGS", hidden);
+        mockInstanceSettingsService.getExperimental.mockResolvedValue({ enableManagedSandboxOnly: true });
+        const app = createApp(localAdminActor());
+        await request(app).patch("/api/instance/settings/experimental")
+          .send({ enableManagedSandboxOnly: false }).expect(403);
+        expect(mockInstanceSettingsService.updateExperimental).not.toHaveBeenCalled();
+      },
+    );
+
     it("lets a staging admin change hidden experiments but keeps general settings locked", async () => {
       vi.stubEnv("PAPERCLIP_CLOUD_TENANT_SERVER_TOKEN", "tenant-token");
       vi.stubEnv("PAPERCLIP_PRIMARY_HOST", "team.staging.paperclip.app");

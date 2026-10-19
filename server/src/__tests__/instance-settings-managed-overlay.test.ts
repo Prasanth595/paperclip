@@ -6,6 +6,7 @@ import {
   normalizeExperimentalSettings,
 } from "../services/instance-settings.js";
 import { parseManagedConfigEnv } from "../services/managed-config.js";
+import { evaluateExecutionAllowlist } from "../services/execution-allowlist.js";
 
 const MANAGED_RAW = JSON.stringify({
   v: 1,
@@ -82,6 +83,32 @@ describe("applyManagedExperimentalOverlay", () => {
 });
 
 describe("instanceSettingsService managed overlay", () => {
+  it("keeps sandbox policy enforced on staging after a tenant tries to disable it", async () => {
+    const row = settingsRow({ enableManagedSandboxOnly: false });
+    const { db, persistedSets } = stubDb(row);
+    const runtimeEnv = {
+      PAPERCLIP_PRIMARY_HOST: "team.staging.paperclip.app",
+      ...managedEnv(JSON.stringify({
+        v: 1, mode: "cloud", catalogVersion: "test",
+        features: { enableManagedSandboxOnly: true }, plugins: { autoInstall: [] },
+      })),
+    };
+    const service = instanceSettingsService(db, { runtimeEnv });
+    const updated = await service.updateExperimental({ enableManagedSandboxOnly: false });
+    Object.assign(row, persistedSets.at(-1));
+    const restored = await instanceSettingsService(db, { runtimeEnv }).getExperimental();
+    for (const experimental of [updated.experimental, restored]) {
+      expect(experimental).toMatchObject({
+        enableManagedSandboxOnly: true,
+        managedKeys: { enableManagedSandboxOnly: { managed: true, managedBy: "paperclip-cloud" } },
+      });
+      expect(evaluateExecutionAllowlist(
+        { managedSandboxOnly: experimental.enableManagedSandboxOnly },
+        { driver: "local", provider: null },
+      )).toMatchObject({ allowed: false, deniedDriver: "local" });
+    }
+  });
+
   it("lets staging override managed defaults, persists toggles, and preserves other defaults", async () => {
     const row = settingsRow({});
     const { db, persistedSets } = stubDb(row);
