@@ -13574,6 +13574,15 @@ export function issueRoutes(
       );
       if (!existing) return;
       if (!(await assertIssueReadAllowed(req, res, existing))) return;
+      // Reject stale preparation before ownership checks can adopt and audit a
+      // checkout on a task that another run has already started.
+      if (req.body.expectedStatusVersion !== undefined && (
+        existing.statusVersion !== req.body.expectedStatusVersion || existing.status !== "backlog"
+      )) {
+        throw conflict("The task status or assignment changed. Read the task again before starting work.", {
+          code: "issue_status_version_changed",
+        });
+      }
       if (req.body.parentId) {
         const parent = await svc.getById(req.body.parentId);
         if (!parent || parent.companyId !== existing.companyId || !(await assertIssueReadAllowed(req, res, parent))) {
@@ -13617,13 +13626,6 @@ export function issueRoutes(
         { allowVisibleIssueWrite: true },
       );
       if (!issueMutationAccess) return;
-      if (req.body.expectedStatusVersion !== undefined && (
-        existing.statusVersion !== req.body.expectedStatusVersion || existing.status !== "backlog"
-      )) {
-        throw conflict("The task status or assignment changed. Read the task again before starting work.", {
-          code: "issue_status_version_changed",
-        });
-      }
       if (req.body.comment && !(await assertBoardCommentNotPaused(req, res, existing))) return;
       const issueMutationAuthorizationReason =
         req.actor.type === "agent"

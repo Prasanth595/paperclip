@@ -319,6 +319,24 @@ describe("issue execution policy routes", () => {
     expect(mockHeartbeatService.cancelRun).not.toHaveBeenCalled();
   });
 
+  it("does not adopt a checkout when a prepared task became active before promotion", async () => {
+    const issue = {
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", companyId: "company-1",
+      status: "in_progress", statusVersion: 8, title: "Active task", identifier: "TEST-1",
+      assigneeAgentId: "33333333-3333-4333-8333-333333333333", assigneeUserId: null,
+    };
+    mockIssueService.getById.mockResolvedValue(issue);
+    mockIssueService.assertCheckoutOwner.mockResolvedValueOnce({ adoptedFromRunId: "previous-run" });
+    const res = await request(await createApp({
+      type: "agent", agentId: issue.assigneeAgentId, companyId: "company-1",
+      runId: "55555555-5555-4555-8555-555555555555",
+    })).patch(`/api/issues/${issue.id}`).send({ status: "todo", expectedStatusVersion: 7 });
+    expect(res.status).toBe(409);
+    expect(mockIssueService.assertCheckoutOwner).not.toHaveBeenCalled();
+    expect(mockLogActivity).not.toHaveBeenCalled();
+    expect(mockIssueService.update).not.toHaveBeenCalled();
+  });
+
   it("forwards a matching status version to the locked update", async () => {
     const issue = {
       id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", companyId: "company-1",
