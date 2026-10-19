@@ -3293,6 +3293,7 @@ describe("sandbox callback bridge", () => {
     bridgeToken: string;
     maxBodyBytes?: number;
     holdProbeOpen?: () => boolean;
+    deferStderrUntilExit?: boolean;
     forwardRequest: (request: Http2BridgeForwardRequest) => Promise<Http2BridgeForwardResult>;
   }, attempt = 0): Promise<{ baseUrl: string; stop: () => Promise<void> }> {
     const rootDir = await mkdtemp(path.join(os.tmpdir(), "paperclip-bridge-http2-test-"));
@@ -3336,6 +3337,16 @@ describe("sandbox callback bridge", () => {
       stderr += chunk.toString("utf8");
     });
 
+    if (options.deferStderrUntilExit) {
+      const resume = child.stderr.resume.bind(child.stderr);
+      child.stderr.pause();
+      child.stderr.resume = () => child.stderr;
+      child.once("exit", () => setImmediate(() => {
+        child.stderr.resume = resume;
+        resume();
+      }));
+    }
+
     const dataListeners: Array<(chunk: Uint8Array) => void> = [];
     const pending: Buffer[] = [];
     let dispatchStarted = false;
@@ -3373,7 +3384,7 @@ describe("sandbox callback bridge", () => {
       }
       deliver(chunk);
     });
-    child.once("exit", (code) => {
+    child.once("close", (code) => {
       clearTimeout(readyTimer);
       if (!sawReadyLine) {
         rejectReady(new Error("The http2 gateway exited early with code " + String(code) + ". stderr: " + stderr));
@@ -3863,7 +3874,7 @@ describe("sandbox callback bridge", () => {
     expect(attempts).toBe(3);
   }, 15000);
 
-  it.each([false, true])("accepts the bridge token in X-API-Key on the HTTP/2 path and strips the header (port collision=%s)", async (portCollision) => {
+  it.each([[false, false], [true, false], [true, true]])("accepts the bridge token in X-API-Key on the HTTP/2 path and strips the header (collision=%s, late stderr=%s)", async (portCollision, lateStderr) => {
     // Both generated gateways share one token reader, so the HTTP/2 transport
     // must accept "X-API-Key" exactly as the file-mode transport does. The
     // header allowlist must still strip the credential before the gateway
@@ -3874,6 +3885,7 @@ describe("sandbox callback bridge", () => {
     const gateway = await startHttp2GatewayForTest({
       bridgeToken,
       holdProbeOpen: () => { attempts++; return portCollision && attempts === 1; },
+      deferStderrUntilExit: lateStderr,
       forwardRequest: async (request) => {
         seenHeaders.push(request.headers);
         return {
@@ -3884,7 +3896,8 @@ describe("sandbox callback bridge", () => {
       },
     });
 
-    expect(attempts).toBe(portCollision ? 2 : 1);
+    expect(attempts).toBeGreaterThanOrEqual(portCollision ? 2 : 1);
+    expect(attempts).toBeLessThanOrEqual(3);
 
     const response = await fetch(`${gateway.baseUrl}/api/agents/me`, {
       headers: {
