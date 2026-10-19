@@ -5,6 +5,7 @@ import { nativeWorkspaceExportPendingForLease, pendingNativeWorkspaceFinalizatio
 import { CHAT_COMPLETION_WAKE_REASON } from "../chat-completion-delivery.js";
 import {
   hasStopOnlyCleanup,
+  prepareSandboxStopAndRetain,
   settleStopOnlyCleanup,
 } from "../sandbox-stop-and-retain.js";
 import { recordNativeLocalProcessStop } from "../native-local-process-stop.js";
@@ -1453,9 +1454,9 @@ export function createHeartbeatRecovery(db: Db, dependencies: HeartbeatRecoveryD
   // environment row is gone, so that lease stays active too. No later query
   // finds either lease, because every production query selects an active
   // lease by its environment or by its heartbeat run id, never by age. This
-  // sweep finds both stranded classes and moves each lease to pending_cleanup,
-  // so the existing pending_cleanup sweep tears the sandbox down from the
-  // data already on the lease row.
+  // sweep finds both stranded classes and records cleanup intent. Reusable
+  // allocations use stop-only recovery; ephemeral resources use teardown. The
+  // existing pending_cleanup worker settles both from the durable lease data.
   async function sweepOrphanedActiveLeases(opts: {
     backoffMs: number;
   }): Promise<{ recovered: number }> {
@@ -1466,7 +1467,8 @@ export function createHeartbeatRecovery(db: Db, dependencies: HeartbeatRecoveryD
       .from(environmentLeases)
       .leftJoin(
         heartbeatRuns,
-        eq(environmentLeases.heartbeatRunId, heartbeatRuns.id),
+        and(eq(environmentLeases.heartbeatRunId, heartbeatRuns.id),
+          eq(environmentLeases.companyId, heartbeatRuns.companyId)),
       )
       .where(
         and(
@@ -1522,25 +1524,42 @@ export function createHeartbeatRecovery(db: Db, dependencies: HeartbeatRecoveryD
         }
       }
 
-      // Keep the row's existing updatedAt value. The select above already
-      // proved the row is older than the backoff cutoff, so the
-      // pending_cleanup sweep can accept the same row in this same tick. A
-      // fresh timestamp here would push the row inside that sweep's own
-      // backoff window and delay the teardown by one full tick.
-      const flipped = await db
-        .update(environmentLeases)
-        .set({
+      // Lock the run before the lease, as admission does. A candidate read is
+      // not release authority: same-run recovery can resume it before we claim.
+      // Persist cleanup intent in this transaction; provider I/O stays in the
+      // existing pending-cleanup worker, after commit.
+      const flipped = await db.transaction(async (tx) => {
+        if (lease.heartbeatRunId) {
+          const [run] = await tx.select().from(heartbeatRuns).where(and(
+            eq(heartbeatRuns.id, lease.heartbeatRunId),
+            eq(heartbeatRuns.companyId, lease.companyId),
+          )).for("update");
+          if (!run || !HEARTBEAT_RUN_TERMINAL_STATUSES.some(status => status === run.status)) return false;
+        }
+        const [current] = await tx.select().from(environmentLeases).where(and(
+          eq(environmentLeases.id, lease.id),
+          eq(environmentLeases.companyId, lease.companyId),
+          eq(environmentLeases.status, "active"),
+          sql`${environmentLeases.heartbeatRunId} is not distinct from ${lease.heartbeatRunId}`,
+          lte(environmentLeases.updatedAt, cutoff),
+        )).for("update");
+        if (!current) return false;
+
+        // A terminal turn does not expire its reusable allocation. Reuse the
+        // durable stop-only protocol, including its provider receipt and retry
+        // fencing. Existing export/cleanup journals must retain their intent.
+        if (current.leasePolicy === "reuse_by_environment" && current.heartbeatRunId
+          && current.provider && current.provider !== "local" && current.providerLeaseId
+          && !hasStopOnlyCleanup(current)) {
+          return Boolean(await prepareSandboxStopAndRetain(tx, current));
+        }
+        await tx.update(environmentLeases).set({
           status: "pending_cleanup",
           failureReason: "orphaned_active_lease_recovered",
-        })
-        .where(
-          and(
-            eq(environmentLeases.id, lease.id),
-            eq(environmentLeases.status, "active"),
-          ),
-        )
-        .returning({ id: environmentLeases.id });
-      if (flipped.length > 0) recovered += 1;
+        }).where(and(eq(environmentLeases.id, current.id), eq(environmentLeases.companyId, current.companyId)));
+        return true;
+      });
+      if (flipped) recovered += 1;
     }
 
     return { recovered };

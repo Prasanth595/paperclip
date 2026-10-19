@@ -72,7 +72,7 @@ export function readStopOnlyCleanup(lease: Lease) {
 
 /** Persist before provider dispatch so an older worker or a restart cannot turn
  * an explicit stop into ordinary destructive release. Invalid pins stay pending. */
-export async function prepareSandboxStopAndRetain(db: Db, lease: Lease) {
+export async function prepareSandboxStopAndRetain(db: Pick<Db, "update">, lease: Lease) {
   const requestId = randomUUID(), now = new Date();
   const intent = { schema: "paperclip.sandbox-stop-and-retain.v1", requestId,
     companyId: lease.companyId, runId: lease.heartbeatRunId, leaseId: lease.id,

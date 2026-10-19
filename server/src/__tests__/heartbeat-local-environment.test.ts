@@ -110,7 +110,12 @@ describeEmbeddedPostgres("heartbeat local environment lifecycle", () => {
     }
   });
 
-  it("runs work through the default Local environment lease", async () => {
+  it.each([
+    { name: "success", command: process.execPath, code: "process.exit(0)", status: "succeeded", leaseStatus: "released" },
+    { name: "process failure", command: process.execPath, code: "process.exit(2)", status: "failed", leaseStatus: "failed" },
+    { name: "startup exception", command: "/nonexistent/paperclip-test-executable", code: "", status: "failed", leaseStatus: "failed" },
+    { name: "timeout", command: process.execPath, code: "setInterval(() => {}, 1000)", status: "timed_out", leaseStatus: "failed" },
+  ])("releases default Local ownership after $name", async ({ name, command, code, status, leaseStatus }) => {
     const companyId = randomUUID();
     const agentId = randomUUID();
     const issuePrefix = `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`;
@@ -131,8 +136,10 @@ describeEmbeddedPostgres("heartbeat local environment lifecycle", () => {
       status: "idle",
       adapterType: "process",
       adapterConfig: {
-        command: process.execPath,
-        args: ["-e", "process.exit(0)"],
+        command,
+        args: ["-e", code],
+        timeoutSec: name === "timeout" ? 0.2 : 0,
+        graceSec: 0.1,
       },
       runtimeConfig: {},
       permissions: {},
@@ -142,7 +149,7 @@ describeEmbeddedPostgres("heartbeat local environment lifecycle", () => {
     expect(queued).not.toBeNull();
 
     const finished = await waitForRunToFinish(heartbeat, queued!.id);
-    expect(finished?.status).toBe("succeeded");
+    expect(finished?.status).toBe(status);
 
     const localRows = await db
       .select()
@@ -154,7 +161,7 @@ describeEmbeddedPostgres("heartbeat local environment lifecycle", () => {
     const leases = await waitForRunLeasesToRelease(db, queued!.id);
     expect(leases).toHaveLength(1);
     expect(leases[0]?.environmentId).toBe(localRows[0]?.id);
-    expect(leases[0]?.status).toBe("released");
+    expect(leases[0]?.status).toBe(leaseStatus);
     expect(leases[0]?.provider).toBe("local");
     expect(leases[0]?.releasedAt).not.toBeNull();
 

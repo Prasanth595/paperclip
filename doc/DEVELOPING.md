@@ -1676,6 +1676,13 @@ callbacks without starting work. The service supplies its shutdown flag callback
 and shared execution sets so separate service instances keep the same ownership
 and shutdown barriers. Cleanup single-flight state stays at module scope.
 Keep recovery policy changes separate from retry scheduling and execution changes.
+The orphan-lease sweep rechecks terminal run status under the run lock before
+claiming the lease. Queued, running, and scheduled-retry runs retain ownership.
+Reusable remote allocations recover through the durable stop-and-retain protocol,
+including when their environment row has been deleted; a terminal run alone is
+not authority to destroy a reusable sandbox. Existing export journals and shared
+provider-resource guards remain in force. Provider failures stay in pending
+cleanup for retry, and provider I/O occurs after the cleanup intent commits.
 
 Queue admission and wakeup dispatch are in `server/src/services/heartbeat/queue.ts`.
 It owns wake coalescing and batching, queued-run claims, daily heartbeat caps,
