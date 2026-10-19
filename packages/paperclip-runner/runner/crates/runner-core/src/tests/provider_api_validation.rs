@@ -44,7 +44,12 @@ fn api_window_rejection_explains_limits_and_allows_corrected_call() {
     let result = invalid_tool_call_result("api-window".to_owned(), "call_api".to_owned(), &error);
     let message = result.result["error"]["message"].as_str().unwrap();
     assert!(message.contains("responseText.limitBytes"));
-    assert!(message.contains("4") && message.contains("24576"));
+    let window_schema =
+        &contract["inputSchema"]["properties"]["responseText"]["properties"]["limitBytes"];
+    assert!(message.contains(&format!(
+        "from {} through {} bytes (default {})",
+        window_schema["minimum"], window_schema["maximum"], window_schema["default"]
+    )));
     assert!(message.contains("/properties/responseText/properties/limitBytes/maximum"));
     assert!(!message.contains("PRIVATE_ASSET"));
     assert!(message.len() <= 512);
