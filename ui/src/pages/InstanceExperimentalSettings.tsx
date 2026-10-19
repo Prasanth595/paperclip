@@ -434,6 +434,17 @@ export function InstanceExperimentalSettings() {
         />
 
         <ExperimentalToggleCard
+          title="Experimental fast responses"
+          description="Show Connections in company settings and allow short acknowledgements while agents begin work."
+          checked={experimentalQuery.data?.enableFastResponses ?? false}
+          onCheckedChange={(checked) => toggleMutation.mutate({ enableFastResponses: checked })}
+          disabled={toggleMutation.isPending}
+          settingKey="enableFastResponses"
+          managed={managedKeys.enableFastResponses}
+          ariaLabel="Toggle fast responses experimental setting"
+        />
+
+        <ExperimentalToggleCard
           title="Experimental File Viewer"
           description="Show task detail controls for browsing and previewing workspace files relative to a task."
           checked={enableExperimentalFileViewer}
@@ -470,6 +481,18 @@ export function InstanceExperimentalSettings() {
         />
 
         <ExperimentalToggleCard
+          title="Grok Bot"
+          description="Connect an existing Grok Bot as an agent. Verify routine delivery and an authenticated reply before assigning work."
+          footnote="Requires Assistant connections (MCP), Paperclip Runner, and authenticated public HTTPS. Usage is not reported. Turning this off blocks Grok calls and new dispatch."
+          checked={experimentalQuery.data?.enableGrokBot === true}
+          onCheckedChange={checked => toggleMutation.mutate({ enableGrokBot: checked })}
+          disabled={toggleMutation.isPending}
+          settingKey="enableGrokBot" managed={managedKeys.enableGrokBot}
+          ariaLabel="Toggle Grok Bot experimental setting"
+        />
+
+
+        <ExperimentalToggleCard
           title="Memory connectors"
           description="Connect Mem0, Zep, Supermemory, Cognee, and Honcho for long-term memory and context."
           footnote="Turning this off hides setup for these connectors. Existing connections keep running."
@@ -492,6 +515,7 @@ export function InstanceExperimentalSettings() {
           managed={managedKeys.enableOpenAiDot}
           ariaLabel="Toggle OpenAI Dot experimental setting"
         />
+
 
         <ExperimentalToggleCard
           title="Paperclip Runner"

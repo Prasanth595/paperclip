@@ -5,15 +5,17 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { TaskChatComposer } from "./TaskChatComposer";
 
-const editorCallbacks = vi.hoisted(() => ({ change: null as ((value: string) => void) | null }));
+const editorProps = vi.hoisted(() => ({
+  imageUploadHandler: null as ((file: File) => Promise<string>) | null,
+}));
 
 vi.mock("@/components/MarkdownEditor", () => ({
   MarkdownEditor: forwardRef(function MockMarkdownEditor(
-    { value, onChange }: { value: string; onChange: (value: string) => void },
+    { value, imageUploadHandler }: { value: string; imageUploadHandler?: (file: File) => Promise<string> },
     ref: ForwardedRef<unknown>,
   ) {
     useImperativeHandle(ref, () => ({ insertMarkdown: () => {}, focus: () => {}, clear: () => {} }));
-    editorCallbacks.change = onChange;
+    editorProps.imageUploadHandler = imageUploadHandler ?? null;
     return <div data-testid="mock-editor">{value}</div>;
   }),
 }));
@@ -28,29 +30,32 @@ afterEach(() => {
   container?.remove();
   root = null;
   container = null;
+  editorProps.imageUploadHandler = null;
   vi.unstubAllGlobals();
   localStorage.clear();
 });
 
-it("sends from the send button on plain HTTP when randomUUID is unavailable", async () => {
+it("uploads an inline image on plain HTTP when randomUUID is unavailable", async () => {
   const originalCrypto = globalThis.crypto;
   vi.stubGlobal("crypto", { getRandomValues: originalCrypto.getRandomValues.bind(originalCrypto) });
-  const onAdd = vi.fn().mockResolvedValue(undefined);
+  const id = "5e5f9946-c706-4785-8988-d4d6f0f499ab";
+  const onAttachImage = vi.fn().mockResolvedValue({
+    id,
+    contentPath: `/api/attachments/${id}/content`,
+    originalFilename: "image.png",
+  });
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
-  act(() => root!.render(<TaskChatComposer onAdd={onAdd} workMode="standard" draftKey="plain-http-task" />));
+  act(() => root!.render(
+    <TaskChatComposer onAdd={vi.fn()} workMode="standard" onAttachImage={onAttachImage} />,
+  ));
 
-  act(() => editorCallbacks.change?.("please continue"));
-  const send = container.querySelector<HTMLButtonElement>('[data-testid="task-chat-composer-send"]')!;
-  expect(send.disabled).toBe(false);
+  let url: string | undefined;
   await act(async () => {
-    send.click();
-    await Promise.resolve();
+    url = await editorProps.imageUploadHandler!(new File(["png"], "image.png", { type: "image/png" }));
   });
 
-  expect(onAdd).toHaveBeenCalledWith(
-    "please continue", undefined, undefined, undefined,
-    expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/),
-  );
+  expect(onAttachImage).toHaveBeenCalledTimes(1);
+  expect(url).toBe(`/api/attachments/${id}/content`);
 });

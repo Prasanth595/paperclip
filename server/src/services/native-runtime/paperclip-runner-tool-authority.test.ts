@@ -1,3 +1,4 @@
+import { connectorToolDefinitionsForSkills } from "../connector-runtime.js";
 import * as cloudIdentity from "../cloud-runtime-identity.js";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -96,6 +97,18 @@ describe("PaperclipRunnerToolAuthority", () => {
     await temporary?.cleanup();
   });
 
+  it("registers pinned connector definitions without discovery and rejects revoked assignments at use", async () => {
+    const connectorAssignments = connectorToolDefinitionsForSkills(new Set([
+      "paperclipai/paperclip/slack", "paperclipai/paperclip/browser-use-cloud", "custom/agentmail",
+    ]));
+    expect(connectorAssignments).toHaveLength(1);
+    const authority = new PaperclipRunnerToolAuthority(db, { companyId, agentId, issueId, runId, connectorAssignments });
+    expect(authority.definitions().some(tool => tool.name === "slack_history")).toBe(true);
+    expect(authority.definitions().some(tool => String(tool.name).startsWith("agentmail_"))).toBe(false);
+    await expect(authority.execute({ tool: "slack_history", callId: randomUUID(), arguments: { channel: "CEXAMPLE" } }))
+      .rejects.toThrow("This connector is no longer assigned or authorized");
+  });
+
   it("advertises only real bindings and reads the bound task", async () => {
     const authority = new PaperclipRunnerToolAuthority(db, {
       companyId,
@@ -103,7 +116,10 @@ describe("PaperclipRunnerToolAuthority", () => {
       issueId,
       runId,
     });
-    expect(authority.definitions()).toHaveLength(44);
+    expect(authority.definitions()).toHaveLength(48);
+    expect(authority.definitions().map(tool => tool.name)).toEqual(expect.arrayContaining([
+      "get_workspace", "list_workspaces", "select_workspace", "prepare_repository",
+    ]));
     expect(authority.definitions().map(tool => tool.name)).not.toContain("read_chat_attachment");
     expect(authority.definitions().map(tool => tool.name)).not.toContain("read_current_wake_comments");
     const questions = authority.definitions().find(tool => tool.name === "request_human_input")!;

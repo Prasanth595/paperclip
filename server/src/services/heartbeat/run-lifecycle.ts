@@ -24,6 +24,7 @@ import {
   rethrowNativeCancellationLockConflict,
 } from "../native-runtime/native-cancellation-request.js";
 import { cancellationResultJson } from "../run-cancellation.js";
+import { CONTROLLER_LEASE_LOST_FAILURE_CODE } from "../legacy-controller-lease.js";
 import { accountRunCost } from "../run-cost-accounting.js";
 import { isWaitingConversation } from "../agent-conversations.js";
 import { PROCESS_IDENTITY_RECORDED } from "../native-local-process-stop.js";
@@ -150,6 +151,7 @@ import {
   reviewPathConsumedRefFromRun,
 } from "../recovery/review-path-recovery.js";
 import { resolveRequiredSuccessfulRunHandoffOnValidPath } from "../successful-run-handoff-state.js";
+import { escalateExhaustedIssueReviewPathRecovery } from "../recovery/review-path-recovery-escalation.js";
 import {
   redactCurrentUserText,
   redactCurrentUserValue,
@@ -246,6 +248,7 @@ export const NON_RETRYABLE_PREFLIGHT_FAILURE_CODES = new Set<string>([
 // of these codes when a failure happens before `adapter.execute`.
 const PRE_ADAPTER_SETUP_FAILURE_CODES = new Set<string>([
   "setup_failed",
+  CONTROLLER_LEASE_LOST_FAILURE_CODE,
   CONFIGURATION_INCOMPLETE_FAILURE_CODE,
   WORKSPACE_VALIDATION_FAILURE_CODE,
   ...NON_RETRYABLE_PREFLIGHT_FAILURE_CODES,
@@ -1987,6 +1990,10 @@ export function createHeartbeatLifecycle(db: Db, dependencies: HeartbeatLifecycl
       reviewAttention,
       existingWake: Boolean(existingWake),
     });
+    if (decision.kind === "exhausted") {
+      await escalateExhaustedIssueReviewPathRecovery(db, { run, issueId: issue.id });
+      return;
+    }
     if (decision.kind !== "enqueue") return;
 
     const recoveryRun = await enqueueWakeup(issue.assigneeAgentId, {
@@ -2177,6 +2184,7 @@ export function createHeartbeatLifecycle(db: Db, dependencies: HeartbeatLifecycl
       .select({
         id: issueComments.id,
         body: issueComments.body,
+        presentation: issueComments.presentation,
       })
       .from(issueComments)
       .where(

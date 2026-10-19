@@ -3,6 +3,7 @@ import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm";
 import {
   chatActions, chatConversations, chatDeliveries, chatEndpoints,
   chatEndpointResources, chatGitHubConfigurations, chatMessageLinks, heartbeatRuns, issues,
+  fastResponseRequests, chatPublications,
   type Db,
 } from "@paperclipai/db";
 import { conflict, forbidden, HttpError } from "../errors.js";
@@ -43,14 +44,16 @@ async function findResponseComment(source: Source, api: Api): Promise<Comment | 
 }
 
 /** One durable, App-owned comment per accepted request. Callers hold the same
- * repository publication lease used by agent replies and review summaries. */
+ * repository publication lease used by agent replies and review summaries.
+ * Reconnect epochs fence publication attempts, not the durable comment identity.
+ * Legacy receipts are also checked against the App-owned provider comment. */
 async function stageResponse(db: Db, source: Source) {
   const [inserted] = await db.insert(chatActions).values({
     companyId: source.endpoint.companyId, endpointId: source.endpoint.id,
     conversationId: source.conversation.id, deliveryId: source.delivery.id,
     principalId: source.delivery.principalId, kind: "github_response_comment",
     providerActionId: actionKey(source.delivery.id),
-    payload: { runtimeGeneration: generation(source.endpoint), agentId: source.endpoint.assignedAgentId },
+    payload: { botExternalId: source.endpoint.botExternalId, agentId: source.endpoint.assignedAgentId },
     status: "received",
   }).onConflictDoNothing().returning();
   const response = inserted ?? (await db.select().from(chatActions).where(and(
@@ -58,7 +61,7 @@ async function stageResponse(db: Db, source: Source) {
     eq(chatActions.providerActionId, actionKey(source.delivery.id)),
   )))[0];
   if (!response || response.conversationId !== source.conversation.id ||
-      response.payload.runtimeGeneration !== generation(source.endpoint) ||
+      (response.payload.botExternalId !== undefined && response.payload.botExternalId !== source.endpoint.botExternalId) ||
       response.payload.agentId !== source.endpoint.assignedAgentId)
     throw forbidden("GitHub response binding changed");
   return response;
@@ -69,6 +72,7 @@ export async function writeGitHubResponseComment(
   input: { body: string; final: boolean; versionAt?: Date; acknowledgement?: boolean },
   assertCurrent: () => Promise<void>,
 ) {
+  await assertCurrent();
   const response = await stageResponse(db, source);
   // A delayed acknowledgement or progress retry must never replace a result.
   if (response.result?.id && (input.acknowledgement || (response.result.final === true && !input.final) ||
@@ -177,6 +181,29 @@ export function githubResponseCommentService(db: Db, fetchImpl = fetch) {
             : run.heartbeat_runs.status === "succeeded" ? "This turn ended without publishing a final response. See the Paperclip task for details."
             : "This turn stopped before completing. See the Paperclip task for details.";
         } else if (existing.result?.id) return { id: String(existing.result.id), url: String(existing.result.url) };
+        if (finalBody === undefined) {
+          const [fast] = await db.select({ request: fastResponseRequests, publicationState: chatPublications.state })
+            .from(fastResponseRequests).leftJoin(chatPublications, and(
+              eq(chatPublications.companyId, fastResponseRequests.companyId),
+              eq(chatPublications.commentId, fastResponseRequests.commentId),
+              eq(chatPublications.endpointId, fastResponseRequests.endpointId),
+              eq(chatPublications.conversationId, fastResponseRequests.conversationId),
+            )).where(and(eq(fastResponseRequests.companyId, source.endpoint.companyId),
+              eq(fastResponseRequests.endpointId, source.endpoint.id),
+              eq(fastResponseRequests.deliveryId, deliveryId))).limit(1);
+          if (fast && ["published", "delivery_unknown"].includes(fast.publicationState ?? "")) {
+            await lease.commit(async tx => { await tx.update(chatActions).set({
+              status: "processed", result: { code: "fast_response_superseded" }, updatedAt: new Date(),
+            }).where(eq(chatActions.id, existing.id)); });
+            return;
+          }
+          // Keep durable fallback work pending while the contextual receipt can
+          // still arrive. Never race an in-flight or ambiguous external send.
+          if (fast && (fast.publicationState === "streaming" ||
+              (fast.request.expiresAt.getTime() > Date.now() &&
+                (["pending", "running"].includes(fast.request.status) ||
+                  ["pending", "retry"].includes(fast.publicationState ?? ""))))) return;
+        }
       }
       const token = await githubBotRepositoryToken(db, source.endpoint.companyId, source.endpoint.id, source.repositoryId, lease.fetch);
       const prefix = `/repos/${source.repository.split("/").map(encodeURIComponent).join("/")}`;
