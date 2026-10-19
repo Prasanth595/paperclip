@@ -2,10 +2,10 @@ use super::*;
 
 #[test]
 fn api_window_rejection_explains_limits_and_allows_corrected_call() {
-    let contracts: Value = serde_json::from_str(include_str!(
-        "../../../../../generated/capability/semantic-tool-contracts.json"
-    ))
-    .unwrap();
+    let contract_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../generated/capability/semantic-tool-contracts.json");
+    let contracts: Value =
+        serde_json::from_str(&fs::read_to_string(contract_path).unwrap()).unwrap();
     let contract = contracts
         .as_array()
         .unwrap()
