@@ -62,6 +62,7 @@ Open Audit → Commentary (`/activity/commentary`). Search message text, filter 
 page through 50-message previews, and open a row to read the full message with its task/run links.
 Filters, page offsets and the selected entry are retained in the URL. Read access requires board company access and
 `audit:view_agent_actions`; task privacy applies to previews, counts and full messages.
+All Audit tab destinations resolve in both the classic and streamlined layouts.
 
 Storybook: [production page and message journeys](../../ui/storybook/stories/activity/agent-commentary.stories.tsx)
 covers populated, filtered, long-message, paginated, empty, loading, failed, denied,

@@ -759,10 +759,10 @@ limits and the operator override.
 Project `privacy_owner_user_id` records who may manage its audience independently of project read membership. Creation assigns the authenticated user or run responsible user; migration recovers legacy ownership from creation audit evidence. Missing evidence leaves management with administrators.
 ## Internal agent commentary
 
-The experimental Audit viewer uses the existing company/kind/created index.
+The Audit viewer uses the existing company/kind/created index.
 List reads select bounded previews; details load a single full body. Both reads
-and list counts apply company and source-task visibility. The feature preference
-lives in instance experimental settings; no commentary schema migration is needed.
+and list counts apply company and source-task visibility. The viewer requires
+no experimental toggle or commentary schema migration.
 
 `agent_commentary` stores company-scoped, attributed complaints and suggestions
 as free-form text in the instance database. Legacy agents use the default

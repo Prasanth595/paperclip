@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import { sql, eq } from "drizzle-orm";
 import express from "express";
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { agentCommentary, agents, companies, createDb, heartbeatRuns, issues } from "@paperclipai/db";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { agentCommentary, agents, authUsers, companies, companyMemberships, createDb, heartbeatRuns, issueAccessGrants, issues, principalPermissionGrants } from "@paperclipai/db";
 import { agentCommentaryQuerySchema } from "@paperclipai/shared";
 import { startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 import { agentCommentaryReader } from "../services/agent-commentary-reader.js";
@@ -51,6 +51,7 @@ describe("agent commentary browsing", () => {
     ]);
   }, 90_000);
   afterAll(async () => { await temporary?.cleanup(); });
+  afterEach(() => vi.unstubAllEnvs());
 
   it("bounds previews and pagination while details retain the full message", async () => {
     const page = await reader.list(companyId, query({ limit: 1 }), sql`true`);
@@ -133,4 +134,45 @@ describe("agent commentary browsing", () => {
     actor = { type: "board", source: "session", userId: "operator", isInstanceAdmin: true, companyIds: [foreignCompanyId] };
     expect((await request(app).get(url)).status).toBe(403);
   });
+  it("applies actual task privacy to HTTP previews, counts, searches and details for audit-authorized board users", async () => {
+    vi.stubEnv("PAPERCLIP_ISSUE_PRIVACY_MODE", "enforce");
+    const userId = randomUUID(), ownerId = randomUUID();
+    await db.insert(authUsers).values([userId, ownerId].map((id) => ({
+      id, name: "Board user", email: `${id}@example.test`, emailVerified: true,
+      createdAt: new Date(), updatedAt: new Date(),
+    })));
+    await db.insert(companyMemberships).values({
+      companyId, principalType: "user", principalId: userId, status: "active", membershipRole: "viewer",
+    });
+    await db.insert(principalPermissionGrants).values({
+      companyId, principalType: "user", principalId: userId, permissionKey: "audit:view_agent_actions",
+    });
+    await db.update(issues).set({ visibility: "private", privacyRootIssueId: privateTaskId, responsibleUserId: ownerId }).where(eq(issues.id, privateTaskId));
+    const app = express();
+    app.use((req, _res, next) => {
+      req.actor = { type: "board", source: "session", userId, companyIds: [companyId] };
+      next();
+    });
+    app.use("/api", agentCommentaryRoutes(db));
+    app.use(errorHandler);
+    const url = `/api/companies/${companyId}/agent-commentary`;
+    const deniedPage = await request(app).get(url).expect(200);
+    expect(deniedPage.body.total).toBe(2);
+    expect(deniedPage.body.items.map((entry: { id: string }) => entry.id)).not.toContain(privateId);
+    expect((await request(app).get(url).query({ q: "Private task feedback" }).expect(200)).body).toMatchObject({ total: 0, items: [] });
+    await request(app).get(`${url}/${privateId}`).expect(404);
+
+    const [grant] = await db.insert(issueAccessGrants).values({
+      issueId: privateTaskId, subjectType: "user", subjectId: userId, source: "explicit", grantedByUserId: ownerId,
+    }).returning();
+    const grantedPage = await request(app).get(url).expect(200);
+    expect(grantedPage.body.total).toBe(3);
+    expect(grantedPage.body.items.map((entry: { id: string }) => entry.id)).toContain(privateId);
+    expect((await request(app).get(`${url}/${privateId}`).expect(200)).body.body).toBe("Private task feedback");
+
+    await db.update(issueAccessGrants).set({ revokedAt: new Date() }).where(eq(issueAccessGrants.id, grant.id));
+    expect((await request(app).get(url).expect(200)).body.total).toBe(2);
+    await request(app).get(`${url}/${privateId}`).expect(404);
+  });
+
 });
