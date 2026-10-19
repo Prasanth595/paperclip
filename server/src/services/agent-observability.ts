@@ -11,6 +11,7 @@ import { conflict, notFound, unprocessable } from "../errors.js";
 import { withAccountingTransaction } from "./accounting-transaction.js";
 import { logActivity } from "./activity-log.js";
 import { secretService } from "./secrets.js";
+import { withAccountHomeSecretMutationLock } from "@paperclipai/adapter-codex-local/server";
 
 type Row = typeof companyObservability.$inferSelect;
 const target = { targetType: "system" as const, targetId: "company-observability" };
@@ -72,7 +73,8 @@ export function agentObservabilityService(db: Db) {
     settings: async (companyId: string) => { const row = await getRow(companyId); return row ? settingsDto(row) : null; },
     configure: async (companyId: string, userId: string, input: UpdateAgentObservabilityRequest) => {
       const data = updateAgentObservabilitySchema.parse(input);
-      return withAccountingTransaction(db, companyId, async (tx, publications) => {
+      // Match credential writers: filesystem mutation ownership precedes DB row locks.
+      return withAccountHomeSecretMutationLock(undefined, companyId, () => withAccountingTransaction(db, companyId, async (tx, publications) => {
         const previous = await getRow(companyId, tx);
         assertRevision(previous, data.expectedRevision);
         if ((!previous || previous.destination.provider !== data.destination.provider) && data.credentials.mode === "keep") {
@@ -130,7 +132,7 @@ export function agentObservabilityService(db: Db) {
         await logActivity(tx, { companyId, actorType: "user", actorId: userId, action: "agent_observability.configured", entityType: "company", entityId: companyId,
           details: { revision: row.revision, enabled: row.enabled, provider: row.destination.provider, capture: row.capture, headerCount: headerNames.length } }, publications);
         return settingsDto(row);
-      });
+      }));
     },
     remove: async (companyId: string, userId: string, expectedRevision: string) => withAccountingTransaction(db, companyId, async (tx, publications) => {
       const row = await getRow(companyId, tx);

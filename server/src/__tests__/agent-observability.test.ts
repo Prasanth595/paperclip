@@ -3,7 +3,8 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
+import * as codexServer from "@paperclipai/adapter-codex-local/server";
 import express from "express";
 import request from "supertest";
 import { createDb, companies, companyMemberships, companyObservability, companySecrets, companySecretBindings, activityLog } from "@paperclipai/db";
@@ -70,6 +71,50 @@ describe("company agent observability", () => {
     expect(await db.select().from(companySecretBindings).where(eq(companySecretBindings.companyId, f.companyId))).toEqual([]);
     expect(await db.select().from(companySecrets).where(eq(companySecrets.companyId, f.companyId))).toEqual([]);
   });
+  it("acquires secret mutation ownership before locking retained header rows", async () => {
+    const f = await fixture();
+    const saved = await f.service.configure(f.companyId, "alice", { expectedRevision: null, enabled: true,
+      capture: { ...DEFAULT_AGENT_OBSERVABILITY_CAPTURE }, destination: { provider: "otlp", endpointBaseUrl: "https://collector.example" },
+      credentials: { mode: "replace", headers: [{ name: "authorization", value: "retained-value" }] } });
+    const [row] = await db.select().from(companyObservability).where(eq(companyObservability.companyId, f.companyId));
+    const original = codexServer.withAccountHomeSecretMutationLock;
+    let probed = false;
+    const spy = vi.spyOn(codexServer, "withAccountHomeSecretMutationLock").mockImplementation(async (env, companyId, work) => {
+      if (companyId === f.companyId && !probed) {
+        probed = true;
+        // A separate real database connection must acquire these rows NOWAIT
+        // at the first mutation-lock attempt. The old order already holds them.
+        await db.transaction(async tx => {
+          await tx.execute(sql`select 1 from companies where id = ${companyId} for no key update nowait`);
+          await tx.execute(sql`select 1 from company_secrets where id = ${row.credentialsSecretId} for update nowait`);
+        });
+      }
+      return original(env, companyId, work);
+    });
+    try {
+      await f.service.configure(f.companyId, "alice", { expectedRevision: saved.revision, enabled: true, capture: saved.capture,
+        destination: saved.destination as { provider: "otlp"; endpointBaseUrl: string },
+        credentials: { mode: "replace", headers: [{ name: "authorization" }, { name: "x-new", value: "new-value" }] } });
+      expect(probed).toBe(true);
+      expect(await f.service.resolve(f.companyId)).toMatchObject({ headers: { authorization: "retained-value", "x-new": "new-value" } });
+    } finally { spy.mockRestore(); }
+  });
+
+  it("completes concurrent header retention and external credential rotation", async () => {
+    const f = await fixture();
+    const saved = await f.service.configure(f.companyId, "alice", { expectedRevision: null, enabled: true,
+      capture: { ...DEFAULT_AGENT_OBSERVABILITY_CAPTURE }, destination: { provider: "otlp", endpointBaseUrl: "https://collector.example" },
+      credentials: { mode: "replace", headers: [{ name: "authorization", value: "original-value" }] } });
+    const [row] = await db.select().from(companyObservability).where(eq(companyObservability.companyId, f.companyId));
+    await Promise.all([
+      f.service.configure(f.companyId, "alice", { expectedRevision: saved.revision, enabled: true, capture: saved.capture,
+        destination: saved.destination as { provider: "otlp"; endpointBaseUrl: string }, credentials: { mode: "replace", headers: [{ name: "authorization" }] } }),
+      secretService(db).rotate(row.credentialsSecretId!, { value: JSON.stringify({ schema: "paperclip.agent_observability.credentials.v1", headers: { authorization: "rotated-value" } }) }),
+    ]);
+    expect((await secretService(db).getById(row.credentialsSecretId!))?.latestVersion).toBe(3);
+    expect(await f.service.resolve(f.companyId)).toMatchObject({ headers: { authorization: "rotated-value" } });
+  });
+
   it("keeps project routing current and changes process compatibility on external key rotation", async () => {
     const f = await fixture(); const saved = await f.service.configure(f.companyId, "alice", braintrust());
     const before = await f.service.resolve(f.companyId);
