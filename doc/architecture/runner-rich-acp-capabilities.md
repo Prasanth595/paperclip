@@ -4,10 +4,11 @@
 
 The composed Claude source declares **Pi profile 27**
 (`sha256:b1b75a1ae3ac498eb07b95b96bebf4da86227b83d09276076dd5c222e3964dba`)
-and **Copilot profile 22**, still pending qualification
-(`sha256:9027ee2bdf9180e3267b7d05b56b0703943251a29713c393f7a3f2ef1072efd2`).
+and **Copilot profile 23**, still pending qualification
+(`sha256:6ca1e2c9efa23887ba6f08d89980c91d13114640ac8a1a79f00f27aa8cd39d63`).
 These identities bind the shared Claude effort and lifecycle changes plus
-master's OpenRouter attribution. Provider executable closures, model/effort
+master's OpenRouter attribution. Copilot's shared bridge binding also includes
+Claude-only essential tool metadata; its own tool catalog is unchanged. Provider executable closures, model/effort
 options and qualification boundaries are unchanged. Current package and source
 checks remain separate from retained provider execution results, which keep
 their literal profile/source identities. Earlier immutable fixtures remain
