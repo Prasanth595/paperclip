@@ -127,9 +127,40 @@ runtime subscriber becomes active. This covers feature overlays supplied at
 process startup. It does not add a recurring scan. Plugins must compare desired
 state and destination hashes before rewriting external files.
 
-This assignment contract does not yet emit connector-specific invalidations for
-tool catalog contents, profile entries, policies, connection configuration,
-grants, credentials, or endpoint configuration. Those inputs need their own
-mutation coverage before a consumer can rely on their immediate synchronization.
-Existing agent and skill invalidations still apply independently. Standing
-assignments express desired state; they do not prove task-specific authorization.
+Standing assignments express desired state; they do not prove task-specific
+authorization. Existing agent and skill invalidations still apply independently.
+
+## Tool definitions and configuration
+
+Migration 0355 extends runtime invalidation to application and connection
+configuration, catalog contents, profile entries, policies, and MCP gateways.
+These changes use the same content-free journal, atomic commit behavior, and
+transaction coalescing. Bulk discovery invalidates once per company per committed
+chunk instead of once per tool. Unchanged rediscovery, health bookkeeping, and
+trust-rule usage counters do not request preparation. Binding and installation
+notifications retain the scoped recipients described above. Profile-entry changes
+notify agents from the old and new profiles' standing bindings. Policies use
+their old and new `agentId` and `agentIds` selectors, including their intersection
+when both are set. Unscoped policies and company-bound profiles retain atomic
+company fanout. Other definition changes still use conservative company-wide
+fanout with the same documented company-size cost.
+
+Profile entry mutations lock referenced applications, connections, and catalog
+rows before the parent profile. They then change the entries and parent in one
+transaction, using the reserved connection for validation and profile reads.
+Profile replacement locks both old and new references before the parent. It
+rechecks the reference set under the parent lock and retries up to three times
+if a concurrent entry edit changes it. Continued churn returns a conflict.
+Setup finalization and
+catalog publication can run concurrently without acquiring these locks in the
+opposite order. Policy reorder locks all affected policies in ID order and changes
+their priorities in one statement so scoped agent locks are ordered across the
+set. Connection removal locks the managed profile before deleting its entries in
+the same transaction.
+
+The bounded assignment snapshot remains the API described above. An invalidation
+can advance its revision without changing its assignment fields. Consumers must
+use their existing authorized readers for tool definitions and configuration.
+Credential-only changes, grants, secrets, and endpoint configuration still need
+the access hooks supplied by a later migration before consumers can rely on
+their immediate synchronization.

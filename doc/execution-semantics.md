@@ -242,6 +242,17 @@ The **Retry now** action returns `waiting` with the saved retry schedule while
 cleanup holds ownership. Its controls show the wait without claiming that a run
 started, and another click can check the gate again.
 
+A human comment may supersede a retry only while it remains `scheduled_retry`.
+Queued and running retries retain their execution and receive the comment through
+normal wake coalescing. Supersession rechecks the scheduled status atomically with
+the cancellation fence; a concurrent promotion must not cancel the active run or
+move its task back to `todo`. Explicit Stop and Interrupt keep their authority.
+Once cancellation wins that fence, due-retry promotion respects its claim until
+the cancellation owner finishes settlement. Startup and periodic recovery finish
+persisted cancellations of parked retries through the normal guarded cancellation
+path if the original owner stops or its final database write fails. They preserve
+the original cancellation request and never start a provider turn for that work.
+
 Recovery instructions in a wake describe only an active or escalated recovery
 action. Resolving or cancelling that action removes its repair instructions from
 subsequent wakes, so the original worker can resume the task. This prompt change
@@ -422,6 +433,24 @@ An external wait counts as a live or waiting path only when the next move surviv
 - a delegated child issue with a responsible owner and its own healthy action path, plus a blocker edge when the source issue must wait for that child; `parentId` alone is not a dependency
 
 A one-shot issue monitor consumes its persisted `nextCheckAt` when it dispatches the assignee wake. If that monitor-consuming run is lost before it records a new disposition or future monitor, Paperclip restores exactly one bounded continuation using the existing process-loss retry limit; if that continuation is also lost, the normal recovery-action escalation owns the next step instead of creating another monitor loop.
+
+Native `set_task_monitor` arguments put scheduling fields inside `monitor`:
+`{ "idempotencyKey": "check-ci", "monitor": { "nextCheckAt": "<future UTC timestamp>", "notes": "Check pending CI." } }`.
+Use `monitor: null` to clear a schedule. A runner schema rejection executes no
+Paperclip mutation. It returns bounded schema locations and repair guidance,
+without submitted values. Correct the arguments and retry; the rejection is not
+evidence that the scheduling service is unavailable. Confirm the persisted
+receipt before reporting a scheduled wait.
+
+A native provider may omit `continuation` (or send `null`) when it reports
+`yielded` after saving a monitor. The controller reads current authorized task
+context and fills the canonical `monitor` continuation only if that same task,
+run, assignee, work mode, and monitor remain eligible. Completion admission
+checks that persisted monitor again. This default does not create or renew a
+schedule. A consumed, cleared, exhausted, or ineligible monitor cannot authorize
+a passive wait. An explicit `response_wake` still identifies a real response
+wait; the controller does not invent one from prose. Canonical accepted results
+still require a complete continuation for `yielded`.
 
 An unmanaged local process is not a durable action path. Shell jobs started with `&`, `nohup`, local polling loops, detached PTY sessions, adapter child processes, or similar background watchers do not keep an issue live unless Paperclip persists them as a run or pairs a managed runtime service with a monitor, scheduled wake, blocker, or delegated issue that owns the next check. A PID, session id, log file, comment, or promise to check later is evidence only. The process may be killed when the adapter invocation or heartbeat exits and cannot be assumed observable or recoverable by another worker.
 
@@ -1217,18 +1246,27 @@ Shutdown, process loss, and provider failure use the existing durable failure re
 
 Graceful shutdown interrupts an owned legacy adapter through its cancellation
 control, then waits within one shared 30-second window for provider stop and
-adapter settlement across all affected runs. Before interruption becomes visible,
-it commits a settlement fence on the exact sandbox lease. Cleanup on this server
-or another server defers while that fence is pending. If the controller dies,
-cleanup records exact stop-only retention and a repair hold after the deadline,
-without claiming a successful restore. The shipped Compose services allow 90
-seconds for settlement and subsequent shutdown cleanup.
+adapter settlement across all affected runs. A run that exceeds that wait stays
+in the server's finalizer drain, which has a further shared 30-second budget.
+The wait ending does not prove the adapter or its file export stopped.
+Before interruption becomes visible, shutdown commits a settlement fence on
+the exact sandbox lease. The owning finalizer renews its 30-second deadline
+every 10 seconds, with one renewal in flight per run. Renewal uses a one-second
+database lock timeout and a five-second statement timeout. It cannot revive an
+expired, settled, or foreign-owned fence. Cleanup on this server defers while
+the adapter still owns settlement; another server reads the renewed fence.
+If the controller dies, renewal stops. Cleanup records exact stop-only retention
+and a repair hold after the deadline, without claiming a successful restore.
+The shipped Compose services allow 90 seconds for settlement and subsequent
+shutdown cleanup.
 The sandbox lease remains available during workspace export and instruction
 collection. Lease release and recovery classification follow settlement and use
-the current execution evidence. If settlement exceeds the deadline with an
-active sandbox source, shutdown records a restore failure and pins the exact
-source for stop and retention before cleanup. A later run must pass the normal
-workspace repair gate. Native runner ownership keeps its existing restart path.
+the current execution evidence. A late successful export can finish cleanup
+and queue one bounded continuation without a false workspace repair hold.
+An actual restore failure, or loss of the controller before settlement, keeps
+the exact source retained. A later run must pass the normal workspace repair
+gate. This shutdown join does not reconstruct an interrupted legacy export
+after process death. Native runner ownership keeps its existing restart path.
 
 Real gates still apply: company and task ownership, active provider ownership, budget limits, agent availability, dependencies, pending approval/review paths, and explicit pause holds. Native runner reattachment and finalization retain their existing ownership protocol. Process, HTTP, and gateway adapters retain their recovery rules because invoking those adapters can itself repeat an external action rather than start a conversation turn.
 
@@ -1541,6 +1579,15 @@ its active readers before closing the manifest and publishes no success receipt.
 
 ### Warm sandbox continuity
 
+An active remote runner's health probe is an observation, not an exit receipt.
+Timed-out or rejected read-only probes retry within the existing 30-second
+budget. A successful probe keeps the same runner and turn; no provider work is
+replayed. Monitoring checks the saved process generation when available.
+Only a matching ownership marker and confirmed process exit permit automatic
+replacement. Missing or conflicting identity evidence, failed reads, and an
+exhausted probe budget retain the existing ownership and recovery safeguards.
+They must not launch a competing listener or overwrite the original marker.
+
 Healthy native warm turns retain their runner and provider processes. After a
 controller crash, continuation can recover a completed remote session from its
 saved checkpoint and exact sandbox process identity. The prior controller must
@@ -1552,6 +1599,13 @@ Saved process configuration must match before reuse. Old checkpoints, changed
 configuration, and controller-owned credential or instruction resources use
 verified suspension and saved-history resume. This recovery can restart a
 provider; it does not suspend every healthy warm turn.
+
+Plugin sandbox reuse during acquisition uses the configured startup timeout or
+the provider's declared acquisition default, with the host RPC margin. Resume
+attempts and transient retries share that deadline. Providers without either
+timeout retain the one-minute host default. A resume failure still preserves
+the recorded sandbox unless the provider proves it lost and replacement passes
+the existing backup checks.
 
 For the native runner, warm mode requests a reusable sandbox lease **before**
 lease acquisition. The environment's explicit runner lifecycle overrides the
