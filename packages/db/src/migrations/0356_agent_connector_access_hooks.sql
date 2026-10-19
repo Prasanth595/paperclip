@@ -7,9 +7,18 @@ DECLARE company uuid; query text; target record; binding record; candidate uuid;
     'last_sync_at', 'sync_checkpoint', 'activation_at', 'lease_token', 'lease_expires_at'];
 BEGIN
   IF TG_TABLE_NAME = 'tool_profiles' AND TG_OP = 'INSERT' THEN RETURN NULL; END IF;
-  IF TG_TABLE_NAME = 'connection_grant_delegations' AND TG_OP = 'INSERT' THEN
-    FOR binding IN SELECT DISTINCT company_id, agent_id FROM new_rows ORDER BY company_id, agent_id LOOP
-      PERFORM paperclip_record_agent_runtime(binding.company_id, binding.agent_id);
+  IF TG_TABLE_NAME = 'connection_grant_delegations' THEN
+    IF TG_OP = 'INSERT' THEN query := 'SELECT DISTINCT company_id, agent_id FROM new_rows ORDER BY company_id, agent_id';
+    ELSIF TG_OP = 'DELETE' THEN query := 'SELECT DISTINCT company_id, agent_id FROM old_rows ORDER BY company_id, agent_id';
+    ELSE query := 'WITH changed AS (
+      SELECT to_jsonb(o) AS previous, to_jsonb(n) AS current FROM old_rows o FULL JOIN new_rows n ON o.id = n.id
+      WHERE (to_jsonb(o) - $1) IS DISTINCT FROM (to_jsonb(n) - $1)), targets AS (
+      SELECT previous AS target FROM changed UNION SELECT current FROM changed)
+      SELECT DISTINCT (target->>''company_id'')::uuid AS company_id, (target->>''agent_id'')::uuid AS agent_id
+      FROM targets WHERE target IS NOT NULL ORDER BY company_id, agent_id';
+    END IF;
+    FOR binding IN EXECUTE query USING ignored LOOP
+      PERFORM paperclip_invalidate_connector_agent(binding.company_id, binding.agent_id);
     END LOOP;
     RETURN NULL;
   END IF;

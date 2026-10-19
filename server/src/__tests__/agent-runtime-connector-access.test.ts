@@ -180,6 +180,54 @@ describeDatabase("connector access runtime synchronization", () => {
     await toolAccessService(db).createConnectionGrantDelegation(connectionId, grant.id, agentId, "alice");
     expect((await events()).slice(before.length).map(event => event.resourceId)).toEqual([agentId]);
   });
+  it("keeps repeated delegation creation and revocation independent of an unrelated agent lock", async () => {
+    await db.insert(companyMemberships).values({ companyId, principalType: "user", principalId: "alice", status: "active" });
+    const [grant] = await db.insert(connectionGrants).values({ companyId, connectionId, kind: "user", subjectUserId: "alice" }).returning();
+    const before = await events();
+    let locked!: () => void; let resume!: () => void;
+    const held = new Promise<void>(resolve => { locked = resolve; });
+    const mayFinish = new Promise<void>(resolve => { resume = resolve; });
+    const blocker = db.transaction(async tx => {
+      await tx.select().from(agents).where(eq(agents.id, peerId)).for("no key update");
+      locked(); await mayFinish;
+    });
+    await held;
+    try {
+      for (let index = 0; index < 2; index++) {
+        const delegation = await toolAccessService(db).createConnectionGrantDelegation(connectionId, grant.id, agentId, "alice");
+        await db.transaction(async tx => {
+          await tx.execute(sql`SET LOCAL lock_timeout = '2s'`);
+          await toolAccessService(tx as unknown as Db).revokeConnectionGrantDelegation(connectionId, grant.id, delegation.id);
+        });
+      }
+      expect((await events()).slice(before.length).map(row => row.resourceId)).toEqual([agentId, agentId, agentId, agentId]);
+      await db.transaction(async tx => {
+        await tx.execute(sql`SET LOCAL lock_timeout = '2s'`);
+        const service = toolAccessService(tx as unknown as Db);
+        const delegation = await service.createConnectionGrantDelegation(connectionId, grant.id, agentId, "alice");
+        await service.revokeConnectionGrantDelegation(connectionId, grant.id, delegation.id);
+      });
+      expect((await events()).slice(before.length).map(row => row.resourceId)).toEqual(Array(5).fill(agentId));
+    } finally { resume(); await blocker; }
+    expect(await db.select().from(connectionGrantDelegations).where(eq(connectionGrantDelegations.grantId, grant.id))).toEqual([]);
+  }, 15000);
+  it("invalidates both delegation targets on reassignment and ignores unchanged updates or rollback", async () => {
+    await db.insert(agents).values({ companyId, name: "Unrelated delegation peer", adapterType: "paperclip_runner" });
+    const [grant] = await db.insert(connectionGrants).values({ companyId, connectionId, kind: "user", subjectUserId: "alice" }).returning();
+    const [delegation] = await db.insert(connectionGrantDelegations).values({ companyId, grantId: grant.id, agentId, createdByUserId: "alice" }).returning();
+    const before = await events();
+    await db.update(connectionGrantDelegations).set({ agentId: peerId }).where(eq(connectionGrantDelegations.id, delegation.id));
+    const reassigned = await events();
+    expect(reassigned.slice(before.length).map(row => row.resourceId).sort()).toEqual([agentId, peerId].sort());
+    await db.update(connectionGrantDelegations).set({ agentId: peerId }).where(eq(connectionGrantDelegations.id, delegation.id));
+    expect(await events()).toEqual(reassigned);
+    await expect(db.transaction(async tx => {
+      await tx.delete(connectionGrantDelegations).where(eq(connectionGrantDelegations.id, delegation.id));
+      throw new Error("rollback delegation revocation");
+    })).rejects.toThrow("rollback delegation revocation");
+    expect(await events()).toEqual(reassigned);
+    expect(await db.select().from(connectionGrantDelegations).where(eq(connectionGrantDelegations.id, delegation.id))).toEqual([expect.objectContaining({ agentId: peerId })]);
+  });
   it("limits delegation creation to its target without waiting on unrelated agents", async () => {
     await db.insert(companyMemberships).values(["alice", "bob"].map(principalId => ({ companyId, principalType: "user", principalId, status: "active" })));
     const grants = await db.insert(connectionGrants).values(["alice", "bob"].map(subjectUserId => ({ companyId, connectionId, kind: "user", subjectUserId }))).returning();
@@ -216,6 +264,78 @@ describeDatabase("connector access runtime synchronization", () => {
     expect(before.slice(baseline.length).map(event => event.resourceId).sort()).toEqual([lower, higher]);
     await toolAccessService(db).createConnectionGrantDelegation(connectionId, grants[0].id, higher, grants[0].subjectUserId!);
     expect(await events()).toEqual(before);
+  }, 15000);
+  it.each(["grant revocation", "membership suspension"] as const)("orders company locks before delegation cleanup during %s", async change => {
+    const [lower, higher] = [agentId, peerId].sort();
+    await db.insert(companyMemberships).values({ companyId, principalType: "user", principalId: "owner", membershipRole: "owner", status: "active" });
+    const [member] = await db.insert(companyMemberships).values({ companyId, principalType: "user", principalId: "alice", membershipRole: "member", status: "active" }).returning();
+    const [grant] = await db.insert(connectionGrants).values({ companyId, connectionId, kind: "user", subjectUserId: "alice" }).returning();
+    await toolAccessService(db).createConnectionGrantDelegation(connectionId, grant.id, higher, "alice");
+    let locked!: () => void; let resume!: () => void; let started!: (pid: number) => void;
+    const held = new Promise<void>(resolve => { locked = resolve; });
+    const maySave = new Promise<void>(resolve => { resume = resolve; });
+    const cleanupStarted = new Promise<number>(resolve => { started = resolve; });
+    const settings = db.transaction(async tx => {
+      await tx.execute(sql`SET LOCAL lock_timeout = '8s'`);
+      await tx.select().from(agents).where(eq(agents.id, lower)).for("no key update");
+      locked(); await maySave;
+      return toolAccessService(tx as unknown as Db).updateApplication(applicationId, { name: "Concurrent delegation settings" });
+    });
+    await held;
+    const cleanup = db.transaction(async tx => {
+      await tx.execute(sql`SET LOCAL lock_timeout = '8s'`);
+      const [row] = await tx.execute(sql`SELECT pg_backend_pid() AS pid`);
+      started(Number(row.pid));
+      return change === "grant revocation" ? toolAccessService(tx as unknown as Db).revokeConnectionGrant(connectionId, grant.id)
+        : accessService(tx as unknown as Db).updateMember(companyId, member.id, { status: "suspended" });
+    });
+    const completed = Promise.allSettled([settings, cleanup]);
+    try {
+      const pid = await cleanupStarted;
+      await vi.waitFor(async () => {
+        const [row] = await db.execute(sql`SELECT wait_event_type FROM pg_stat_activity WHERE pid = ${pid}`);
+        expect(row.wait_event_type).toBe("Lock");
+      }, { timeout: 5000 });
+    } finally { resume(); }
+    const results = await completed;
+    for (const result of results) if (result.status === "rejected") throw result.reason;
+    expect((await db.select().from(connectionGrants).where(eq(connectionGrants.id, grant.id)))[0].status).toBe("revoked");
+    expect(await db.select().from(connectionGrantDelegations).where(eq(connectionGrantDelegations.grantId, grant.id))).toEqual([]);
+  }, 15000);
+  it("orders a personal delegation revocation behind whole-grant cleanup", async () => {
+    await db.insert(companyMemberships).values({ companyId, principalType: "user", principalId: "alice", status: "active" });
+    const [grant] = await db.insert(connectionGrants).values({ companyId, connectionId, kind: "user", subjectUserId: "alice" }).returning();
+    const delegation = await toolAccessService(db).createConnectionGrantDelegation(connectionId, grant.id, agentId, "alice");
+    let locked!: () => void; let resume!: () => void; let started!: (pid: number) => void;
+    const held = new Promise<void>(resolve => { locked = resolve; });
+    const mayRevoke = new Promise<void>(resolve => { resume = resolve; });
+    const personalStarted = new Promise<number>(resolve => { started = resolve; });
+    const whole = db.transaction(async tx => {
+      await tx.execute(sql`SET LOCAL lock_timeout = '8s'`);
+      await tx.select().from(connectionGrants).where(eq(connectionGrants.id, grant.id)).for("update");
+      await tx.select().from(agents).where(eq(agents.companyId, companyId)).orderBy(agents.id).for("no key update");
+      locked(); await mayRevoke;
+      return toolAccessService(tx as unknown as Db).revokeConnectionGrant(connectionId, grant.id);
+    });
+    await held;
+    const personal = db.transaction(async tx => {
+      await tx.execute(sql`SET LOCAL lock_timeout = '8s'`);
+      const [row] = await tx.execute(sql`SELECT pg_backend_pid() AS pid`);
+      started(Number(row.pid));
+      return toolAccessService(tx as unknown as Db).revokeConnectionGrantDelegation(connectionId, grant.id, delegation.id);
+    });
+    const completed = Promise.allSettled([whole, personal]);
+    try {
+      const pid = await personalStarted;
+      await vi.waitFor(async () => {
+        const [row] = await db.execute(sql`SELECT wait_event_type FROM pg_stat_activity WHERE pid = ${pid}`);
+        expect(row.wait_event_type).toBe("Lock");
+      }, { timeout: 5000 });
+    } finally { resume(); }
+    const [wholeResult, personalResult] = await completed;
+    if (wholeResult.status === "rejected") throw wholeResult.reason;
+    expect(personalResult).toMatchObject({ status: "rejected", reason: { status: 404 } });
+    expect(await db.select().from(connectionGrantDelegations).where(eq(connectionGrantDelegations.grantId, grant.id))).toEqual([]);
   }, 15000);
   it("orders grant revocation with a concurrent delegation creation", async () => {
     await db.insert(companyMemberships).values({ companyId, principalType: "user", principalId: "alice", status: "active" });

@@ -46,6 +46,7 @@ import {
   lte,
   max,
   ne,
+  notInArray,
   or,
   sql,
 } from "drizzle-orm";
@@ -18756,16 +18757,28 @@ export function toolAccessService(
       actor?: ActorInfo,
     ) => {
       const connection = await getConnectionRow(idOrUid);
-      const [delegation] = await db
-        .delete(connectionGrantDelegations)
-        .where(
-          and(
-            eq(connectionGrantDelegations.id, delegationId),
-            eq(connectionGrantDelegations.companyId, connection.companyId),
-            eq(connectionGrantDelegations.grantId, grantId),
-          ),
-        )
-        .returning();
+      const delegation = await db.transaction(async tx => {
+        const [grant] = await tx.select({ id: connectionGrants.id }).from(connectionGrants)
+          .where(and(eq(connectionGrants.id, grantId), eq(connectionGrants.companyId, connection.companyId), eq(connectionGrants.connectionId, connection.id)))
+          .for("update");
+        if (!grant) return undefined;
+        const [target] = await tx.select({ agentId: connectionGrantDelegations.agentId }).from(connectionGrantDelegations)
+          .where(and(eq(connectionGrantDelegations.id, delegationId), eq(connectionGrantDelegations.companyId, connection.companyId), eq(connectionGrantDelegations.grantId, grantId)));
+        if (!target) return undefined;
+        await tx.select({ id: agents.id }).from(agents)
+          .where(and(eq(agents.companyId, connection.companyId), eq(agents.id, target.agentId))).for("no key update");
+        const [removed] = await tx
+          .delete(connectionGrantDelegations)
+          .where(
+            and(
+              eq(connectionGrantDelegations.id, delegationId),
+              eq(connectionGrantDelegations.companyId, connection.companyId),
+              eq(connectionGrantDelegations.grantId, grantId),
+            ),
+          )
+          .returning();
+        return removed;
+      });
       if (!delegation) throw notFound("Connection grant delegation not found");
       const binding = actorBinding(actor);
       await db.insert(toolAccessAuditEvents).values({
@@ -18899,6 +18912,9 @@ export function toolAccessService(
           .where(and(eq(connectionGrants.id, grantId), eq(connectionGrants.companyId, connection.companyId), eq(connectionGrants.connectionId, connection.id)))
           .for("update");
         if (!lockedGrant) throw notFound("Connection grant not found");
+        await tx.select({ id: agents.id }).from(agents)
+          .where(and(eq(agents.companyId, connection.companyId), notInArray(agents.status, ["pending_approval", "terminated"])))
+          .orderBy(agents.id).for("no key update");
         const removedDelegations = await tx
           .delete(connectionGrantDelegations)
           .where(

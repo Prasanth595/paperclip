@@ -1,6 +1,7 @@
 import { and, eq, inArray, ne, notInArray, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
+  agents,
   companyMemberships,
   companySecretBindings,
   companySecrets,
@@ -242,6 +243,9 @@ export function accessService(db: Db) {
         .where(and(eq(toolConnections.companyId, companyId), inArray(toolConnections.id, affectedConnectionIds)))
         .orderBy(toolConnections.id).for("update");
     }
+    await tx.select({ id: agents.id }).from(agents)
+      .where(and(eq(agents.companyId, companyId), notInArray(agents.status, ["pending_approval", "terminated"])))
+      .orderBy(agents.id).for("no key update");
     const removedDelegations = grantIds.length === 0 ? [] : await tx
       .delete(connectionGrantDelegations)
       .where(and(
