@@ -10,6 +10,7 @@ import {
 function counterDb(
   initialCount = 0,
   runOverrides: Record<string, unknown> | null = {},
+  issuesRows: Array<Record<string, unknown>> = [],
 ) {
   let observedCount = initialCount;
   const inserted: Array<Record<string, unknown>> = [];
@@ -20,6 +21,11 @@ function counterDb(
           if (Object.keys(selection).includes("count")) {
             return {
               then: (resolve: (rows: unknown[]) => unknown) => resolve([{ count: observedCount }]),
+            };
+          }
+          if (Object.keys(selection).includes("checkoutRunId")) {
+            return {
+              then: (resolve: (rows: unknown[]) => unknown) => resolve(issuesRows),
             };
           }
           return {
@@ -208,6 +214,88 @@ describe("cross-issue influence limit rollout", () => {
       targetIssueId: "55555555-5555-4555-8555-555555555555",
       kind: "update",
     })).rejects.toMatchObject({
+      status: 403,
+      details: { code: "cross_issue_influence_run_context_required" },
+    });
+    expect(fake.inserted).toEqual([]);
+  });
+
+  it("allows a free-wake agent to write to an issue it holds a checkout for", async () => {
+    // Regression for BEC-122/123: a `heartbeat_timer` wake has no
+    // `contextSnapshot.issueId`. Today that 403s every issue write to the issue
+    // the run already checked out, because the `source === target` exemption
+    // is unreachable for a null source. A checkout on the target issue re-keys
+    // the ownership exemption to the current request, so the write is not
+    // "cross-issue" and must not be counted or rejected.
+    const fake = counterDb(
+      0,
+      { contextSnapshot: {} },
+      [
+        {
+          checkoutRunId: "11111111-1111-4111-8111-111111111111",
+          executionRunId: null,
+        },
+      ],
+    );
+
+    await expect(
+      observeCrossIssueInfluence(fake.db as never, {
+        companyId: "22222222-2222-4222-8222-222222222222",
+        runId: "11111111-1111-4111-8111-111111111111",
+        agentId: "33333333-3333-4333-8333-333333333333",
+        targetIssueId: "55555555-5555-4555-8555-555555555555",
+        kind: "comment",
+      }),
+    ).resolves.toBeNull();
+    expect(fake.inserted).toEqual([]);
+  });
+
+  it("allows a free-wake agent to write to the issue it is the execution run for", async () => {
+    const fake = counterDb(
+      0,
+      { contextSnapshot: {} },
+      [
+        {
+          checkoutRunId: null,
+          executionRunId: "11111111-1111-4111-8111-111111111111",
+        },
+      ],
+    );
+
+    await expect(
+      observeCrossIssueInfluence(fake.db as never, {
+        companyId: "22222222-2222-4222-8222-222222222222",
+        runId: "11111111-1111-4111-8111-111111111111",
+        agentId: "33333333-3333-4333-8333-333333333333",
+        targetIssueId: "55555555-5555-4555-8555-555555555555",
+        kind: "update",
+      }),
+    ).resolves.toBeNull();
+    expect(fake.inserted).toEqual([]);
+  });
+
+  it("still fails closed for a free-wake write to an issue the run has no claim on", async () => {
+    const fake = counterDb(
+      0,
+      { contextSnapshot: {} },
+      [
+        {
+          // Run holds no checkout for the target issue; a *different* run holds one.
+          checkoutRunId: "99999999-9999-4999-8999-999999999999",
+          executionRunId: null,
+        },
+      ],
+    );
+
+    await expect(
+      observeCrossIssueInfluence(fake.db as never, {
+        companyId: "22222222-2222-4222-8222-222222222222",
+        runId: "11111111-1111-4111-8111-111111111111",
+        agentId: "33333333-3333-4333-8333-333333333333",
+        targetIssueId: "55555555-5555-4555-8555-555555555555",
+        kind: "comment",
+      }),
+    ).rejects.toMatchObject({
       status: 403,
       details: { code: "cross_issue_influence_run_context_required" },
     });

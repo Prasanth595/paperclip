@@ -1,6 +1,6 @@
 import { and, count, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { activityLog, heartbeatRuns } from "@paperclipai/db";
+import { activityLog, heartbeatRuns, issues } from "@paperclipai/db";
 import { isUuidLike, issueWriteDenialResponse } from "@paperclipai/shared";
 import { forbidden } from "../errors.js";
 import { logger } from "../middleware/logger.js";
@@ -110,7 +110,25 @@ export async function observeCrossIssueInfluence(
     }
 
     const sourceIssueId = readRunSourceIssueId(run.contextSnapshot);
-    if (!sourceIssueId) throw crossIssueInfluenceRunContextError();
+    if (!sourceIssueId) {
+      // Free (unattributed-source) wake runs carry no `contextSnapshot` source issue
+      // by design, so the `source === target` exemption below is unreachable for them
+      // and a write to even the issue the run already checked out was 403'd. Re-key the
+      // ownership exemption off the request's current checkout/execution claim: if this
+      // run holds `targetIssueId`'s checkout (or is its execution run), it is acting on
+      // its own source, not crossing into another issue. A write to an issue the run has
+      // no claim on still fails closed — the attribution cap is untouched.
+      const ownedTarget = await tx
+        .select({ checkoutRunId: issues.checkoutRunId, executionRunId: issues.executionRunId })
+        .from(issues)
+        .where(and(eq(issues.companyId, input.companyId), eq(issues.id, input.targetIssueId)))
+        .then((rows) => {
+          const target = rows[0];
+          return Boolean(target && (target.checkoutRunId === input.runId || target.executionRunId === input.runId));
+        });
+      if (ownedTarget) return null;
+      throw crossIssueInfluenceRunContextError();
+    }
     if (
       sourceIssueId === input.targetIssueId ||
       (input.targetIssueIdentifier && sourceIssueId.toUpperCase() === input.targetIssueIdentifier.toUpperCase())
