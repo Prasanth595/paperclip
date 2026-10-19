@@ -307,3 +307,11 @@ and sticky headers help operators scan exports. Rendered and raw view icons
 remain next to download; raw view preserves the original source. The table
 shows up to 500 data rows and 100 columns, with a notice when the preview is
 limited. Download retains the complete file.
+
+### Agent observability destinations
+
+Company administrators can configure one Braintrust or custom OTLP destination
+in Company Settings → General. Export starts disabled; native content capture
+controls apply to subsequent Paperclip-managed Codex and Claude Code execution
+preparation. See [Agent observability](agent-observability.md) for runtime support,
+credential handling and connection-test limits.

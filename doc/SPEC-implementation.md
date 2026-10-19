@@ -68,6 +68,12 @@ V1 implementation extends this baseline into a company-centric, governance-aware
 
 ## 5.1 In Scope
 
+Company administrators may opt in to native Codex and Claude Code logs/traces
+through [company agent observability](agent-observability.md), using a single
+company destination and encrypted credentials. This is separate from first-party
+Telemetry and infrastructure tracing.
+
+
 - Company lifecycle (create/list/get/update/archive)
 - Goal hierarchy linked to company mission
 - Agent lifecycle with org structure and adapter configuration

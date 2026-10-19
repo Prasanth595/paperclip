@@ -182,6 +182,7 @@ async function runExecutor(
     executionTransport?: Record<string, unknown>;
     authToken?: string;
     agentIdentity?: AdapterExecutionContext["agentIdentity"];
+    observability?: AdapterExecutionContext["observability"];
     executionTarget?: Record<string, unknown>;
     runtimeMcp?: AdapterRuntimeMcpAccess;
     prepareRemoteManagedHome?: AcpxEngineExecutorOptions["prepareRemoteManagedHome"];
@@ -229,6 +230,7 @@ async function runExecutor(
       executionTransport: options.executionTransport,
       authToken: options.authToken,
       agentIdentity: options.agentIdentity,
+      observability: options.observability,
       executionTarget: options.executionTarget,
       runtimeMcp: options.runtimeMcp,
       startupTraceContext: options.startupTraceContext,
@@ -594,6 +596,36 @@ describe("shared ACPX engine runtime behavior", () => {
     expect(runtimeCreateCount).toBe(2);
     expect(secondOnSpawn).toHaveBeenCalledOnce();
     expect(turnStartedBeforeProcessIdentity).toBe(false);
+  });
+
+  it("keeps company export config outside ACPX Codex argv and caller-owned home files", async () => {
+    const root = await makeTempRoot();
+    const home = path.join(root, "caller-codex-home");
+    await fs.mkdir(home, { recursive: true });
+    await fs.writeFile(path.join(home, "config.toml"), 'model = "caller-model"\n');
+    const { logs, meta } = await runExecutor({ agent: "codex", agentCommand: "node ./fake-acp.js", cwd: root, stateDir: path.join(root, "state"), env: { CODEX_HOME: home } }, {
+      observability: { kind: "codex", compatibilityKey: "fixture-revision", otelConfig: { exporter: { "otlp-http": { endpoint: "https://collector.example/v1/logs", protocol: "binary", headers: { authorization: "Bearer export-secret-canary" } } } }, environment: { OTEL_EXPORTER_OTLP_LOGS_TIMEOUT: "3000" } },
+    });
+    expect(await fs.readFile(path.join(home, "config.toml"), "utf8")).toBe('model = "caller-model"\n');
+    expect(logs.some(row => row.text.includes("caller-owned Codex home"))).toBe(true);
+    expect(JSON.stringify(meta)).not.toContain("export-secret-canary");
+  });
+
+  it("changes the ACPX Codex configuration home while resuming the same conversation after export changes", async () => {
+    const root = await makeTempRoot();
+    vi.stubEnv("PAPERCLIP_HOME", path.join(root, "paperclip"));
+    vi.stubEnv("CODEX_HOME", path.join(root, "source"));
+    try {
+      const config = { agent: "codex", agentCommand: "node ./fake-acp.js", cwd: root, stateDir: path.join(root, "state"), paperclipRuntimeSkills: [], paperclipSkillSync: { desiredSkills: [] } };
+      const launch = (key: string) => ({ kind: "codex" as const, compatibilityKey: key, otelConfig: { exporter: "none", trace_exporter: "none", metrics_exporter: "none" }, environment: {} });
+      const first = await runExecutor(config, { observability: launch("first") });
+      const second = await runExecutor(config, { observability: launch("second"), runtime: { sessionParams: first.result.sessionParams } });
+      const firstEnv = (first.sessionInputs[0]?.sessionOptions as { env: Record<string, string> }).env;
+      const secondEnv = (second.sessionInputs[0]?.sessionOptions as { env: Record<string, string> }).env;
+      expect(firstEnv.CODEX_HOME).not.toBe(secondEnv.CODEX_HOME);
+      expect(second.sessionInputs[0]?.resumeSessionId).toBe(first.result.sessionId);
+      expect(second.result.sessionParams?.configFingerprint).toBe(first.result.sessionParams?.configFingerprint);
+    } finally { vi.unstubAllEnvs(); }
   });
 
   it("sets Codex model, effort, and fast mode through CODEX_CONFIG without session config calls", async () => {

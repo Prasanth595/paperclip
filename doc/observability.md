@@ -1,5 +1,9 @@
 # Observability
 
+For company-configured agent content export to Braintrust or custom OTLP, see
+[Agent observability](agent-observability.md). It has a separate destination gate
+and does not change the infrastructure trace contract below.
+
 This document is the Observability contract. It covers the OpenTelemetry
 trace path, the opt-in Sentry error-monitoring path, and two local
 instrumentation contracts; see the

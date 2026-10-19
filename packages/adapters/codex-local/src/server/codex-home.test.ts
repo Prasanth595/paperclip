@@ -1057,6 +1057,26 @@ describe("stageCodexHomeForSync", () => {
     vi.restoreAllMocks();
   });
 
+  it("stages only the invocation-owned private observability profile", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "codex-otel-stage-"));
+    let staged: string | undefined;
+    try {
+      const home = path.join(root, "home"); await fs.mkdir(home);
+      const own = "paperclip-observability-run-1.config.toml";
+      const other = "paperclip-observability-run-2.config.toml";
+      await fs.writeFile(path.join(home, own), '[otel]\nexporter = "none"\n', { mode: 0o600 });
+      await fs.writeFile(path.join(home, other), "another-active-run", { mode: 0o600 });
+      staged = await stageCodexHomeForSync(home, { runId: "run-1", additionalFiles: [own] });
+      expect(await fs.readdir(staged)).toContain(own);
+      expect(await fs.readdir(staged)).not.toContain(other);
+      expect((await fs.stat(path.join(staged, own))).mode & 0o777).toBe(0o600);
+      expect((await fs.stat(staged)).mode & 0o777).toBe(0o700);
+      await expect(stageCodexHomeForSync(home, { additionalFiles: ["../escape.config.toml"] })).rejects.toThrow();
+      await fs.chmod(path.join(home, own), 0o644);
+      await expect(stageCodexHomeForSync(home, { additionalFiles: [own] })).rejects.toThrow("private regular file");
+    } finally { if (staged) await fs.rm(staged, { recursive: true, force: true }); await fs.rm(root, { recursive: true, force: true }); }
+  });
+
   // Builds a fake managed CODEX_HOME containing the full allowlist (with
   // `auth.json` as a symlink into a separate source-bytes file and a populated
   // `skills/` symlink, mirroring the real managed home) plus decoy runtime

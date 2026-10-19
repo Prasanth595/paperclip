@@ -362,6 +362,7 @@ export async function writeApiKeyAuthJson(home: string, apiKey: string): Promise
 }
 
 export interface StageCodexHomeForSyncOptions {
+  additionalFiles?: readonly string[];
   /** Run id, used only to make the staged temp-dir name traceable in logs. */
   runId?: string;
 }
@@ -583,6 +584,13 @@ export async function stageCodexHomeForSync(
     path.join(os.tmpdir(), `paperclip-codex-home-sync-${runIdPart ? `${runIdPart}-` : ""}`),
   );
   try {
+    for (const filename of options.additionalFiles ?? []) {
+      if (!/^paperclip-observability-[A-Za-z0-9_-]+\.config\.toml$/.test(filename)) throw new Error("Invalid managed observability profile");
+      const source = path.join(effectiveCodexHome, filename);
+      const stat = await fs.lstat(source);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || (typeof process.getuid === "function" && stat.uid !== process.getuid()) || (stat.mode & 0o077) !== 0) throw new Error("Managed observability profile must be an owned private regular file");
+      await fs.writeFile(path.join(stagedHome, filename), await fs.readFile(source), { mode: 0o600, flag: "wx" });
+    }
     for (const entry of CODEX_SYNC_ALLOWLIST) {
       await stageCodexHomeEntry(effectiveCodexHome, stagedHome, entry);
     }
