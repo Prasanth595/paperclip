@@ -1,11 +1,6 @@
 ---
 name: forgejo-actions
-description: Inspect and drive Forgejo Actions CI on forgejo.big.netlobo.com with fj-ex — list workflow runs and jobs, stream job logs, download artifacts, cancel or rerun runs, and trigger workflow_dispatch. Use when a task needs to check or control CI on a Forgejo repository. Do not use for GitHub Actions — use the GitHub web UI/gh there.
-tags:
-  - forgejo
-  - actions
-  - ci
-  - fj-ex
+description: Inspect and drive Forgejo Actions CI on forgejo.big.netlobo.com with fj-ex — list runs and jobs, stream logs, download artifacts, cancel or rerun runs, and trigger workflow_dispatch. Forgejo CI only; use gh for GitHub.
 ---
 
 # Forgejo Actions (fj-ex)

@@ -1,12 +1,6 @@
 ---
 name: forgejo-pr-workflow
-description: Work against self-hosted Forgejo (forgejo.big.netlobo.com) with the fj CLI — authenticate, clone, branch, commit, push, open and merge pull requests, create and comment on issues, and reply to review comments. Use when a task touches Forgejo repositories, issues, or pull requests. Do not use for GitHub repos — use the github-pr-workflow skill for those.
-tags:
-  - forgejo
-  - fj
-  - pull-requests
-  - issues
-  - code-review
+description: Work against self-hosted Forgejo (forgejo.big.netlobo.com) with the fj CLI — authenticate, clone, commit, push, open and merge PRs, and comment on issues and reviews. Use when a task touches Forgejo repos, issues, or PRs. Not for GitHub.
 ---
 
 # Forgejo Pull Request Workflow (fj)
