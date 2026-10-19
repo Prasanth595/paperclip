@@ -194,7 +194,7 @@ export type AcpxMcpServerBinding = {
   name: string; command: string; args: string[]; env: Record<string, string>; runnerOwned: false;
 };
 
-export type AcpxSemanticToolSession = Omit<RunnerToolBridgeOptions, "secret">;
+export type AcpxSemanticToolSession = Omit<RunnerToolBridgeOptions, "secret" | "preloadClaudeTaskTools">;
 
 export interface AcpxRetainedCleanupFailure {
   resource:
@@ -582,7 +582,10 @@ export class AcpxRuntimeHost {
       toolBridge = options.semanticTools
         ? await acquireAbortableAdmissionResource({
             signal: options.signal,
-            acquire: () => startRunnerToolBridge(options.semanticTools!),
+            acquire: () => startRunnerToolBridge({
+              ...options.semanticTools!,
+              preloadClaudeTaskTools: options.agent === "claude",
+            }),
             resource: "tool_bridge",
             releaseLate: (lateToolBridge) => lateToolBridge.close(),
             reportFailure: (failure) =>
