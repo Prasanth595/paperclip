@@ -5878,6 +5878,29 @@ export function recoveryService(
     return Math.max(1, Math.floor(asNumber(raw, fallback)));
   }
 
+  // Keep actual finalizers in order, not just their bounded waits. A hook that
+  // times out can still write lastHeartbeatAt later; starting the next one early
+  // could make both emit agent.first_heartbeat. Share across overlapping sweeps.
+  const orphanedAgentFinalizations = new Map<string, Promise<void>>();
+  function finalizeOrphanedAgent(
+    agentId: string,
+    outcome: "succeeded" | "cancelled" | "interrupted",
+    failureReason: string | null,
+  ): Promise<void> {
+    const previous = orphanedAgentFinalizations.get(agentId) ?? Promise.resolve();
+    const current = previous.catch(() => {}).then(async () => {
+      await deps.finalizeAgentStatus?.(agentId, outcome, failureReason);
+    });
+    orphanedAgentFinalizations.set(agentId, current);
+    const forget = () => {
+      if (orphanedAgentFinalizations.get(agentId) === current) {
+        orphanedAgentFinalizations.delete(agentId);
+      }
+    };
+    void current.then(forget, forget);
+    return current;
+  }
+
   // Backstop reconciler: terminalizes a "running" run that can no longer reach a
   // terminal status on its own. The run finalizer writes the terminal status in
   // a step that is separate from the agent status=done PATCH. When the teardown
@@ -5902,13 +5925,15 @@ export function recoveryService(
   // - Process-death authority: the run has no in-memory handle and its recorded
   //   process and process group are both gone. This catches a hard server crash
   //   that skipped the graceful teardown, even when the issue is not terminal.
+  class OrphanedRunCleanupTimeoutError extends Error {}
+
   async function waitForOrphanedRunCleanup(operation: () => Promise<void>): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
         operation(),
         new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error("orphaned run cleanup exceeded 5000ms")), 5_000);
+          timer = setTimeout(() => reject(new OrphanedRunCleanupTimeoutError("orphaned run cleanup exceeded 5000ms")), 5_000);
         }),
       ]);
     } finally {
@@ -6120,11 +6145,13 @@ export function recoveryService(
         );
       }
       try {
-        await waitForOrphanedRunCleanup(async () => deps.finalizeAgentStatus?.(updated.agentId, terminalStatus, updated.error));
+        await waitForOrphanedRunCleanup(() => finalizeOrphanedAgent(updated.agentId, terminalStatus, updated.error));
       } catch (error) {
         logger.error(
           { err: error, runId: run.id },
-          "orphaned run agent finalization failed; operator recovery required",
+          error instanceof OrphanedRunCleanupTimeoutError
+            ? "orphaned run agent finalization wait exceeded 5000ms; queued work may still complete"
+            : "orphaned run agent finalization failed; operator recovery required",
         );
       }
     };
@@ -6266,121 +6293,124 @@ export function recoveryService(
     // clear the lock in the same pass instead of waiting for the run to reach a
     // terminal status by another route.
     const deferredTeardowns: Array<() => Promise<void>> = [];
-    for (const row of runRows) {
-      const outcome = await terminalizeOrphanedRunningRun(row, {
-        deferredTeardowns,
-        referencingIssueTerminalStatus:
-          issueTerminalStatusByRunId.get(row.id) ?? null,
-        runReferencedByActiveIssue: runIdsReferencedByActiveIssue.has(row.id),
-      });
-      runStatusById.set(row.id, outcome.status);
-      if (outcome.terminalized) result.terminalizedRunIds.push(row.id);
-    }
-
-    const isCleanable = (runId: string | null) => {
-      if (!runId) return true;
-      const status = runStatusById.get(runId);
-      if (!status) return true; // missing run row → no real claim
-      return TERMINAL_HEARTBEAT_RUN_STATUSES.has(status);
-    };
-
-    for (const issue of candidates) {
-      const originalOwner = issue.executionRunId ? runById.get(issue.executionRunId) : undefined;
-      // The pre-pass can lose its terminal write to the executor and observe a
-      // newer terminal status. Do not test claim ownership using the old status.
-      const owner = originalOwner ? { ...originalOwner,
-        status: runStatusById.get(originalOwner.id) ?? originalOwner.status } : undefined;
-      if (owner && isExplicitContinuationRetryClaim(issue, owner)) {
-        // A terminal row can still own cleanup and a pending bounded retry.
-        // Re-enter the same policy rather than erasing its exact-owner proof.
-        // That policy handles pending cleanup, newer input, and final denial.
-        await deps.settleExplicitContinuationRetry?.(owner);
-        continue;
-      }
-      if (
-        !isCleanable(issue.checkoutRunId) ||
-        !isCleanable(issue.executionRunId)
-      ) {
-        continue;
+    try {
+      for (const row of runRows) {
+        const outcome = await terminalizeOrphanedRunningRun(row, {
+          deferredTeardowns,
+          referencingIssueTerminalStatus:
+            issueTerminalStatusByRunId.get(row.id) ?? null,
+          runReferencedByActiveIssue: runIdsReferencedByActiveIssue.has(row.id),
+        });
+        runStatusById.set(row.id, outcome.status);
+        if (outcome.terminalized) result.terminalizedRunIds.push(row.id);
       }
 
-      const updated = await db
-        .update(issues)
-        .set({
-          checkoutRunId: null,
-          executionRunId: null,
-          executionAgentNameKey: null,
-          executionLockedAt: null,
-          updatedAt: new Date(),
-        })
-        .where(
-          and(
-            eq(issues.id, issue.id),
-            issue.checkoutRunId
-              ? eq(issues.checkoutRunId, issue.checkoutRunId)
-              : isNull(issues.checkoutRunId),
-            issue.executionRunId
-              ? eq(issues.executionRunId, issue.executionRunId)
-              : isNull(issues.executionRunId),
-          ),
-        )
-        .returning({ id: issues.id })
-        .then((rows) => rows[0] ?? null);
+      const isCleanable = (runId: string | null) => {
+        if (!runId) return true;
+        const status = runStatusById.get(runId);
+        if (!status) return true; // missing run row → no real claim
+        return TERMINAL_HEARTBEAT_RUN_STATUSES.has(status);
+      };
 
-      if (!updated) continue;
+      for (const issue of candidates) {
+        const originalOwner = issue.executionRunId ? runById.get(issue.executionRunId) : undefined;
+        // The pre-pass can lose its terminal write to the executor and observe a
+        // newer terminal status. Do not test claim ownership using the old status.
+        const owner = originalOwner ? { ...originalOwner,
+          status: runStatusById.get(originalOwner.id) ?? originalOwner.status } : undefined;
+        if (owner && isExplicitContinuationRetryClaim(issue, owner)) {
+          // A terminal row can still own cleanup and a pending bounded retry.
+          // Re-enter the same policy rather than erasing its exact-owner proof.
+          // That policy handles pending cleanup, newer input, and final denial.
+          await deps.settleExplicitContinuationRetry?.(owner);
+          continue;
+        }
+        if (
+          !isCleanable(issue.checkoutRunId) ||
+          !isCleanable(issue.executionRunId)
+        ) {
+          continue;
+        }
 
-      result.cleared += 1;
-      result.issueIds.push(updated.id);
+        const updated = await db
+          .update(issues)
+          .set({
+            checkoutRunId: null,
+            executionRunId: null,
+            executionAgentNameKey: null,
+            executionLockedAt: null,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(issues.id, issue.id),
+              issue.checkoutRunId
+                ? eq(issues.checkoutRunId, issue.checkoutRunId)
+                : isNull(issues.checkoutRunId),
+              issue.executionRunId
+                ? eq(issues.executionRunId, issue.executionRunId)
+                : isNull(issues.executionRunId),
+            ),
+          )
+          .returning({ id: issues.id })
+          .then((rows) => rows[0] ?? null);
 
-      await logActivity(db, {
-        companyId: issue.companyId,
-        actorType: "system",
-        actorId: "system",
-        agentId: null,
-        runId: null,
-        action: "issue.stale_lock_cleared",
-        entityType: "issue",
-        entityId: updated.id,
-        details: {
-          source: "recovery.sweep_stale_issue_locks",
-          clearedCheckoutRunId: issue.checkoutRunId,
-          clearedExecutionRunId: issue.executionRunId,
-          referencedRunStatuses: Object.fromEntries(runStatusById),
-        },
-      });
-    }
+        if (!updated) continue;
 
-    // Locks are clear; now tear down crashed runs' leases and agent status with
-    // bounded concurrency so one stalled provider cannot serialize startup.
-    const TEARDOWN_CONCURRENCY = 8;
-    let nextTeardown = 0;
-    if (deferredTeardowns.length > 0) {
-      const teardowns = Promise.all(
-        Array.from({ length: Math.min(TEARDOWN_CONCURRENCY, deferredTeardowns.length) }, async () => {
-          while (nextTeardown < deferredTeardowns.length) {
-            await deferredTeardowns[nextTeardown++]!();
-          }
-        }),
-      );
-      // Per-hook timeouts alone still make startup wait grow with the number
-      // of crashed runs. Cap the whole teardown wait; workers continue in the
-      // background, and the lease backstop still covers stranded leases.
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        await Promise.race([
-          teardowns,
-          new Promise<void>((resolve) => {
-            timer = setTimeout(() => {
-              logger.warn(
-                { teardownCount: deferredTeardowns.length },
-                "stale issue lock sweep teardown exceeded 60000ms; continuing in background",
-              );
-              resolve();
-            }, 60_000);
+        result.cleared += 1;
+        result.issueIds.push(updated.id);
+
+        await logActivity(db, {
+          companyId: issue.companyId,
+          actorType: "system",
+          actorId: "system",
+          agentId: null,
+          runId: null,
+          action: "issue.stale_lock_cleared",
+          entityType: "issue",
+          entityId: updated.id,
+          details: {
+            source: "recovery.sweep_stale_issue_locks",
+            clearedCheckoutRunId: issue.checkoutRunId,
+            clearedExecutionRunId: issue.executionRunId,
+            referencedRunStatuses: Object.fromEntries(runStatusById),
+          },
+        });
+      }
+    } finally {
+      // Even a failed pre-pass or lock/activity write must drain teardown for
+      // already-terminalized runs: later sweeps cannot rediscover that work.
+      // Keep bounded concurrency so one stalled provider cannot serialize startup.
+      const TEARDOWN_CONCURRENCY = 8;
+      let nextTeardown = 0;
+      if (deferredTeardowns.length > 0) {
+        const teardowns = Promise.all(
+          Array.from({ length: Math.min(TEARDOWN_CONCURRENCY, deferredTeardowns.length) }, async () => {
+            while (nextTeardown < deferredTeardowns.length) {
+              await deferredTeardowns[nextTeardown++]!();
+            }
           }),
-        ]);
-      } finally {
-        if (timer) clearTimeout(timer);
+        );
+        // Per-hook timeouts alone still make startup wait grow with the number
+        // of crashed runs. Cap the whole teardown wait; workers continue in the
+        // background, and the lease backstop still covers stranded leases.
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            teardowns,
+            new Promise<void>((resolve) => {
+              timer = setTimeout(() => {
+                logger.warn(
+                  { teardownCount: deferredTeardowns.length },
+                  "stale issue lock sweep teardown exceeded 60000ms; continuing in background",
+                );
+                resolve();
+              }, 60_000);
+            }),
+          ]);
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
       }
     }
 
