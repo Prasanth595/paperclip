@@ -4,11 +4,13 @@ import { listServerAdapters, requireServerAdapter } from "./registry.js";
 import * as executionTarget from "@paperclipai/adapter-utils/execution-target";
 import { BUILTIN_ADAPTER_TYPES } from "./builtin-adapter-types.js";
 
-const { probeInstallation, probeGrokInstallation, probePiInstallation } = vi.hoisted(() => ({
+const { probeInstallation, probeGrokInstallation, probePiInstallation, verifyApiKey } = vi.hoisted(() => ({
+  verifyApiKey: vi.fn(),
   probeInstallation: vi.fn(),
   probeGrokInstallation: vi.fn(),
   probePiInstallation: vi.fn(),
 }));
+vi.mock("../services/ai-api-key-test.js", () => ({ validateAiApiKey: verifyApiKey }));
 vi.mock("../vendor/paperclip-runner/live/index.js", () => ({
   probeAcpxClaudeInstallation: probeInstallation,
   probeAcpxGrokInstallation: probeGrokInstallation,
@@ -96,6 +98,7 @@ describe("built-in runtime connection tool delivery", () => {
 
 describe("native ACPX environment checks", () => {
   beforeEach(() => {
+    verifyApiKey.mockReset().mockResolvedValue(undefined);
     probeInstallation.mockReset().mockResolvedValue(undefined);
     probeGrokInstallation.mockReset().mockResolvedValue(undefined);
     probePiInstallation.mockReset().mockResolvedValue(undefined);
@@ -107,6 +110,32 @@ describe("native ACPX environment checks", () => {
     adapterType: "paperclip_runner",
     config: { provider: "acpx", acpxAgent: "claude", model: "claude-sonnet-5" },
   };
+
+  it("verifies a native Claude key without the global CLI or a model prompt", async () => {
+    const result = await requireServerAdapter("paperclip_runner").testEnvironment!({ ...context,
+      config: { ...context.config, env: { ANTHROPIC_API_KEY: "test-key" } },
+    });
+    expect(result.status).toBe("pass");
+    expect(verifyApiKey).toHaveBeenCalledExactlyOnceWith("anthropic", "test-key");
+    expect(result.checks.map(check => check.code)).toEqual(["acpx_runtime_ready", "ai_connection_api_key_reverified"]);
+  });
+
+  it.each(["ai_connection_api_key_rejected", "ai_connection_verification_failed"])("fails setup on %s", async code => {
+    verifyApiKey.mockRejectedValue({ details: { code } });
+    const result = await requireServerAdapter("paperclip_runner").testEnvironment!({ ...context,
+      config: { ...context.config, env: { ANTHROPIC_API_KEY: "test-key" } },
+    });
+    expect(result.status).toBe("fail");
+    expect(result.checks.at(-1)).toMatchObject({ code, level: "error" });
+  });
+
+  it.each(["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"])("preserves the supplementary probe for custom routing via %s", async name => {
+    const result = await requireServerAdapter("paperclip_runner").testEnvironment!({ ...context,
+      config: { ...context.config, env: { ANTHROPIC_API_KEY: "test-key", [name]: "configured" } },
+    });
+    expect(verifyApiKey).not.toHaveBeenCalled();
+    expect(result.checks.some(check => check.code === "ai_connection_api_key_reverified")).toBe(false);
+  });
 
   it("reports unsupported local platforms before a successful CLI login can mask them", async () => {
     probeInstallation.mockRejectedValue(new Error("ACPX Claude requires a supported runtime platform"));

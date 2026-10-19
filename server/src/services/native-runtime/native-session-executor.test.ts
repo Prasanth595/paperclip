@@ -10255,6 +10255,20 @@ describe("runnerd provider runtime wiring", () => {
     await expect(readFile(authPath, "utf8")).resolves.toBe(auth);
   });
 
+  it.each(["isolated", "preconfigured"] as const)("pins Claude v9 permissions and effort at daemon startup in %s mode", async homeMode => {
+    const current = { ...execution, schema: "paperclip.native-execution-input.v9", homeMode,
+      provider: { kind: "acpx", agent: "claude", model: "claude-opus-5-5", permissionMode: "approve-all", claudeEffort: "high" },
+      session: { ...execution.session, driverKind: "acpx_runtime" },
+    } as unknown as NativeExecutionInput;
+    await createRunnerdBackend({ db: leaseDb(current), execution: current,
+      runnerInstanceId: `claude-v9-pinned-${homeMode}` });
+    state.createBackend.mock.calls.at(-1)![1].codexTransportFactory!();
+    expect(state.createTransport.mock.calls.at(-1)![0]).toMatchObject({
+      provider: "acpx", acpxAgent: "claude", acpxPermissionMode: "approve-all",
+      acpxPermissionModePinned: true, claudeEffort: "high", homeMode,
+    });
+  });
+
   it("copies back and removes Grok credentials from the exact ACPX launch home", async () => {
     const priorHome = process.env.PAPERCLIP_HOME;
     const privateRoot = await realpath(isolatedStateDirectory);

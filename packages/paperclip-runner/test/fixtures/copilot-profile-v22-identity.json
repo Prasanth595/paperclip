@@ -1,5 +1,5 @@
 {
-  "commandDigest": "sha256:5c0c027a80e9deb3794f7192dbd5146dc00fe248ae3cf017e4a8af4e736e0814",
+  "commandDigest": "sha256:9027ee2bdf9180e3267b7d05b56b0703943251a29713c393f7a3f2ef1072efd2",
   "declaration": {
     "schema": "paperclip.acpx_profile_declaration.v1",
     "agent": "copilot",
@@ -30,14 +30,14 @@
     "semanticBridgeSourceSha256": "cf136da18e2cdbefae8e01d23d2c93f64eb7aebccaec938e84c2887c888f87ee",
     "toolEvidenceSourceSha256": "49d7d09eb6957e596a173b0afd763544afe582f0c1f05cc0992fe51916a8fdb3",
     "semanticNormalizedInputContract": "validated-forwarded-input-commit-v1",
-    "semanticSidecarSourceSha256": "729ea268abc7d5c9e4c2c04b83932fe1f24e65f42720e0d4450716e5c8eb34b3",
-    "semanticDirectDriverSourceSha256": "9c27a6ef55d65190af11b597ee2214ba836b4d992cb75d2eccf9c3ea3311d07c",
+    "semanticSidecarSourceSha256": "ddd98aabe20f4d40b04bb58126bda548a9d85b8234a3f9ea84b6db414e9b4814",
+    "semanticDirectDriverSourceSha256": "72d5134a9567ced685bc942adf14ec5dfba04bcd6b0eeabe77eac0cec5c434c3",
     "semanticValidationSourceSha256": "02fbb92681c78c5de5d2f1aae25aabc25a0e5df6b0ff4baccac652192a8da975",
     "semanticNormalizationSourceSha256": "8b628b82e8eacc91cdcc6fdca2210ba4cf282f01e9c6f74e95ff271655b5047e",
     "semanticCompletionContractSourceSha256": "a104278d4d0e063a69bb464938db117dc27691b5bd4590c5a359e11f4917f623",
     "semanticValidatorsSourceSha256": "38ae5379d47df633564730ec1359a16d21c0d0a68addb5e488b58c697f13362c",
-    "semanticSchemaBundleSourceSha256": "36ad8a83a17111167d3cc4ef4123b36fa648a1825acd59bd90b3f8b566a4d335",
-    "semanticSidecarProtocolSourceSha256": "334b67857bd81e9924186890258cb2ad41f92b1ef68ec60fa5c5d9fbb277673c",
+    "semanticSchemaBundleSourceSha256": "5e957fe0f0ba164441d6a5b8a276e52cf6f2ffaf99741faca99cff05e539221c",
+    "semanticSidecarProtocolSourceSha256": "03c0c95b900f9dc18f29f6be27b8c79bc0bcab29780190d46a74e95328081236",
     "semanticSidecarReceiptCommitContract": "correlated-tool-resolve-v1",
     "semanticContinuationSourceSha256": "eb877719ef32a935afa4ec93f0f1c43d58d55bc4e1042965febcac4c45ed851c"
   }

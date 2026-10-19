@@ -1,5 +1,5 @@
 {
-  "commandDigest": "sha256:d79008c45d3c7b5f6470955919a4c26f3c3060d54308e6971a9d52263fdfc682",
+  "commandDigest": "sha256:dd67387487dadb08da76534c057dc0aa059f7698d1779cbd5fc452813828167a",
   "declaration": {
     "schema": "paperclip.acpx_profile_declaration.v1",
     "agent": "pi",
@@ -40,12 +40,11 @@
       "recovery": "mode-bound-v1"
     },
     "modelSelection": "caller-selected-native-verified-v1",
-    "providerConfigurationSourceSha256": "75a9a13f13f224dc092bd8ebf49e8747162172943761e44476c8eb18d80c52d4",
-    "credentialEnvironmentSourceSha256": "54fd09ad430dac04df98d829061f6701e73b5bf2a0f4de836d2ac36ee511009f",
-    "runtimeSandboxSourceSha256": "e196f4d0df8257a27778beb7bb89070fcead2eec58a265e4f9748ccdacde4dbf",
-    "recoveryIdentitySourceSha256": "61eed640ede944fcd07b25b8a2c48adb30d0e881043ca5549ce2f846ac8652ae",
+    "providerConfigurationSourceSha256": "d5b4c1a426afc85f040c9b55358d1d645299586dc8cec72d1be2509187ca3865",
+    "credentialEnvironmentSourceSha256": "f8dc40ea1aa894bd44754a35a8f65fbcaa2f4c7ffc88cc5fdaa965e0d378d9bc",
+    "runtimeSandboxSourceSha256": "144d62b3415cfedf272b5b052e14af1e41fe50a644af84247fc9c20c7ef7edde",
+    "recoveryIdentitySourceSha256": "8479e04da1ae2f7742e34f045b0270b99e9c3ae39a5b8fb9f164e5776d83224c",
     "nativeCancellation": "acknowledged-cancelled-terminal-preserves-usage-v1",
-    "dependencySecurityPatchSha256": "5273a195b952f233336122842faaf650193c04f36b9359d20d4d63079b0ce814",
-    "openRouterAttributionSourceSha256": "1211191529d6073b733b311c3d69cada4973eede0f3e540c46e261f78e0b90f9"
+    "dependencySecurityPatchSha256": "5273a195b952f233336122842faaf650193c04f36b9359d20d4d63079b0ce814"
   }
 }
