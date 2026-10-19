@@ -263,9 +263,6 @@ export function instanceSettingsRoutes(db: Db, pluginWorkers?: PluginWorkerManag
   );
 
   router.get("/instance/settings/experimental", async (req, res) => {
-    // Experimental settings are readable by any authenticated org member
-    // or instance admin. Cloud stack admins can update experiments; other
-    // instance-wide operational controls still require instance-admin access.
     assertBoardOrgAccess(req);
     res.json(await svc.getExperimental());
   });

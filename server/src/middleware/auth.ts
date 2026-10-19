@@ -788,9 +788,6 @@ async function resolveCloudTenantActorOnce(
     // company-scoped. Turning the flag off de-elevates on the next request —
     // there is no role row to clean up.
     isInstanceAdmin: await resolveOwnerInstanceAdmin(db, stackRole),
-    // Stack admins may opt into experiments without receiving unrelated
-    // instance-admin powers. Resolve this from the current trusted stack role
-    // on every request so a role downgrade takes effect immediately.
     canManageExperimentalSettings: stackRole === "admin",
     source: "cloud_tenant",
   };

@@ -25,7 +25,6 @@ declare global {
           status?: string;
         }>;
         isInstanceAdmin?: boolean;
-        /** Trusted Cloud stack-admin authority for experimental settings only. */
         canManageExperimentalSettings?: boolean;
         keyId?: string;
         keyScope?: AgentApiKeyScope;
