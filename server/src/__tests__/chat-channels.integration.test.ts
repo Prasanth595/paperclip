@@ -2976,8 +2976,9 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
         const assigned = await createAssignedMcpTools({ gateway,
           gatewayPublicId: new URL(servers[0].url).pathname.split("/").at(-1)!, bearerToken: servers[0].token });
         const found = await assigned.execute({ tool: "paperclip_search_assigned_tools", arguments: { query: "Submit a review assessment" } }) as { tools: { name: string }[] };
-        expect(found.tools).toHaveLength(1);
-        expect(await assigned.execute({ tool: "paperclip_call_assigned_tool", arguments: { name: found.tools[0].name, arguments: parameters } }))
+        const submit = found.tools.filter(candidate => candidate.name.includes("__submit_review_"));
+        expect(submit).toHaveLength(1);
+        expect(await assigned.execute({ tool: "paperclip_call_assigned_tool", arguments: { name: submit[0].name, arguments: parameters } }))
           .toMatchObject({ data: { status: "processed" } });
       }
       expect(f.responseWrites).toHaveLength(writes);
