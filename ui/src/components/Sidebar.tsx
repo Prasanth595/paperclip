@@ -269,7 +269,7 @@ export function Sidebar({ children }: { children?: ReactNode }) {
 
         {streamlinedUiEnabled ? (
           <SidebarSection
-            label={t("nav.org")}
+            label={t("nav.orgSection")}
             collapsible={{ open: organizationOpen, onOpenChange: setOrganizationOpen }}
           >
             <SidebarNavItem to="/agents" label={t("nav.agents.section")} icon={Users} />

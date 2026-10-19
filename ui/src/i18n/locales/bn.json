@@ -28,6 +28,7 @@
     "company": "Company",
     "organization": "Organization",
     "org": "Org",
+    "orgSection": "Org",
     "connectors": "Connectors",
     "audit": "Audit",
     "timeline": "Timeline",
