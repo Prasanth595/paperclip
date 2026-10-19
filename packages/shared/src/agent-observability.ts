@@ -35,10 +35,18 @@ export const agentObservabilityDestinationSchema = z.discriminatedUnion("provide
 ]);
 export type AgentObservabilityDestination = z.infer<typeof agentObservabilityDestinationSchema>;
 
+/** Saved custom credentials belong to their HTTP origin, including scheme and port. */
+export function isSameOtlpOrigin(previous: AgentObservabilityDestination, next: AgentObservabilityDestination): boolean {
+  if (previous.provider !== "otlp" || next.provider !== "otlp") return false;
+  try { return new URL(previous.endpointBaseUrl).origin === new URL(next.endpointBaseUrl).origin; }
+  catch { return false; }
+}
+
 const forbiddenHeaders = new Set(["host", "content-length", "content-type", "connection", "transfer-encoding", "accept", "accept-encoding"]);
 const headerName = z.string().min(1).max(128).regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/)
   .transform(value => value.toLowerCase()).refine(value => !forbiddenHeaders.has(value), "This header is managed by the transport.");
 const headerValue = z.string().min(1).refine(value => !/[\x00-\x1f\x7f-\x9f]/.test(value), "Header values cannot contain control characters.")
+  .refine(value => { try { encodeURIComponent(value); return true; } catch { return false; } }, "Header values must contain valid Unicode.")
   .refine(value => new TextEncoder().encode(value).length <= 4096, "Header values must be at most 4096 bytes.")
   .refine(value => !/^(?:\*{3,}|•{3,}|<redacted>|\[redacted\])$/i.test(value), "Enter the credential rather than a masked placeholder.");
 export const agentObservabilityHeadersSchema = z.array(z.strictObject({ name: headerName, value: headerValue.optional() })).max(16)

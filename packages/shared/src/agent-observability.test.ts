@@ -11,6 +11,7 @@ it.each([
   [{ name: "Authorization", value: "valid" }, { name: "authorization", value: "duplicate" }],
   [{ name: "host", value: "forged" }], [{ name: "x-auth", value: "a\r\nb" }],
   [{ name: "x-auth", value: "[REDACTED]" }], [{ name: "x-auth", value: "é".repeat(2049) }],
+  [{ name: "x-auth", value: "\ud800" }], [{ name: "x-auth", value: "\udc00" }],
 ].map(headers => ({ headers })))("rejects invalid headers", ({ headers }) => {
   expect(updateAgentObservabilitySchema.safeParse({ ...request, credentials: { mode: "replace", headers } }).success).toBe(false);
 });

@@ -57,6 +57,35 @@ it("preserves an unsaved secret on conflict, prevents resubmission, then clears 
   expect(button("Save changes").disabled).toBe(true); click(button("Reload saved settings")); expect(reload).toHaveBeenCalledOnce();
   expect(element.querySelector('input[type="password"]')).toBeNull();
 });
+it("preserves a draft when a background read finds another administrator's revision", async () => {
+  await render(props()); click(button("Replace API key")); fill('input[type="password"]', "background-draft-canary");
+  fill('#agent-observability-project', "30000000-0000-4000-8000-000000000002");
+  const newer = { ...saved, revision: "20000000-0000-4000-8000-000000000002", enabled: true };
+  await render(props({ settings: newer }));
+  expect(element.querySelector<HTMLInputElement>('input[type="password"]')!.value).toBe("background-draft-canary");
+  expect(element.querySelector<HTMLInputElement>('#agent-observability-project')!.value).toBe("30000000-0000-4000-8000-000000000002");
+  expect(button("Save changes").disabled).toBe(true);
+  expect(element.textContent).toContain("Another administrator changed these settings");
+  click(button("Reload saved settings"));
+  expect(element.querySelector('input[type="password"]')).toBeNull();
+  expect(element.querySelector<HTMLInputElement>('#agent-observability-project')!.value).toBe(saved.destination.provider === "braintrust" ? saved.destination.projectId : "");
+  expect(element.querySelector('[role="switch"]')!.getAttribute("aria-checked")).toBe("true");
+});
+it("erases entered credentials after an explicitly accepted save", async () => {
+  await render(props({ resetKey: 0 })); click(button("Replace API key")); fill('input[type="password"]', "saved-draft-canary");
+  click(button("Save changes")); expect(onSave).toHaveBeenCalledOnce();
+  await render(props({ settings: { ...saved, revision: "20000000-0000-4000-8000-000000000003" }, resetKey: 1 }));
+  expect(element.querySelector('input[type="password"]')).toBeNull();
+  expect(element.textContent).not.toContain("Another administrator");
+});
+it("requires re-entry of saved custom headers when the endpoint origin changes", async () => {
+  const custom: AgentObservabilitySettings = { ...saved, destination: { provider: "otlp", endpointBaseUrl: "https://collector.example/otel" }, headerNames: ["authorization"] };
+  await render(props({ settings: custom }));
+  fill('#agent-observability-endpoint', "https://another.example/otel"); click(button("Save changes"));
+  expect(onSave).not.toHaveBeenCalled(); expect(element.textContent).toContain("Re-enter every header value");
+  fill('input[type="password"]', "new-origin-credential"); click(button("Save changes"));
+  expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ credentials: { mode: "replace", headers: [{ name: "authorization", value: "new-origin-credential" }] } }));
+});
 it("erases the previous company draft and receipt when company changes", async () => {
   await render(props()); click(button("Replace API key")); fill('input[type="password"]', "old-company-secret-canary");
   await render(props({ companyId: "another-company", settings: null }));

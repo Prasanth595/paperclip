@@ -27,7 +27,15 @@ export async function prepareAcpxCodexObservabilityHome(home: string, launch: Pr
       await chmod(path.join(target, name), 0o600);
     } finally { await rm(temporary, { force: true }); }
   }
-  for (const name of ["auth.json", "config.json", "instructions.md"]) {
+  // Preserve the existing managed credential link. Codex refreshes this file
+  // in place; a launch-owned copy would lose the rotated token on preparation.
+  const authLink = path.join(target, "auth.json");
+  const temporaryAuthLink = path.join(target, `.auth-${randomUUID()}.tmp`);
+  try {
+    await symlink(path.join(home, "auth.json"), temporaryAuthLink, "file");
+    await rename(temporaryAuthLink, authLink);
+  } finally { await rm(temporaryAuthLink, { force: true }); }
+  for (const name of ["config.json", "instructions.md"]) {
     try { await atomicFile(name, await readFile(path.join(home, name))); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   }

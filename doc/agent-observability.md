@@ -9,7 +9,7 @@ headers. The receiver must be reachable from every execution environment;
 `localhost` refers to the execution host, including a remote sandbox.
 
 This is separate from Paperclip's first-party Telemetry and its content-free
-infrastructure tracing. Configuring it does not change either data path.
+[infrastructure tracing](observability.md). Configuring it does not change either data path.
 
 ## Capture and supported runtimes
 
@@ -62,7 +62,8 @@ secret; removal uses the secret service to retire it. Braintrust project
 routing is derived from the current project ID, independently of the API key.
 
 Reads return configured status and header names. Blank existing custom header
-values retain the saved secret; new/renamed headers require values. Removing a
+values retain the saved secret at the same HTTP origin; a change of scheme, host,
+or port requires every retained header value to be entered again. New/renamed headers require values. Removing a
 row removes that header. API-key replacement is explicit, and Cancel clears
 entered secrets. Revisions prevent another administrator's edit being silently
 overwritten. Credential values are excluded from task environment manifests,

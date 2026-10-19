@@ -4,6 +4,7 @@ import { companyObservability, type Db } from "@paperclipai/db";
 import {
   agentObservabilityCaptureSchema, agentObservabilityDestinationSchema, agentObservabilityHeadersSchema,
   DEFAULT_AGENT_OBSERVABILITY_CAPTURE, updateAgentObservabilitySchema,
+  isSameOtlpOrigin,
   type AgentObservabilitySettings, type AgentObservabilityTestReceipt, type UpdateAgentObservabilityRequest, type AgentObservabilityUnavailableReason,
 } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
@@ -76,6 +77,12 @@ export function agentObservabilityService(db: Db) {
         assertRevision(previous, data.expectedRevision);
         if ((!previous || previous.destination.provider !== data.destination.provider) && data.credentials.mode === "keep") {
           throw unprocessable("Provide credentials when choosing a new destination", { code: "observability_credentials_required" });
+        }
+        const originChanged = previous?.destination.provider === "otlp" && data.destination.provider === "otlp"
+          && !isSameOtlpOrigin(previous.destination, data.destination);
+        if (originChanged && (data.credentials.mode === "keep" && previous.headerNames.length > 0
+          || data.credentials.mode === "replace" && "headers" in data.credentials && data.credentials.headers.some(header => header.value === undefined))) {
+          throw unprocessable("Re-enter every header value for the new endpoint, or remove the header", { code: "observability_credentials_required" });
         }
         const secrets = secretService(tx);
         let secretId = previous?.credentialsSecretId ?? null;

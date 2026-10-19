@@ -81,6 +81,31 @@ describe("company agent observability", () => {
     await f.service.configure(f.companyId, "alice", { expectedRevision: saved.revision, enabled: true, capture: saved.capture, destination: { provider: "braintrust", projectId }, credentials: { mode: "keep" } });
     expect(await f.service.resolve(f.companyId)).toMatchObject({ headers: { authorization: "Bearer rotated", "x-bt-parent": `project_id:${projectId}` } });
   });
+  it("binds retained custom credentials to their original endpoint origin", async () => {
+    const f = await fixture();
+    const saved = await f.service.configure(f.companyId, "alice", { expectedRevision: null, enabled: true, capture: { ...DEFAULT_AGENT_OBSERVABILITY_CAPTURE },
+      destination: { provider: "otlp", endpointBaseUrl: "https://collector.example/otel" },
+      credentials: { mode: "replace", headers: [{ name: "authorization", value: "old-origin-credential" }] } });
+    const [row] = await db.select().from(companyObservability).where(eq(companyObservability.companyId, f.companyId));
+    const auditsBefore = await db.select().from(activityLog).where(eq(activityLog.companyId, f.companyId));
+    for (const endpointBaseUrl of ["https://another.example", "http://collector.example", "https://collector.example:8443"]) {
+      for (const credentials of [{ mode: "keep" as const }, { mode: "replace" as const, headers: [{ name: "authorization" }] }]) {
+        await expect(f.service.configure(f.companyId, "another-manager", { expectedRevision: saved.revision, enabled: true, capture: saved.capture,
+          destination: { provider: "otlp", endpointBaseUrl }, credentials })).rejects.toMatchObject({ status: 422 });
+      }
+    }
+    expect((await f.service.settings(f.companyId))!.revision).toBe(saved.revision);
+    expect((await secretService(db).getById(row.credentialsSecretId!))?.latestVersion).toBe(1);
+    expect(await db.select().from(activityLog).where(eq(activityLog.companyId, f.companyId))).toEqual(auditsBefore);
+    const sameOrigin = await f.service.configure(f.companyId, "alice", { expectedRevision: saved.revision, enabled: true, capture: saved.capture,
+      destination: { provider: "otlp", endpointBaseUrl: "https://collector.example/new-prefix" }, credentials: { mode: "keep" } });
+    const replaced = await f.service.configure(f.companyId, "alice", { expectedRevision: sameOrigin.revision, enabled: true, capture: saved.capture,
+      destination: { provider: "otlp", endpointBaseUrl: "https://another.example" }, credentials: { mode: "replace", headers: [{ name: "authorization", value: "new-origin-credential" }] } });
+    expect(await f.service.resolve(f.companyId)).toMatchObject({ state: "enabled", logsEndpoint: "https://another.example/v1/logs", headers: { authorization: "new-origin-credential" } });
+    await f.service.configure(f.companyId, "alice", { expectedRevision: replaced.revision, enabled: true, capture: saved.capture,
+      destination: { provider: "otlp", endpointBaseUrl: "https://anonymous.example" }, credentials: { mode: "replace", headers: [] } });
+    expect(await f.service.resolve(f.companyId)).toMatchObject({ state: "enabled", headers: {} });
+  });
   it("uses the selected numeric credential version even when latest rotates before value resolution", async () => {
     const f = await fixture(); await f.service.configure(f.companyId, "alice", braintrust());
     const before = await f.service.resolve(f.companyId);

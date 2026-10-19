@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, readlink, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "smol-toml";
@@ -84,4 +84,20 @@ it("isolates overlapping ACPX export settings while sharing the saved provider c
   expect(await readFile(join(home, "config.toml"), "utf8")).toBe('model = "retained-model"\n');
   expect((await stat(a)).mode & 0o777).toBe(0o700);
   expect((await stat(join(a, "config.toml"))).mode & 0o777).toBe(0o600);
+});
+
+it.each([true, false])("preserves refreshed Codex credentials across repeated and replacement preparations with export %s", async enabled => {
+  const home = await mkdtemp(join(tmpdir(), "paperclip-acpx-auth-")); roots.push(home);
+  await writeFile(join(home, "auth.json"), JSON.stringify({ tokens: { refresh_token: "old-fixture-token" } }), { mode: 0o600 });
+  const launch = buildProviderObservabilityLaunch({ ...input, enabled, kind: "codex" });
+  const first = await prepareAcpxCodexObservabilityHome(home, launch, input.agentId);
+  expect((await lstat(join(first, "auth.json"))).isSymbolicLink()).toBe(true);
+  expect(await readlink(join(first, "auth.json"))).toBe(join(home, "auth.json"));
+  await writeFile(join(first, "auth.json"), JSON.stringify({ tokens: { refresh_token: "refreshed-fixture-token" } }));
+  expect(JSON.parse(await readFile(join(home, "auth.json"), "utf8")).tokens.refresh_token).toBe("refreshed-fixture-token");
+  const repeated = await prepareAcpxCodexObservabilityHome(home, launch, input.agentId);
+  const replacement = await prepareAcpxCodexObservabilityHome(home, { ...launch, compatibilityKey: "replacement" }, input.agentId);
+  for (const prepared of [repeated, replacement]) {
+    expect(JSON.parse(await readFile(join(prepared, "auth.json"), "utf8")).tokens.refresh_token).toBe("refreshed-fixture-token");
+  }
 });
