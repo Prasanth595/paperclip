@@ -41,7 +41,7 @@ export function WorkspaceBaseRefRecoveryProvider({ issue, agentMap, unavailableR
   children: ReactNode;
 }) {
   const action = issue.activeRecoveryAction;
-  const recordedRunId = action?.evidence.latestRunId ?? action?.evidence.runId;
+  const recordedRunId = action?.evidence?.latestRunId ?? action?.evidence?.runId;
   const runId = typeof recordedRunId === "string" ? recordedRunId : null;
   const { data: run } = useQuery({
     queryKey: ["workspace-base-ref-recovery", issue.companyId, issue.id, runId],

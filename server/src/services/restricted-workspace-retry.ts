@@ -1,5 +1,5 @@
 import { heartbeatRuns, issues, projectWorkspaces, type Db } from "@paperclipai/db";
-import type { IssueRecoveryAction, TaskWorkspaceSelection } from "@paperclipai/shared";
+import { isUuidLike, type IssueRecoveryAction, type TaskWorkspaceSelection } from "@paperclipai/shared";
 import { and, desc, eq, or, sql } from "drizzle-orm";
 import { parseObject } from "../adapters/utils.js";
 import { conflict } from "../errors.js";
@@ -8,7 +8,7 @@ import { RESTRICTED_WORKSPACE_SOURCE_REASON } from "./workspace-source-restricti
 export async function prepareRestrictedWorkspaceRetry(db: Db, issue: typeof issues.$inferSelect,
   action: IssueRecoveryAction): Promise<{ selection: TaskWorkspaceSelection | null } | null> {
   const sourceRunId = action.evidence?.latestRunId ?? action.evidence?.runId;
-  if (typeof sourceRunId !== "string") return null;
+  if (action.ownerType !== "board" || typeof sourceRunId !== "string" || !isUuidLike(sourceRunId)) return null;
   const [run] = await db.select({ id: heartbeatRuns.id, agentId: heartbeatRuns.agentId, status: heartbeatRuns.status,
     contextSnapshot: heartbeatRuns.contextSnapshot, resultJson: heartbeatRuns.resultJson,
     errorCode: heartbeatRuns.errorCode, error: heartbeatRuns.error,
