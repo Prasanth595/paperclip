@@ -87,6 +87,13 @@ const OPENCODE_CONNECTION_ERRORS: ReadonlySet<string> = new Set([
   "UND_ERR_SOCKET", "UND_ERR_CLOSED", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT",
   "UND_ERR_BODY_TIMEOUT", "unrecognized",
 ]);
+/** POSIX, Linux and macOS signal names; any other `signal` value is dropped. */
+const OPENCODE_EXIT_SIGNALS: ReadonlySet<string> = new Set([
+  "SIGHUP", "SIGINT", "SIGQUIT", "SIGILL", "SIGTRAP", "SIGABRT", "SIGIOT", "SIGBUS", "SIGEMT", "SIGFPE",
+  "SIGKILL", "SIGUSR1", "SIGSEGV", "SIGUSR2", "SIGPIPE", "SIGALRM", "SIGTERM", "SIGSTKFLT", "SIGCHLD",
+  "SIGCONT", "SIGSTOP", "SIGTSTP", "SIGTTIN", "SIGTTOU", "SIGURG", "SIGXCPU", "SIGXFSZ", "SIGVTALRM",
+  "SIGPROF", "SIGWINCH", "SIGIO", "SIGPOLL", "SIGPWR", "SIGINFO", "SIGLOST", "SIGSYS", "SIGUNUSED",
+]);
 
 /** Closed vocabulary for a failed OpenCode turn, including a lost `opencode serve`. */
 export interface NativeOpenCodeTurnFailureDiagnostic {
@@ -122,7 +129,7 @@ function openCodeStreamFailureFields(value: unknown): Omit<NativeOpenCodeTurnFai
   return {
     streamFailure: kind,
     ...(typeof exitCode === "number" && Number.isInteger(exitCode) && exitCode >= 0 && exitCode <= 255 ? { exitCode } : {}),
-    ...(typeof signal === "string" && /^SIG[A-Z0-9]{1,10}$/.test(signal) ? { signal } : {}),
+    ...(typeof signal === "string" && OPENCODE_EXIT_SIGNALS.has(signal) ? { signal } : {}),
     ...(typeof connectionError === "string" && OPENCODE_CONNECTION_ERRORS.has(connectionError) ? { connectionError } : {}),
     ...httpStatusField(entry.httpStatus),
   };

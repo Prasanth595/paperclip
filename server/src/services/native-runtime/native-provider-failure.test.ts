@@ -173,6 +173,17 @@ describe("native provider failure observation", () => {
     expect(readNativeTurnFailureDiagnostic({ provider: "opencode", category: "server_overloaded" })).toBeNull();
   });
 
+  it("records only known signal names for a lost OpenCode server", () => {
+    const observed = createNativeProviderFailureObservation({ kind: "opencode", model });
+    observed.observe({ ...event, payload: { status: "failed", error: {
+      code: "opencode_server_exited", opencodeFailure: { kind: "server_exited", signal: "SIGPRIVATE" },
+    } } });
+    const expected = { provider: "opencode", category: "turn_failed", runnerFailureCode: "opencode_server_exited", streamFailure: "server_exited" };
+    expect(observed.unclassifiedTurnFailure("turn", terminal)).toEqual(expected);
+    expect(readNativeTurnFailureDiagnostic({ ...expected, signal: "SIGPRIVATE" })).toEqual(expected);
+    expect(readNativeTurnFailureDiagnostic({ ...expected, signal: "SIGTERM" })).toEqual({ ...expected, signal: "SIGTERM" });
+  });
+
   it.each([{ kind: "claude", model }, { kind: "codex" }, { kind: "codex", model: "other" }])(
     "does not apply a rejection to another selected provider/model (%j)", (provider) => {
       const observed = createNativeProviderFailureObservation(provider);
