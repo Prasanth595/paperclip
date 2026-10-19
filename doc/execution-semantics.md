@@ -467,6 +467,15 @@ Rejected API fallback arguments return the same bounded schema locations as
 monitor calls, with no submitted values. Correct the arguments before retrying;
 validation does not dispatch an HTTP request or relax route permissions.
 
+This validation feedback applies to every authorized native tool, including
+`paperclip_search_assigned_tools`, `paperclip_call_assigned_tool`, and direct app
+tools. Invalid arguments return repair guidance and at most three locations in
+the authorized input schema, within 512 bytes. Feedback excludes submitted values
+and unknown input keys. A rejected call creates no execution receipt; corrected
+arguments can be submitted again. `retryable: false` prevents automatic replay
+of the invalid call. Unauthorized tools still receive a generic rejection, and
+corrected calls retain the same permission and approval checks.
+
 A native provider may omit `continuation` (or send `null`) when it reports
 `yielded` after saving a monitor. The controller reads current authorized task
 context and fills the canonical `monitor` continuation only if that same task,
