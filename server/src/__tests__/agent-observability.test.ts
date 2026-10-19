@@ -11,6 +11,7 @@ import { createDb, companies, companyMemberships, companyObservability, companyS
 import { startEmbeddedPostgresTestDatabase } from "@paperclipai/db/test-embedded-postgres";
 import { DEFAULT_AGENT_OBSERVABILITY_CAPTURE, type UpdateAgentObservabilityRequest } from "@paperclipai/shared";
 import { agentObservabilityService } from "../services/agent-observability.js";
+import { deleteCompany } from "../services/company-deletion.js";
 import { agentObservabilityRoutes } from "../routes/agent-observability.js";
 import { secretService } from "../services/secrets.js";
 import * as secretsModule from "../services/secrets.js";
@@ -71,7 +72,7 @@ describe("company agent observability", () => {
     expect(await db.select().from(companySecretBindings).where(eq(companySecretBindings.companyId, f.companyId))).toEqual([]);
     expect(await db.select().from(companySecrets).where(eq(companySecrets.companyId, f.companyId))).toEqual([]);
   });
-  it("acquires secret mutation ownership before locking retained header rows", async () => {
+  it.each(["save", "remove", "delete-company"])("acquires secret mutation ownership before database locks: %s", async operation => {
     const f = await fixture();
     const saved = await f.service.configure(f.companyId, "alice", { expectedRevision: null, enabled: true,
       capture: { ...DEFAULT_AGENT_OBSERVABILITY_CAPTURE }, destination: { provider: "otlp", endpointBaseUrl: "https://collector.example" },
@@ -92,11 +93,18 @@ describe("company agent observability", () => {
       return original(env, companyId, work);
     });
     try {
-      await f.service.configure(f.companyId, "alice", { expectedRevision: saved.revision, enabled: true, capture: saved.capture,
-        destination: saved.destination as { provider: "otlp"; endpointBaseUrl: string },
-        credentials: { mode: "replace", headers: [{ name: "authorization" }, { name: "x-new", value: "new-value" }] } });
+      if (operation === "save") {
+        await f.service.configure(f.companyId, "alice", { expectedRevision: saved.revision, enabled: true, capture: saved.capture,
+          destination: saved.destination as { provider: "otlp"; endpointBaseUrl: string },
+          credentials: { mode: "replace", headers: [{ name: "authorization" }, { name: "x-new", value: "new-value" }] } });
+        expect(await f.service.resolve(f.companyId)).toMatchObject({ headers: { authorization: "retained-value", "x-new": "new-value" } });
+      } else {
+        if (operation === "remove") await f.service.remove(f.companyId, "alice", saved.revision);
+        else await deleteCompany(db, f.companyId);
+        expect(await f.service.settings(f.companyId)).toBeNull();
+        expect(await secretService(db).getById(row.credentialsSecretId!)).toBeNull();
+      }
       expect(probed).toBe(true);
-      expect(await f.service.resolve(f.companyId)).toMatchObject({ headers: { authorization: "retained-value", "x-new": "new-value" } });
     } finally { spy.mockRestore(); }
   });
 
@@ -113,6 +121,28 @@ describe("company agent observability", () => {
     ]);
     expect((await secretService(db).getById(row.credentialsSecretId!))?.latestVersion).toBe(3);
     expect(await f.service.resolve(f.companyId)).toMatchObject({ headers: { authorization: "rotated-value" } });
+  });
+
+  it("settles concurrent save and removal through revision conflict without a lock cycle", async () => {
+    const f = await fixture(); const saved = await f.service.configure(f.companyId, "alice", braintrust());
+    const results = await Promise.allSettled([
+      f.service.configure(f.companyId, "alice", { ...braintrust(saved.revision), enabled: false, credentials: { mode: "keep" } }),
+      f.service.remove(f.companyId, "alice", saved.revision),
+    ]);
+    expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.find(result => result.status === "rejected")).toMatchObject({ reason: { status: 409 } });
+  });
+
+  it("settles a concurrent settings save and real company deletion without a lock cycle", async () => {
+    const f = await fixture(); const saved = await f.service.configure(f.companyId, "alice", braintrust());
+    const results = await Promise.allSettled([
+      f.service.configure(f.companyId, "alice", { ...braintrust(saved.revision), enabled: false, credentials: { mode: "keep" } }),
+      deleteCompany(db, f.companyId),
+    ]);
+    expect(results[1].status).toBe("fulfilled");
+    if (results[0].status === "rejected") expect(results[0].reason).toMatchObject({ status: 404 });
+    expect(await f.service.settings(f.companyId)).toBeNull();
+    expect(await db.select().from(companySecrets).where(eq(companySecrets.companyId, f.companyId))).toEqual([]);
   });
 
   it("keeps project routing current and changes process compatibility on external key rotation", async () => {
@@ -188,7 +218,7 @@ describe("company agent observability", () => {
   });
   it("retires feature credentials inside the company deletion transaction", async () => {
     const f = await fixture(); await f.service.configure(f.companyId, "alice", braintrust());
-    await db.transaction(async tx => { await agentObservabilityService(tx as unknown as typeof db).removeForCompanyDeletion(f.companyId); });
+    await deleteCompany(db, f.companyId);
     expect(await f.service.settings(f.companyId)).toBeNull();
     expect(await db.select().from(companySecretBindings).where(eq(companySecretBindings.companyId, f.companyId))).toEqual([]);
     expect(await db.select().from(companySecrets).where(eq(companySecrets.companyId, f.companyId))).toEqual([]);

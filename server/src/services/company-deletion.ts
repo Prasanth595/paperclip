@@ -1,4 +1,5 @@
 import { agentObservabilityService } from "./agent-observability.js";
+import { withAccountHomeSecretMutationLock } from "@paperclipai/adapter-codex-local/server";
 import type { Db } from "@paperclipai/db";
 import { eq, inArray } from "drizzle-orm";
 import { createAgentLifecycle, scheduleAgentLifecycle } from "./agent-lifecycle.js";
@@ -49,7 +50,7 @@ export async function deleteCompany(db: Db, id: string) {
     await lifecycle.terminateAgent(agent.id);
     await scheduleAgentLifecycle(db, agent.id);
   }
-  return db.transaction(async (tx) => {
+  return withAccountHomeSecretMutationLock(undefined, id, () => db.transaction(async (tx) => {
         // Exclude accounting writers before taking child locks. KEY SHARE must
         // remain compatible: native writers can already hold a child row while
         // saving a company-scoped result. FOR UPDATE would deadlock that save.
@@ -110,5 +111,5 @@ export async function deleteCompany(db: Db, id: string) {
           .where(eq(companies.id, id))
           .returning();
         return rows[0] ?? null;
-      });
+      }));
 }

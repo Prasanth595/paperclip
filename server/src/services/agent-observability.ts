@@ -134,7 +134,7 @@ export function agentObservabilityService(db: Db) {
         return settingsDto(row);
       }));
     },
-    remove: async (companyId: string, userId: string, expectedRevision: string) => withAccountingTransaction(db, companyId, async (tx, publications) => {
+    remove: async (companyId: string, userId: string, expectedRevision: string) => withAccountHomeSecretMutationLock(undefined, companyId, () => withAccountingTransaction(db, companyId, async (tx, publications) => {
       const row = await getRow(companyId, tx);
       assertRevision(row, expectedRevision);
       if (!row) throw notFound("Agent observability is not configured");
@@ -144,7 +144,7 @@ export function agentObservabilityService(db: Db) {
       if (row.credentialsSecretId) await secrets.remove(row.credentialsSecretId);
       await logActivity(tx, { companyId, actorType: "user", actorId: userId, action: "agent_observability.removed", entityType: "company", entityId: companyId,
         details: { revision: row.revision } }, publications);
-    }),
+    })),
     resolve: async (companyId: string, options: ResolutionAccess & { forTest?: boolean; expectedRevision?: string; unavailableReason?: AgentObservabilityUnavailableReason } = {}): Promise<ResolvedAgentObservability> => {
       const row = await getRow(companyId);
       if (options.expectedRevision) { if (!row) throw notFound("Agent observability is not configured"); assertRevision(row, options.expectedRevision); }
@@ -162,7 +162,7 @@ export function agentObservabilityService(db: Db) {
           headers: Object.freeze({ ...headers, ...(destination.provider === "braintrust" ? { "x-bt-parent": `project_id:${destination.projectId}` } : {}) }) };
       } catch { return unavailable("credentials_unavailable"); }
     },
-    // The company deletion owner already holds the company lock and owns commit/publication.
+    // The company deletion owner acquires mutation ownership before its company lock, and owns commit/publication.
     removeForCompanyDeletion: async (companyId: string) => {
       const row = await getRow(companyId);
       if (!row) return;
