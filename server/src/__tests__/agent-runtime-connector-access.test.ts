@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
-import { agents, authUsers, heartbeatRuns, issues, companies, companyMemberships, principalPermissionGrants, companySecrets, companySecretBindings, companySecretProviderConfigs, connectionGrants, connectionGrantMembers, connectionGrantDelegations, userSecretDefinitions, createDb, plugins, toolApplications, toolConnections, toolCatalogEntries, toolConnectionInstalls, toolProfiles, toolProfileBindings, resourceLifecycleEvents, type Db } from "@paperclipai/db";
+import { agents, chatEndpoints, authUsers, heartbeatRuns, issues, companies, companyMemberships, principalPermissionGrants, companySecrets, companySecretBindings, companySecretProviderConfigs, connectionGrants, connectionGrantMembers, connectionGrantDelegations, userSecretDefinitions, createDb, plugins, toolApplications, toolConnections, toolCatalogEntries, toolConnectionInstalls, toolProfiles, toolProfileBindings, resourceLifecycleEvents, type Db } from "@paperclipai/db";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 import { toolAccessService } from "../services/tool-access.js";
@@ -9,6 +9,7 @@ import { connectionIntentService } from "../services/connection-intents.js";
 import { emailConnectionService } from "../services/email-connections.js";
 import { accessService } from "../services/access.js";
 import { secretService } from "../services/secrets.js";
+import { slackSearchOAuthService } from "../services/connectors/slack-search-oauth.js";
 
 const support = await getEmbeddedPostgresTestSupport();
 const describeDatabase = support.supported ? describe : describe.skip;
@@ -172,6 +173,91 @@ describeDatabase("connector access runtime synchronization", () => {
     expect(results.map(result => result.status)).toEqual(["fulfilled", "fulfilled"]);
     expect((await toolAccessService(db).listConnectionInstalls(connectionId, companyId)).map(install => install.targetId).sort()).toEqual([agentId, peerId].sort());
     if (caller === "connection intent") expect((results[1] as PromiseFulfilledResult<{ status: string }>).value.status).toBe("accepted");
+  }, 15000);
+  it("orders Slack search disconnect with concurrent personal delegation creation", async () => {
+    await db.insert(companyMemberships).values({ companyId, principalType: "user", principalId: "alice", status: "active" });
+    await db.update(toolConnections).set({ connectionPurpose: "channel", transport: "chat_sdk", config: { provider: "slack" } }).where(eq(toolConnections.id, connectionId));
+    const [endpoint] = await db.insert(chatEndpoints).values({ companyId, connectionId, provider: "slack", publicId: randomUUID(), assignedAgentId: agentId, status: "active", providerAccountId: "T-FIXTURE" }).returning();
+    const [grant] = await db.insert(connectionGrants).values({ companyId, connectionId, kind: "user", subjectUserId: "alice", providerTenant: { slackSearch: { endpointId: endpoint.id, workspaceId: "T-FIXTURE", slackUserId: "U-FIXTURE", clientRevision: "fixture" } } }).returning();
+    let locked!: () => void; let resume!: () => void; let started!: (pid: number) => void;
+    const held = new Promise<void>(resolve => { locked = resolve; });
+    const mayDelegate = new Promise<void>(resolve => { resume = resolve; });
+    const disconnectStarted = new Promise<number>(resolve => { started = resolve; });
+    const creation = db.transaction(async tx => {
+      await tx.execute(sql`SET LOCAL lock_timeout = '8s'`);
+      await tx.select().from(connectionGrants).where(eq(connectionGrants.id, grant.id)).for("update");
+      locked(); await mayDelegate;
+      return toolAccessService(tx as unknown as Db).createConnectionGrantDelegation(connectionId, grant.id, agentId, "alice");
+    });
+    await held;
+    const disconnect = db.transaction(async tx => {
+      await tx.execute(sql`SET LOCAL lock_timeout = '8s'`);
+      const [row] = await tx.execute(sql`SELECT pg_backend_pid() AS pid`);
+      started(Number(row.pid));
+      return slackSearchOAuthService(tx as unknown as Db, "https://paperclip.example").disconnect(companyId, endpoint.id, "alice");
+    });
+    const completed = Promise.allSettled([creation, disconnect]);
+    try {
+      const pid = await disconnectStarted;
+      await vi.waitFor(async () => {
+        const [row] = await db.execute(sql`SELECT wait_event_type FROM pg_stat_activity WHERE pid = ${pid}`);
+        expect(row.wait_event_type).toBe("Lock");
+      }, { timeout: 5000 });
+    } finally { resume(); await completed; }
+    for (const result of await completed) if (result.status === "rejected") throw result.reason;
+    expect((await db.select().from(connectionGrants).where(eq(connectionGrants.id, grant.id)))[0].status).toBe("revoked");
+  }, 15000);
+  it("retries Slack disconnect when a grant appears while waiting for the connection", async () => {
+    await db.update(toolConnections).set({ connectionPurpose: "channel", transport: "chat_sdk", config: { provider: "slack" } }).where(eq(toolConnections.id, connectionId));
+    const [endpoint] = await db.insert(chatEndpoints).values({ companyId, connectionId, provider: "slack", publicId: randomUUID(), assignedAgentId: agentId, status: "active" }).returning();
+    let connectionLocked!: () => void; let releaseConnection!: () => void;
+    const held = new Promise<void>(resolve => { connectionLocked = resolve; });
+    const mayUnlock = new Promise<void>(resolve => { releaseConnection = resolve; });
+    const blocker = db.transaction(async tx => {
+      await tx.select().from(toolConnections).where(eq(toolConnections.id, connectionId)).for("no key update");
+      connectionLocked(); await mayUnlock;
+    });
+    await held;
+    let retries = 0; let disconnectPid: number | undefined; let writer: Promise<unknown> | undefined;
+    let writerLocked!: () => void; let resumeWriter!: () => void;
+    const grantHeld = new Promise<void>(resolve => { writerLocked = resolve; });
+    const mayWrite = new Promise<void>(resolve => { resumeWriter = resolve; });
+    const transaction = db.transaction.bind(db);
+    const spy = vi.spyOn(db, "transaction").mockImplementation((async (operation, config) => {
+      try { return await transaction(async tx => {
+        await tx.execute(sql`SET LOCAL lock_timeout = '8s'`);
+        const [row] = await tx.execute(sql`SELECT pg_backend_pid() AS pid`);
+        disconnectPid ??= Number(row.pid);
+        return operation(tx);
+      }, config); }
+      catch (error) {
+        const failure = error as { code?: string; cause?: { code?: string } };
+        if ((failure.cause?.code ?? failure.code) === "55P03") { retries++; resumeWriter(); await writer; }
+        throw error;
+      }
+    }) as typeof db.transaction);
+    const disconnect = slackSearchOAuthService(db, "https://paperclip.example").disconnect(companyId, endpoint.id, "alice");
+    const disconnectResult = Promise.allSettled([disconnect]);
+    try {
+      await vi.waitFor(async () => {
+        expect(disconnectPid).toBeDefined();
+        const [row] = await db.execute(sql`SELECT wait_event_type FROM pg_stat_activity WHERE pid = ${disconnectPid!}`);
+        expect(row.wait_event_type).toBe("Lock");
+      }, { timeout: 5000 });
+      const [grant] = await db.insert(connectionGrants).values({ companyId, connectionId, kind: "user", subjectUserId: "alice" }).returning();
+      writer = db.transaction(async tx => {
+        await tx.select().from(connectionGrants).where(eq(connectionGrants.id, grant.id)).for("update");
+        writerLocked(); await mayWrite;
+        await tx.update(toolConnections).set({ name: "Saved during grant discovery" }).where(eq(toolConnections.id, connectionId));
+      });
+      await grantHeld;
+      releaseConnection(); await blocker;
+      await vi.waitFor(() => expect(retries).toBe(1), { timeout: 5000 });
+      await writer;
+      const [result] = await disconnectResult;
+      if (result.status === "rejected") throw result.reason;
+      expect((await db.select().from(connectionGrants).where(eq(connectionGrants.id, grant.id)))[0].status).toBe("revoked");
+    } finally { releaseConnection(); resumeWriter(); await blocker; await writer; await disconnectResult; spy.mockRestore(); }
   }, 15000);
   it("journals a personal grant delegation only for its target agent", async () => {
     await db.insert(companyMemberships).values({ companyId, principalType: "user", principalId: "alice", status: "active" });
@@ -371,6 +457,60 @@ describeDatabase("connector access runtime synchronization", () => {
     expect(await db.select().from(connectionGrantDelegations).where(eq(connectionGrantDelegations.grantId, grant.id))).toEqual([]);
     await expect(toolAccessService(db).createConnectionGrantDelegation(connectionId, grant.id, peerId, "alice")).rejects.toThrow("Only the active personal grant owner");
   }, 15000);
+  it.each(["updateMember", "updateMemberAndPermissions", "archiveMember", "setUserCompanyAccess"] as const)("retries %s secret cleanup as a complete transaction", async command => {
+    const userId = `cleanup-${randomUUID()}`;
+    await db.insert(companyMemberships).values({ companyId, principalType: "user", principalId: "owner", membershipRole: "owner", status: "active" });
+    const [member] = await db.insert(companyMemberships).values({ companyId, principalType: "user", principalId: userId, membershipRole: "member", status: "active" }).returning();
+    const [definition] = await db.insert(userSecretDefinitions).values({ companyId, key: "legacy-cleanup", name: "Legacy cleanup fixture" }).returning();
+    const [secret] = await db.insert(companySecrets).values({ companyId, key: "legacy-cleanup", name: "Legacy cleanup fixture", scope: "user", ownerUserId: userId, userSecretDefinitionId: definition.id }).returning();
+    const [grant] = await db.insert(connectionGrants).values({ companyId, connectionId, kind: "user", subjectUserId: userId, credentialSecretRefs: [{ secretId: secret.id, configPath: "oauth.access_token" }] }).returning();
+    const before = await events();
+    let locked!: () => void; let resume!: () => void;
+    const held = new Promise<void>(resolve => { locked = resolve; });
+    const mayDisable = new Promise<void>(resolve => { resume = resolve; });
+    const writer = db.transaction(async tx => {
+      await tx.execute(sql`SET LOCAL lock_timeout = '8s'`);
+      await tx.select().from(companySecrets).where(eq(companySecrets.id, secret.id)).for("no key update");
+      locked(); await mayDisable;
+      return secretService(tx as unknown as Db).update(secret.id, { status: "disabled" });
+    });
+    await held;
+    let retries = 0;
+    let cleanupPid: number | undefined;
+    const transaction = db.transaction.bind(db);
+    const spy = vi.spyOn(db, "transaction").mockImplementation((async (operation, config) => {
+      try { return await transaction(async tx => {
+        const [row] = await tx.execute(sql`SELECT pg_backend_pid() AS pid`);
+        cleanupPid = Number(row.pid);
+        return operation(tx);
+      }, config); }
+      catch (error) {
+        const failure = error as { code?: string; cause?: { code?: string } };
+        if ((failure.cause?.code ?? failure.code) === "55P03") { retries++; resume(); await writer; }
+        throw error;
+      }
+    }) as typeof db.transaction);
+    const service = accessService(db);
+    const cleanup = command === "updateMember" ? service.updateMember(companyId, member.id, { status: "suspended" })
+      : command === "updateMemberAndPermissions" ? service.updateMemberAndPermissions(companyId, member.id, { status: "suspended", grants: [] }, "owner")
+        : command === "archiveMember" ? service.archiveMember(companyId, member.id)
+          : service.setUserCompanyAccess(userId, [], { actorUserId: "owner" });
+    const completed = Promise.allSettled([writer, cleanup]);
+    try {
+      await vi.waitFor(async () => {
+        if (retries === 1) return;
+        expect(cleanupPid).toBeDefined();
+        const [row] = await db.execute(sql`SELECT wait_event_type FROM pg_stat_activity WHERE pid = ${cleanupPid!}`);
+        expect(row.wait_event_type).toBe("Lock");
+      }, { timeout: 5000 });
+    } finally { resume(); await completed; spy.mockRestore(); }
+    for (const result of await completed) if (result.status === "rejected") throw result.reason;
+    expect(retries).toBe(1);
+    expect((await db.select().from(companyMemberships).where(eq(companyMemberships.id, member.id)))[0].status).toBe(command === "archiveMember" || command === "setUserCompanyAccess" ? "archived" : "suspended");
+    expect((await db.select().from(connectionGrants).where(eq(connectionGrants.id, grant.id)))[0].status).toBe("revoked");
+    expect(await db.select().from(companySecrets).where(eq(companySecrets.id, secret.id))).toEqual([]);
+    expect(await events()).toHaveLength(before.length + 4);
+  }, 15000);
   it.each((["suspended", "archived"] as const).flatMap(status => (["revocation", "settings"] as const).map(writer => ({ status, writer }))))("orders membership $status cleanup with concurrent $writer", async ({ status, writer }) => {
     await db.update(toolConnections).set({ config: { url: "https://mcp.example.test/mcp" } }).where(eq(toolConnections.id, connectionId));
     await db.insert(companyMemberships).values({ companyId, principalType: "user", principalId: "owner", membershipRole: "owner", status: "active" });
@@ -491,6 +631,24 @@ describeDatabase("connector access runtime synchronization", () => {
     expect(await db.select().from(companySecretBindings).where(eq(companySecretBindings.targetId, higher))).toEqual([]);
     expect((await db.select().from(toolConnections).where(eq(toolConnections.id, connectionId)))[0].enabled).toBe(false);
   }, 15000);
+  it("ignores Vercel verification timestamps while retaining credential changes", async () => {
+    const credential = { provider: "vercel_connect" as const, subjectType: "user" as const, subjectId: "alice", tokenId: "fixture-token", expiresAt: "2099-01-01T00:00:00.000Z", lastVerifiedAt: "2000-01-01T00:00:00.000Z" };
+    const [grant] = await db.insert(connectionGrants).values({ companyId, connectionId, kind: "user", subjectUserId: "alice", externalCredential: credential }).returning();
+    const before = await events();
+    await db.update(connectionGrants).set({ externalCredential: { ...credential, lastVerifiedAt: "2000-01-02T00:00:00.000Z" } }).where(eq(connectionGrants.id, grant.id));
+    expect(await events()).toEqual(before);
+    await db.update(connectionGrants).set({ externalCredential: { ...credential, tokenId: "rotated-fixture-token" } }).where(eq(connectionGrants.id, grant.id));
+    expect(await events()).toHaveLength(before.length + 2);
+  });
+  it("ignores GitHub webhook health while retaining repository access changes", async () => {
+    const github = { userId: "fixture-user", login: "fixture", installationCount: 1, repositoryCount: 1, repositorySelection: "selected" as const, installationIds: ["1"], installationOwnerLogins: ["fixture"], accessRevision: "initial", lastWebhookAt: "2000-01-01T00:00:00.000Z", webhookHealth: "pending" as const };
+    const [grant] = await db.insert(connectionGrants).values({ companyId, connectionId, kind: "user", subjectUserId: "alice", providerTenant: { github } }).returning();
+    const before = await events();
+    await db.update(connectionGrants).set({ providerTenant: { github: { ...github, lastWebhookAt: "2000-01-02T00:00:00.000Z", webhookHealth: "healthy" } } }).where(eq(connectionGrants.id, grant.id));
+    expect(await events()).toEqual(before);
+    await db.update(connectionGrants).set({ providerTenant: { github: { ...github, accessRevision: "changed", repositoryCount: 0, repositorySelection: "none", installationIds: [] } } }).where(eq(connectionGrants.id, grant.id));
+    expect(await events()).toHaveLength(before.length + 2);
+  });
   it("ignores OAuth grant lease acquisition and release while retaining access changes", async () => {
     const oauth = { scopes: ["read"], tokenEndpoint: "https://oauth.example.test/token" };
     const [grant] = await db.insert(connectionGrants).values({ companyId, connectionId, kind: "organization", providerTenant: { oauth } }).returning();

@@ -168,8 +168,9 @@ Migration 0356 adds connection grants, grant audiences and delegations, company
 membership and permissions, secret bindings, chat/email endpoint configuration,
 and referenced credential rotation or revocation. Vault configuration and status
 changes invalidate companies whose connector credentials reference that vault.
-Vault health checks, OAuth grant refresh leases, and endpoint publication
-timestamps do not request work.
+Vault health checks, OAuth grant refresh leases, Vercel verification timestamps,
+GitHub webhook health, and endpoint publication timestamps do not request work.
+Credential identifiers, expiry, and repository access changes remain covered.
 Events contain no credential values, phone numbers, or provider payloads.
 
 Access changes conservatively invalidate eligible company agents because
@@ -183,6 +184,19 @@ OAuth persistence and membership cleanup lock affected grants before connection
 inputs and credential mutations. Each affected set is locked in ID order. Task
 completion locks existing grants before assignment inputs. Permission-only saves
 lock membership before replacing permissions, as role and status saves do.
+Slack search refresh, callbacks, and disconnect lock only the subject's grants
+before their connection. After locking the connection, they recheck the grants
+without waiting. A newly discovered busy grant rolls back and retries before
+provider work or credential persistence. Three failed attempts return a retryable
+conflict. Each operation adds two grant queries, bounded to the subject and
+connection. The existing connection lock still serializes provider refresh work.
+
+Membership cleanup locks credential deletion candidates without waiting before
+company agent locks. A busy credential rolls back the complete membership
+transaction, including its membership and grant locks. All four cleanup entry
+points re-read their state on retry, with at most three attempts. Company-access
+changes process companies in ID order.
+
 Personal delegation creation locks its grant, connection reference, and target
 agent before insertion. Delegation revocation locks its grant and target before
 deletion. Whole-grant and membership cleanup lock eligible company agents in ID

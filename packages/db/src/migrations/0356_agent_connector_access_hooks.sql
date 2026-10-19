@@ -42,8 +42,8 @@ BEGIN
     RETURN NULL;
   END IF;
   IF TG_TABLE_NAME = 'connection_grants' THEN
-    old_projection := old_projection || ' #- ''{provider_tenant,oauth,refreshLease}''';
-    new_projection := new_projection || ' #- ''{provider_tenant,oauth,refreshLease}''';
+    old_projection := old_projection || ' #- ''{provider_tenant,oauth,refreshLease}'' #- ''{external_credential,lastVerifiedAt}'' #- ''{provider_tenant,github,lastWebhookAt}'' #- ''{provider_tenant,github,webhookHealth}''';
+    new_projection := new_projection || ' #- ''{provider_tenant,oauth,refreshLease}'' #- ''{external_credential,lastVerifiedAt}'' #- ''{provider_tenant,github,lastWebhookAt}'' #- ''{provider_tenant,github,webhookHealth}''';
   END IF;
   IF TG_TABLE_NAME = 'tool_policies' THEN
     old_projection := old_projection || ' #- ''{config,trustRule,hitCount}'' #- ''{config,trustRule,lastHitAt}''';

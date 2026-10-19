@@ -37,6 +37,17 @@ type MemberArchiveInput = {
 export function accessService(db: Db) {
   const authorization = authorizationService(db);
 
+  async function memberAccessTransaction<T>(operation: (tx: Parameters<Parameters<Db["transaction"]>[0]>[0]) => Promise<T>): Promise<T> {
+    for (let attempt = 0; ; attempt++) {
+      try { return await db.transaction(operation); }
+      catch (error) {
+        const failure = error as { code?: string; cause?: { code?: string } };
+        if ((failure?.cause?.code ?? failure?.code) !== "55P03") throw error;
+        if (attempt >= 2) throw conflict("Member access changed during cleanup. Try again.", { retryable: true });
+      }
+    }
+  }
+
   async function sweepMemberConnectionAccess(
     tx: Parameters<Parameters<Db["transaction"]>[0]>[0],
     companyId: string,
@@ -242,6 +253,11 @@ export function accessService(db: Db) {
       await tx.select({ id: toolConnections.id }).from(toolConnections)
         .where(and(eq(toolConnections.companyId, companyId), inArray(toolConnections.id, affectedConnectionIds)))
         .orderBy(toolConnections.id).for("update");
+    }
+    if (secretIdsToDelete.length > 0) {
+      await tx.select({ id: companySecrets.id }).from(companySecrets)
+        .where(and(eq(companySecrets.companyId, companyId), inArray(companySecrets.id, secretIdsToDelete)))
+        .orderBy(companySecrets.id).for("update", { noWait: true });
     }
     await tx.select({ id: agents.id }).from(agents)
       .where(and(eq(agents.companyId, companyId), notInArray(agents.status, ["pending_approval", "terminated"])))
@@ -507,7 +523,7 @@ export function accessService(db: Db) {
     },
     grantedByUserId: string | null,
   ) {
-    return db.transaction(async (tx) => {
+    return memberAccessTransaction(async (tx) => {
       await tx.execute(sql`
         select ${companyMemberships.id}
         from ${companyMemberships}
@@ -660,7 +676,7 @@ export function accessService(db: Db) {
   }
 
   async function archiveMember(companyId: string, memberId: string, input: MemberArchiveInput = {}) {
-    return db.transaction(async (tx) => {
+    return memberAccessTransaction(async (tx) => {
       await tx.execute(sql`
         select ${companyMemberships.id}
         from ${companyMemberships}
@@ -794,13 +810,14 @@ export function accessService(db: Db) {
   ) {
     const target = new Set(companyIds);
 
-    await db.transaction(async (tx) => {
+    await memberAccessTransaction(async (tx) => {
       // Serialize every company-access removal/reactivation with personal OAuth
       // completion, which locks the same membership row before writing secrets.
       const existing = await tx
         .select()
         .from(companyMemberships)
         .where(and(eq(companyMemberships.principalType, "user"), eq(companyMemberships.principalId, userId)))
+        .orderBy(companyMemberships.companyId, companyMemberships.id)
         .for("update");
       const existingByCompany = new Map(existing.map((row) => [row.companyId, row]));
       const toArchive = existing.filter((row) => !target.has(row.companyId) && row.status !== "archived");
@@ -1074,7 +1091,7 @@ export function accessService(db: Db) {
       status?: "pending" | "active" | "suspended";
     },
   ) {
-    return db.transaction(async (tx) => {
+    return memberAccessTransaction(async (tx) => {
       await tx.execute(sql`
         select ${companyMemberships.id}
         from ${companyMemberships}
