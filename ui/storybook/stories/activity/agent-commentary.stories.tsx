@@ -51,7 +51,10 @@ export const SearchMessages: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await userEvent.type(await canvas.findByRole("textbox", { name: "Search commentary" }), "evidence");
+    await userEvent.click(canvas.getByRole("combobox", { name: "Filter by agent" }));
+    await userEvent.click(await within(canvasElement.ownerDocument.body).findByRole("option", { name: "Amy (Opus)" }));
     await expect(await canvas.findByText("1–1 of 1 messages")).toBeVisible();
+    await expect(canvas.getByRole("combobox", { name: "Filter by agent" })).toHaveTextContent("Amy (Opus)");
   },
 };
 export const LinkedMessage: Story = {

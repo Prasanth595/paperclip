@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { AgentCommentaryEntry, AgentCommentaryKind } from "@paperclipai/shared";
 import { ArrowUpRight, ChevronLeft, ChevronRight, Lightbulb, MessageSquareWarning, Search } from "lucide-react";
@@ -84,14 +84,7 @@ export function AgentCommentary({ companyId }: { companyId: string }) {
   const selectedId = params.get("entry") || null;
   const [search, setSearch] = useState(q);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
-  useEffect(() => setSearch(q), [q]);
-  useEffect(() => {
-    if (search === q) return;
-    const timer = window.setTimeout(() => updateFilters({ q: search }), 250);
-    return () => window.clearTimeout(timer);
-  }, [search, q]);
-
-  function updateFilters(patch: Record<string, string>) {
+  const updateFilters = useCallback((patch: Record<string, string>) => {
     setParams((current) => {
       const next = new URLSearchParams(current);
       next.delete("offset");
@@ -101,7 +94,14 @@ export function AgentCommentary({ companyId }: { companyId: string }) {
       }
       return next;
     }, { replace: true });
-  }
+  }, [setParams]);
+  useEffect(() => setSearch(q), [q]);
+  useEffect(() => {
+    if (search === q) return;
+    const timer = window.setTimeout(() => updateFilters({ q: search }), 250);
+    return () => window.clearTimeout(timer);
+  }, [search, q, updateFilters]);
+
   function selectEntry(id: string | null) {
     setParams((current) => {
       const next = new URLSearchParams(current);
