@@ -44,7 +44,7 @@ keeps an in-flight attachment through first-chat creation on desktop and mobile,
 while initial history for an existing conversation stays deferred. The
 [first-upload browser journey](../../tests/e2e/agent-chat-projects.spec.ts)
 checks the visible file chip, server attachment, no premature agent run, and
-saved reference after send and reload. That journey uses a simulated agent.
+attachment count after send and reload. That journey uses a simulated agent.
 
 Manual: In a conversation with no messages, attach a file before the first
 send. Confirm the same file stays in the composer after the chat is created.
