@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { parse as parseToml } from "smol-toml";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeStore, type AcpRuntimeOptions, type AcpSessionRecord, type AcpSessionStore } from "acpx/runtime";
 import type { AdapterExecutionContext, AdapterRuntimeMcpAccess } from "@paperclipai/adapter-utils";
@@ -609,6 +610,36 @@ describe("shared ACPX engine runtime behavior", () => {
     expect(await fs.readFile(path.join(home, "config.toml"), "utf8")).toBe('model = "caller-model"\n');
     expect(logs.some(row => row.text.includes("caller-owned Codex home"))).toBe(true);
     expect(JSON.stringify(meta)).not.toContain("export-secret-canary");
+  });
+
+  it.each([true, false])("applies company export to a server-managed Codex credential home (enabled=%s)", async (enabled) => {
+    const root = await makeTempRoot();
+    const home = path.join(root, "server-credential-projection", "provider");
+    const original = 'model = "managed-model"\n[model_providers.paperclip]\nname = "Managed provider"\n[mcp_servers.fixture]\nurl = "https://tools.example.test/mcp"\n';
+    await fs.mkdir(home, { recursive: true });
+    await fs.writeFile(path.join(home, "config.toml"), original);
+    await fs.writeFile(path.join(home, "auth.json"), '{"OPENAI_API_KEY":"fake-managed-provider-key"}');
+    const otelConfig = enabled ? {
+      log_user_prompt: true,
+      exporter: { "otlp-http": { endpoint: "https://collector.example.test/v1/logs", protocol: "binary", headers: { authorization: "Bearer export-secret-canary" } } },
+    } : { exporter: "none", trace_exporter: "none", metrics_exporter: "none", log_user_prompt: false };
+    const run = await runExecutor({
+      agent: "codex", agentCommand: "node ./fake-acp.js", cwd: root, stateDir: path.join(root, "state"),
+      env: { CODEX_HOME: home }, managedAiConnection: { provider: "openai", method: "api_key", identity: "server-resolved-credential" },
+      paperclipRuntimeSkills: [], paperclipSkillSync: { desiredSkills: [] },
+    }, { observability: { kind: "codex", compatibilityKey: enabled ? "enabled" : "disabled", otelConfig, environment: {} } });
+    expect(run.result.exitCode).toBe(0);
+    const env = (run.sessionInputs[0]!.sessionOptions as { env: Record<string, string> }).env;
+    expect(env.CODEX_HOME).not.toBe(home);
+    const config = parseToml(await fs.readFile(path.join(env.CODEX_HOME!, "config.toml"), "utf8"));
+    expect(config.otel).toEqual(otelConfig);
+    expect(config.model).toBe("managed-model");
+    expect(config.model_providers).toEqual({ paperclip: { name: "Managed provider" } });
+    expect(config.mcp_servers).toEqual({ fixture: { url: "https://tools.example.test/mcp" } });
+    expect(await fs.readFile(path.join(home, "config.toml"), "utf8")).toBe(original);
+    expect(await fs.realpath(path.join(env.CODEX_HOME!, "auth.json"))).toBe(await fs.realpath(path.join(home, "auth.json")));
+    expect(JSON.stringify(run.meta)).not.toContain("export-secret-canary");
+    expect(run.logs.some(row => row.text.includes("caller-owned Codex home"))).toBe(false);
   });
 
   it("changes the ACPX Codex configuration home while resuming the same conversation after export changes", async () => {

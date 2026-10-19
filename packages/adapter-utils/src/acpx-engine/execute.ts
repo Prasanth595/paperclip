@@ -1359,7 +1359,9 @@ async function prepareCodexSkillRuntime(input: {
     });
   let launchCodexHome = effectiveCodexHome;
   if (input.observability?.otelConfig) {
-    if (configuredCodexHome) await input.onLog("stderr", "[paperclip] Company observability is unavailable for a caller-owned Codex home.\n");
+    // Managed AI connections project a server-owned credential home into env.
+    // Only a caller override lacks this server-supplied connection attribution.
+    if (configuredCodexHome && !input.config.managedAiConnection) await input.onLog("stderr", "[paperclip] Company observability is unavailable for a caller-owned Codex home.\n");
     else {
       try {
         launchCodexHome = await prepareAcpxCodexObservabilityHome(effectiveCodexHome, input.observability, input.agentId);
