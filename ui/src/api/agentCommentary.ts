@@ -10,5 +10,5 @@ export const agentCommentaryApi = {
     return api.get<AgentCommentaryPage>(`/companies/${companyId}/agent-commentary?${query}`, { signal });
   },
   get: (companyId: string, id: string, signal?: AbortSignal) =>
-    api.get<AgentCommentaryDetail>(`/companies/${companyId}/agent-commentary/${id}`, { signal }),
+    api.get<AgentCommentaryDetail>(`/companies/${companyId}/agent-commentary/${encodeURIComponent(id)}`, { signal }),
 };

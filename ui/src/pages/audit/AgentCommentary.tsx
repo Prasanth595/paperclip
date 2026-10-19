@@ -81,7 +81,7 @@ export function AgentCommentary({ companyId }: { companyId: string }) {
   const agentId = params.get("agentId") ?? ALL;
   const kind = params.get("kind") === "suggestion" || params.get("kind") === "complaint" ? params.get("kind") as AgentCommentaryKind : undefined;
   const offset = Math.min(100_000, Math.max(0, Math.floor(Number(params.get("offset")) || 0)));
-  const selectedId = params.get("entry");
+  const selectedId = params.get("entry") || null;
   const [search, setSearch] = useState(q);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => setSearch(q), [q]);
