@@ -85,7 +85,7 @@ describeDatabase("connector access runtime synchronization", () => {
     const held = new Promise<void>(resolve => { locked = resolve; });
     const resume = new Promise<void>(resolve => { release = resolve; });
     const blocker = db.transaction(async tx => {
-      await tx.select().from(agents).where(eq(agents.id, [agentId, peerId].sort()[0])).for("no key update");
+      await tx.select().from(agents).where(eq(agents.id, agentId)).for("no key update");
       locked(); await resume;
     });
     await held;
