@@ -553,11 +553,16 @@ export async function openQualifiedAcpxRuntime(
         options.signal?.throwIfAborted();
         if (!claudeEffort.isReady()) {
           if (!runtime.setConfigOption) throw new Error("Claude effort admission requires native configuration");
+          const spawnsBeforeControl = commandLaunches.count;
           await runtime.setConfigOption({ handle: ensuredHandle, key: "effort", value: selectedClaudeEffort! });
           claudeEffort.assertReady();
           await children.verifyLifetimeOwnership();
           options.signal?.throwIfAborted();
-          await commandLaunches.refreshConsumedCommand?.();
+          // Fresh sessions retain their initialized provider. Only a cold
+          // control connection consumes another single-use launch snapshot.
+          if (commandLaunches.count > spawnsBeforeControl) {
+            await commandLaunches.refreshConsumedCommand?.();
+          }
         }
         return ensuredHandle;
       }) : ensuredSession)

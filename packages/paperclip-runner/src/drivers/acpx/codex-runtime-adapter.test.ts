@@ -36,13 +36,20 @@ const HANDLE: AcpRuntimeHandle = {
 describe("Codex ACPX runtime adapter", () => {
   it.each([false, true])("acknowledges configured Claude effort before admission (restoring=%s)", async restoring => {
     const runtime = fakeRuntime();
-    const options = openOptions(fakeCommand());
+    const child = fakeChild();
+    const options = openOptions({ spawn: () => child, close: async () => undefined });
     options.profile = { ...options.profile, agent: "claude" };
     options.claudeEffort = "high";
     options.restoringSession = restoring;
     options.refreshConsumedCommand = vi.fn(async () => undefined);
     let created!: AcpRuntimeOptions;
+    const spawnProvider = () => created.spawnAgent!({ command: "ignored", args: [], options: {} });
+    vi.mocked(runtime.ensureSession).mockImplementation(async () => {
+      if (!restoring) spawnProvider();
+      return HANDLE;
+    });
     vi.mocked(runtime.setConfigOption).mockImplementation(async input => {
+      if (restoring) spawnProvider();
       const guard = created.protocolGuardFactory!();
       guard("outbound", { id: 0, method: "session/load", params: { sessionId: "backend-1" } });
       guard("inbound", { id: 0, result: { configOptions: [{ id: "effort", currentValue: "default" }] } });
@@ -51,10 +58,13 @@ describe("Codex ACPX runtime adapter", () => {
     });
     const port = await openCodexAcpxRuntime(options, {
       createRegistry: () => registry(), createStore: () => store(), createRuntime: value => { created = value; return runtime; },
+      awaitProviderOwnership: providerOwnershipEstablished,
+      awaitProviderExit: providerOwnershipEstablished,
     });
     expect(runtime.setConfigOption).toHaveBeenCalledExactlyOnceWith({ handle: HANDLE, key: "effort", value: "high" });
     expect(await port.identity()).toMatchObject({ claudeEffort: "high" });
-    expect(options.refreshConsumedCommand).toHaveBeenCalledOnce();
+    if (restoring) expect(options.refreshConsumedCommand).toHaveBeenCalledOnce();
+    else expect(options.refreshConsumedCommand).not.toHaveBeenCalled();
     expect(runtime.startTurn).not.toHaveBeenCalled();
     await port.close({ reason: "test complete" });
   });
