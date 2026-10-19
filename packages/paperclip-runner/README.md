@@ -878,3 +878,28 @@ the host restarts that resource with a new socket. Do not remove its lock marker
 while daemon work might still be running. The socket and its parent must be private,
 canonical paths owned by the same account. Local stdio assignment requires Unix;
 other platforms retain the HTTP path.
+
+## ACPX polling and late tool results
+
+The ACPX provider saves each bounded poll batch before it returns events. It
+combines adjacent unpublished text or reasoning deltas only when their metadata
+matches and their combined text is at most 4,000 UTF-8 bytes. Tool events keep
+their position. Events already returned to the runner keep their identity and
+payload until acknowledgement. If a poll fails after accepting events, the
+provider saves that prefix before the runner can drain it. A failed save blocks
+publication until recovery from disk.
+
+A cancelled tool keeps a record of its call and turn until its result arrives.
+A known late result returns `{ resolved: false, expired: true }`. The runner
+records it without claiming delivery to the provider or repeating the operation.
+Unknown calls and calls from a different turn still fail. Admission counts active
+calls, calls being normalized, and unacknowledged expirations against a limit of
+4,096. Only acknowledged receipts can leave the 512-entry replay window.
+
+Focused regression checks:
+
+```sh
+cd packages/paperclip-runner
+pnpm exec vitest run src/cli/acpx-runtime-sidecar.test.ts src/drivers/runner-tool-bridge.test.ts
+cargo test --manifest-path runner/Cargo.toml --locked -p paperclip-runner-core --test acpx_streaming_burst --test acpx_provider_resolutions --test acpx_event_projection
+```
