@@ -1,3 +1,5 @@
+import { terminalizeLegacyExecution } from "./legacy-execution-recovery.js";
+import { settleUnrecoverableExecutions } from "./execution-recovery-resolution.js";
 import { legacyControllerBootId } from "./legacy-controller-lease.js";
 import { instanceSettingsService } from "./instance-settings.js";
 import { createPostgresWakeQueueAdapter } from "../modules/wake-queue/adapters/postgres.js";
@@ -890,6 +892,63 @@ const support = await getEmbeddedPostgresTestSupport();
     expect((await heartbeat.getRun(f.sourceRunId, { includeExecutionEvidence: true }))?.resultJson).toBeNull();
     await db.update(heartbeatRuns).set({ resultJson: { unrecognizedReceipt: true } }).where(eq(heartbeatRuns.id, f.sourceRunId));
     expect((await heartbeat.getRun(f.sourceRunId, { includeExecutionEvidence: true }))?.resultJson).not.toBeNull();
+  });
+
+  it.each(["none", "active", "resolved"])("persists pre-dispatch review wait not_performed without replay (%s)", async state => {
+    const f = await seedCancelledReviewWait();
+    if (state === "none") await db.delete(issueRecoveryActions).where(eq(issueRecoveryActions.sourceIssueId, f.issueId));
+    else await db.update(issueRecoveryActions).set({ status: state, returnOwnerAgentId: f.agentId })
+      .where(eq(issueRecoveryActions.sourceIssueId, f.issueId));
+    const [before] = await db.select().from(issues).where(eq(issues.id, f.issueId));
+    const [source] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, f.sourceRunId));
+    if (state === "none") await terminalizeLegacyExecution({ db, run: source, status: "cancelled", reconcileIfNeeded: true });
+    else await settleUnrecoverableExecutions(db);
+    const [run] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, f.sourceRunId));
+    expect(run.resultJson).toMatchObject({ stopReason: "issue_continuation_waiting_on_review",
+      automaticRecovery: { runId: source.id, actionOutcome: "not_performed", replay: "not_required" } });
+    const actions = await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.sourceIssueId, f.issueId));
+    if (state === "none") expect(actions).toHaveLength(0);
+    else {
+      expect(actions).toHaveLength(1);
+      expect(actions[0]).toMatchObject({ status: "resolved", outcome: "false_positive", evidence: {
+        automaticRecovery: { actionOutcome: "not_performed", replay: "not_required" },
+        preDispatchPriorAutomaticRecovery: { actionOutcome: "unknown", replay: "blocked" },
+      } });
+    }
+    await settleUnrecoverableExecutions(db);
+    await terminalizeLegacyExecution({ db, run, status: "cancelled" });
+    expect((await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, f.sourceRunId)))[0].resultJson).toEqual(run.resultJson);
+    expect(await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.sourceIssueId, f.issueId))).toEqual(actions);
+    expect((await db.select().from(issues).where(eq(issues.id, f.issueId)))[0]).toEqual(before);
+    expect(await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.companyId, f.companyId))).toHaveLength(0);
+  });
+
+  it.each(["launch", "provider", "cleanup", "coordinator", "missing", "foreign_issue", "foreign_company"])(
+    "preserves historical pre-dispatch review wait hold with %s evidence", async kind => {
+    const f = await seedCancelledReviewWait();
+    if (kind === "cleanup") await db.insert(environmentLeases).values({ companyId: f.companyId,
+      heartbeatRunId: f.sourceRunId, provider: "local", status: "pending_cleanup", cleanupStatus: "failed" });
+    if (kind === "coordinator") {
+      await db.update(heartbeatRuns).set({ nativeIssueId: f.issueId }).where(eq(heartbeatRuns.id, f.sourceRunId));
+      await db.insert(nativeRunFinalizations).values({ companyId: f.companyId,
+        runId: f.sourceRunId, issueId: f.issueId, phase: "terminal_failure" });
+    }
+    if (kind === "launch" || kind === "provider") await db.insert(heartbeatRunEvents).values({ companyId: f.companyId,
+      runId: f.sourceRunId, agentId: f.agentId, seq: 1, eventType: kind === "launch" ? PROCESS_START_REQUESTED : "provider.event",
+      stream: "system", level: "info", message: "Contradictory proof" });
+    if (kind === "missing") await db.update(heartbeatRuns).set({ resultJson: {} }).where(eq(heartbeatRuns.id, f.sourceRunId));
+    if (kind === "foreign_issue" || kind === "foreign_company") {
+      const other = await seedCancelledReviewWait();
+      await db.update(issueRecoveryActions).set({ evidence: { runId: other.sourceRunId,
+        automaticRecovery: { replay: "blocked", actionOutcome: "unknown" } } }).where(eq(issueRecoveryActions.sourceIssueId, f.issueId));
+      if (kind === "foreign_issue") await db.update(heartbeatRuns).set({ companyId: f.companyId }).where(eq(heartbeatRuns.id, other.sourceRunId));
+    }
+    const before = await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.sourceIssueId, f.issueId));
+    try {
+      await settleUnrecoverableExecutions(db);
+      expect(await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.sourceIssueId, f.issueId))).toEqual(before);
+      expect((await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, f.sourceRunId)))[0].resultJson?.automaticRecovery).toBeUndefined();
+    } finally { await db.delete(environmentLeases).where(eq(environmentLeases.heartbeatRunId, f.sourceRunId)); }
   });
 
   it.each([false, true].flatMap(ascii => ["message", "retry"].map(kind => ({ ascii, kind }))))(

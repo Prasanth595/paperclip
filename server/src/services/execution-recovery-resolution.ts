@@ -1,3 +1,4 @@
+import { persistPreDispatchReviewWaitDisposition } from "./pre-dispatch-review-wait.js";
 import { hasWorkspaceRestoreFailure } from "@paperclipai/shared";
 import { randomUUID } from "node:crypto";
 import { canonicalExecutionUuid } from "./execution-identity.js";
@@ -412,7 +413,13 @@ export async function settleUnrecoverableExecutions(
     .where(
       and(
         not(conversationRecoveryActionPredicate()!),
-        inArray(issueRecoveryActions.status, ["active", "escalated"]),
+        or(inArray(issueRecoveryActions.status, ["active", "escalated"]), and(
+          eq(issueRecoveryActions.status, "resolved"),
+          eq(issueRecoveryActions.cause, "legacy_execution_requires_reconciliation"),
+          eq(heartbeatRuns.runtimeMode, "legacy"), eq(heartbeatRuns.status, "cancelled"),
+          eq(heartbeatRuns.errorCode, "issue_continuation_waiting_on_review"),
+          sql`${issueRecoveryActions.evidence}->'automaticRecovery'->>'replay' = 'blocked'`,
+        )),
         eq(issueRecoveryActions.kind, "active_run_watchdog"),
         inArray(issueRecoveryActions.cause, [
           ...EXECUTION_RECONCILIATION_CAUSES,
@@ -487,13 +494,17 @@ export async function settleUnrecoverableExecutions(
           !EXECUTION_RECONCILIATION_CAUSES.includes(
             action.cause as (typeof EXECUTION_RECONCILIATION_CAUSES)[number],
           ) ||
-          !["active", "escalated"].includes(action.status) ||
+          !["active", "escalated", "resolved"].includes(action.status) ||
           (run.nativeIssueId ?? run.contextSnapshot?.issueId) !== task.id ||
           !["failed", "timed_out", "interrupted", "cancelled"].includes(
             run.status,
           )
         )
           return;
+        if (await persistPreDispatchReviewWaitDisposition(tx as unknown as Db, run)) return;
+        // Historical rows are repair-only: missing proof never reopens or
+        // rewrites an existing disposition, and never changes task status.
+        if (action.status === "resolved") return;
         // Give durable native recovery its chance; never preempt a resume,
         // replacement, result finalizer, or still-owned execution.
         if (

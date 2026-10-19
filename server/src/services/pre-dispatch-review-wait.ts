@@ -1,5 +1,6 @@
-import { and, eq, inArray, isNotNull, or } from "drizzle-orm";
-import { environmentLeases, heartbeatRunEvents, heartbeatRuns, nativeRunFinalizations, type Db } from "@paperclipai/db";
+import { hasRequiredWorkspaceRecovery } from "./workspace-restore-recovery-state.js";
+import { and, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
+import { environmentLeases, heartbeatRunEvents, heartbeatRuns, issueRecoveryActions, nativeRunFinalizations, type Db } from "@paperclipai/db";
 import { PROCESS_IDENTITY_RECORDED, PROCESS_START_REQUESTED } from "./native-local-process-stop.js";
 import { hasRemoteTerminationReceipt } from "./remote-execution-termination.js";
 
@@ -58,4 +59,52 @@ export async function isPreDispatchReviewWaitVerified(db: Db, run: Run): Promise
         "provider.event", "provider.rpc_result", "tool.execution.started"])),
   )).limit(1);
   return !execution;
+}
+
+/** Caller holds the issue and run locks. This records proof, never admission or
+ * replay permission. No recovery action is created just to carry an audit label. */
+export async function persistPreDispatchReviewWaitDisposition(db: Db, run: Run): Promise<Run | null> {
+  if (hasRequiredWorkspaceRecovery(run.resultJson) || !(await isPreDispatchReviewWaitVerified(db, run))) return null;
+  const issueId = run.contextSnapshot?.issueId;
+  if (typeof issueId !== "string") return null;
+  const holds = await db.select().from(issueRecoveryActions).where(and(
+    eq(issueRecoveryActions.companyId, run.companyId), eq(issueRecoveryActions.sourceIssueId, issueId),
+    eq(issueRecoveryActions.kind, "active_run_watchdog"),
+    eq(issueRecoveryActions.cause, "legacy_execution_requires_reconciliation"),
+    sql`${issueRecoveryActions.evidence}->>'runId' = ${run.id}`,
+    or(inArray(issueRecoveryActions.status, ["active", "escalated"]), and(
+      eq(issueRecoveryActions.status, "resolved"),
+      sql`${issueRecoveryActions.evidence}->'automaticRecovery'->>'replay' = 'blocked'`,
+    )),
+  )).for("update");
+  // Retained repair obligations and explicit decisions cannot be erased by an
+  // automatic correction of an older generic disposition.
+  if (holds.some(hold => hasRequiredWorkspaceRecovery(hold.evidence) ||
+      hold.evidence.workspaceRestoreFailure === "restore_unsafe_archive" ||
+      hold.evidence.executionReconciliation)) return null;
+  const previous = run.resultJson?.automaticRecovery as Record<string, unknown> | undefined;
+  const receipt = previous?.policy === "verified_pre_dispatch_wait_v1" &&
+    previous.runId === run.id && previous.actionOutcome === "not_performed" && previous.replay === "not_required"
+    ? previous : { policy: "verified_pre_dispatch_wait_v1", runId: run.id,
+      actionOutcome: "not_performed", replay: "not_required", recordedAt: new Date().toISOString() };
+  let updated = run;
+  if (receipt !== previous) {
+    [updated] = await db.update(heartbeatRuns).set({ resultJson: { ...run.resultJson,
+      ...(previous ? { preDispatchPriorAutomaticRecovery: previous } : {}), automaticRecovery: receipt,
+    } }).where(and(eq(heartbeatRuns.companyId, run.companyId), eq(heartbeatRuns.id, run.id))).returning();
+  }
+  for (const hold of holds) {
+    await db.update(issueRecoveryActions).set({ status: "resolved", outcome: "false_positive",
+      resolvedAt: hold.resolvedAt ?? new Date(), updatedAt: new Date(), wakePolicy: null, monitorPolicy: null,
+      resolutionNote: "Verified pre-dispatch cancellation: no provider action occurred. No input replayed or continuation authorized.",
+      nextAction: "Normal ownership, approval and dependency gates govern any future continuation.",
+      evidence: { ...hold.evidence,
+        preDispatchPriorDisposition: { status: hold.status, outcome: hold.outcome,
+          resolutionNote: hold.resolutionNote, nextAction: hold.nextAction, resolvedAt: hold.resolvedAt?.toISOString() ?? null },
+        ...(hold.evidence.automaticRecovery ? { preDispatchPriorAutomaticRecovery: hold.evidence.automaticRecovery } : {}),
+        automaticRecovery: receipt },
+    }).where(and(eq(issueRecoveryActions.companyId, run.companyId),
+      eq(issueRecoveryActions.sourceIssueId, issueId), eq(issueRecoveryActions.id, hold.id)));
+  }
+  return updated;
 }

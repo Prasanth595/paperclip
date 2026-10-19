@@ -1,3 +1,4 @@
+import { persistPreDispatchReviewWaitDisposition } from "../../../services/pre-dispatch-review-wait.js";
 import { hasConversationContinuationPolicy } from "../../../services/conversation-continuation.js";
 import { getExecutionBlocker } from "../../../services/execution-blocker.js";
 import { validateReconstructedWorkspaceDispatch } from "../../../services/native-runtime/native-workspace-reconstruction.js";
@@ -888,7 +889,7 @@ export function createPostgresRunDispatchAdapter(
     now: Date,
     providerDispatchNotStarted = false,
   ): Promise<CancelStaleQueuedRunOutcome> {
-      const [row] = await tx
+      let [row] = await tx
         .update(heartbeatRuns)
         .set({
           status: "cancelled",
@@ -923,6 +924,7 @@ export function createPostgresRunDispatchAdapter(
       // `expectedStatus`: the caller's staleness decision lost the race, so
       // this write must not overwrite whatever status won it.
       if (!row) return { outcome: "lost_race" };
+      row = await persistPreDispatchReviewWaitDisposition(tx, row) ?? row;
 
       if (row.wakeupRequestId) {
         await tx

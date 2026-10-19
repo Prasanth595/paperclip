@@ -804,6 +804,12 @@ describeEmbeddedPostgres("run-dispatch postgres adapter", () => {
         outcome: "cancelled",
         errorCode: "issue_continuation_waiting_on_review",
       });
+      const [cancelled] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId));
+      expect(cancelled.resultJson).toMatchObject({ automaticRecovery: {
+        runId, actionOutcome: "not_performed", replay: "not_required",
+      } });
+      expect(await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.sourceIssueId, issueId))).toHaveLength(0);
+
     });
   });
 
