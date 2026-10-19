@@ -1700,7 +1700,7 @@ No credentials or provider authorization URL appear in the card payload.
 
 For sandbox run inspection, see [Run diagnostics from a sandbox](run-diagnostics.md).
 
-## Sandbox task context routes
+**Sandbox task context routes.**
 
 The queue and HTTP/2 callback bridges admit company skill detail and file reads,
 `GET /api/assets/{assetId}/content`, `GET /api/issues/{id}/diagnostics/wakes`,
