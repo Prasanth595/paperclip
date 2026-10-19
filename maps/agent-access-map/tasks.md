@@ -120,6 +120,11 @@ regressions in [ownership tests](../../server/src/__tests__/issue-agent-mutation
 cover a human handoff and stop enforcement for other actors, runtimes and targets;
 they use mocked services and do not claim live execution proof.
 
+Queue and HTTP/2 sandbox callbacks admit `GET /api/issues/{id}/diagnostics/wakes`
+and `POST /api/issues/{id}/monitor/check-now`. The controller still checks task
+read access or monitor-management permission and assignment ownership. Recovery
+resolution and scheduled-retry controls remain outside this bridge surface.
+
 Monitor verification: submit flat scheduling fields, observe the schema rejection
 and unchanged task, then retry with the nested `monitor` object and the same
 idempotency key. Inspect the saved schedule and audit, yield, and verify exactly

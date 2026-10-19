@@ -20,7 +20,10 @@ API: `present` — representative operation IDs:
 - `GET /api/companies/{companyId}/skills`.
 - `POST /api/companies/{companyId}/skills/import`.
 
-Agent access: `available` — REST / native call_api / CLI skills and sources.
+Agent access: `available` — REST / native call_api / CLI skills and sources. Queue
+and HTTP/2 sandbox callbacks also admit company skill detail and file reads;
+file paths travel in the existing `path` query parameter. Skill mutations stay
+subject to the existing bridge restrictions.
 
 Policy: Company skill policy by action/resource plus platform invariants; test execution
 additionally requires task-assignment authority.
