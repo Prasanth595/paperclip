@@ -5348,7 +5348,14 @@ export function recoveryService(
         // instead of interrupting them; other native interruptions are
         // reconciled by their own finalizer), so the recovery enqueue
         // returns null for them and they escalate exactly as before.
-        if (latestRun?.status === "interrupted") {
+        const interruptedHandoffUsage =
+          latestRun?.status === "interrupted"
+            ? await readRecoveryEpisodeWakeUsage(db, {
+                companyId: issue.companyId,
+                issueId: issue.id,
+              })
+            : null;
+        if (latestRun?.status === "interrupted" && !interruptedHandoffUsage?.exhausted) {
           if (await isInvocationBudgetBlocked(issue, agentId)) {
             result.skipped += 1;
             continue;
