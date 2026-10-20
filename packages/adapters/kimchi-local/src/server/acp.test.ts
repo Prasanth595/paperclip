@@ -1,9 +1,26 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildKimchiAcpConfig,
+  commandIsResolvable,
   nodeVersionMeetsKimchiAcpMinimum,
   resolveKimchiExecutionEngine,
 } from "./acp.js";
+
+vi.mock("@paperclipai/adapter-utils/execution-target", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@paperclipai/adapter-utils/execution-target")>();
+  return {
+    ...original,
+    ensureAdapterExecutionTargetCommandResolvable: vi.fn(async () => undefined),
+    resolveAdapterExecutionTargetCwd: vi.fn((_target: unknown, configured: string, fallback: string) =>
+      configured.trim().length > 0 ? configured : fallback,
+    ),
+    readAdapterExecutionTarget: vi.fn((input: { executionTarget?: unknown }) => input.executionTarget),
+  };
+});
+
+const { ensureAdapterExecutionTargetCommandResolvable } = await import(
+  "@paperclipai/adapter-utils/execution-target"
+);
 
 describe("resolveKimchiExecutionEngine", () => {
   it("defaults to ACP (non-explicit) when engine is unset", () => {
@@ -87,6 +104,67 @@ describe("buildKimchiAcpConfig", () => {
       extraArgs: ["--prompt", "hello world"],
     });
     expect(out.agentCommand).toBe(`kimchi --mode acp '--prompt' 'hello world'`);
+  });
+});
+
+describe("commandIsResolvable remote PATH resolution", () => {
+  it("uses the target's configured env.PATH instead of the server PATH when set", async () => {
+    (ensureAdapterExecutionTargetCommandResolvable as ReturnType<typeof vi.fn>).mockClear();
+    const hostHome = process.env.HOME;
+    delete process.env.HOME;
+    try {
+      const result = await commandIsResolvable(
+        "/opt/kimchi/bin/kimchi",
+        "/should/be/ignored",
+        {
+          config: {
+            env: { PATH: "/opt/kimchi/bin:/usr/local/bin" },
+            cwd: "/work",
+          },
+          executionTarget: { kind: "remote", transport: "sandbox", remoteCwd: "/work" } as any,
+          executionTransport: {},
+        },
+      );
+      expect(result).toBe(true);
+      expect(ensureAdapterExecutionTargetCommandResolvable).toHaveBeenCalledWith(
+        "/opt/kimchi/bin/kimchi",
+        { kind: "remote", transport: "sandbox", remoteCwd: "/work" },
+        "/work",
+        { PATH: "/opt/kimchi/bin:/usr/local/bin" },
+      );
+    } finally {
+      if (hostHome !== undefined) process.env.HOME = hostHome;
+    }
+  });
+
+  it("falls back to the server PATH when the target config has no env.PATH", async () => {
+    (ensureAdapterExecutionTargetCommandResolvable as ReturnType<typeof vi.fn>).mockClear();
+    const hostPath = process.env.PATH;
+    const hostHome = process.env.HOME;
+    process.env.PATH = "/host/bin";
+    process.env.HOME = "/host/home";
+    try {
+      await commandIsResolvable(
+        "/opt/kimchi/bin/kimchi",
+        "/should/be/ignored",
+        {
+          config: { cwd: "/work" },
+          executionTarget: { kind: "remote", transport: "sandbox", remoteCwd: "/work" } as any,
+          executionTransport: {},
+        },
+      );
+      expect(ensureAdapterExecutionTargetCommandResolvable).toHaveBeenCalledWith(
+        "/opt/kimchi/bin/kimchi",
+        { kind: "remote", transport: "sandbox", remoteCwd: "/work" },
+        "/work",
+        { PATH: "/host/bin", HOME: "/host/home" },
+      );
+    } finally {
+      if (hostPath === undefined) delete process.env.PATH;
+      else process.env.PATH = hostPath;
+      if (hostHome === undefined) delete process.env.HOME;
+      else process.env.HOME = hostHome;
+    }
   });
 });
 

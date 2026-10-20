@@ -207,7 +207,7 @@ function resolveConfigPath(config: Record<string, unknown>): string {
     : process.env.PATH ?? "";
 }
 
-async function commandIsResolvable(
+export async function commandIsResolvable(
   command: string,
   pathValue = process.env.PATH ?? "",
   input?: KimchiEngineResolutionInput,
@@ -219,19 +219,26 @@ async function commandIsResolvable(
     legacyRemoteExecution: input?.executionTransport?.remoteExecution,
   });
   if (target?.kind === "remote") {
+    // The probe runs `command -v` inside the target. Prefer the target's
+    // configured env.PATH so a Kimchi install that lives only on the sandbox
+    // is found; fall back to the host PATH only when no override is set.
+    // Forward HOME for the same reason, but do not pass any other server
+    // secrets: the probe path does not need them and forwarding them would
+    // leak unrelated credentials to the remote sandbox.
+    const envConfig = parseObject(input?.config.env);
+    const probeEnv: Record<string, string> = {};
+    const configPath = typeof envConfig.PATH === "string" ? envConfig.PATH.trim() : "";
+    const resolvedPath = configPath.length > 0 ? configPath : (process.env.PATH ?? "");
+    if (resolvedPath.length > 0) probeEnv.PATH = resolvedPath;
+    const configHome = typeof envConfig.HOME === "string" ? envConfig.HOME.trim() : "";
+    const resolvedHome = configHome.length > 0 ? configHome : (process.env.HOME ?? "");
+    if (resolvedHome.length > 0) probeEnv.HOME = resolvedHome;
     try {
       await ensureAdapterExecutionTargetCommandResolvable(
         token,
         target,
         resolveAdapterExecutionTargetCwd(target, asString(input?.config.cwd, ""), process.cwd()),
-        // The probe only runs `command -v` inside the target. Passing the
-        // whole server environment here would forward every server secret to
-        // a remote sandbox the ACP run itself never inherits, so send only
-        // what a login shell needs to resolve the binary.
-        {
-          ...(process.env.PATH !== undefined ? { PATH: process.env.PATH } : {}),
-          ...(process.env.HOME !== undefined ? { HOME: process.env.HOME } : {}),
-        },
+        probeEnv,
       );
       return true;
     } catch {
@@ -308,7 +315,7 @@ export async function testKimchiAcpEnvironment(
       code: "kimchi_acp_remote_target",
       level: "info",
       message: "Kimchi ACP will run against the remote execution environment.",
-      hint: "Remote ACP requires a bidirectional process target such as SSH or Paperclip's sandbox process-session bridge.",
+      hint: "Remote ACP requires Paperclip's sandbox process-session bridge; one-shot command execution (including SSH without a session bridge) is rejected at runtime.",
     });
   }
 
@@ -371,8 +378,15 @@ export async function testKimchiAcpEnvironment(
   // overrides cannot be probed without a shell, so they skip with a note
   // instead of failing the spawn. Skip the probe when the working directory
   // check already failed so its diagnostic stays the actionable result.
+  // Forward the resolved PATH (config env, falling back to host) so a Kimchi
+  // install that lives only on the sandbox resolves correctly; do not pass
+  // any other server secrets.
   const probeExecutable = firstShellToken(command);
   const cwdCheckFailed = checks.some((check) => check.code === "kimchi_acp_cwd_invalid");
+  const resolvedProbePath = resolveConfigPath(config);
+  const probeEnv: Record<string, string> = resolvedProbePath.length > 0
+    ? { PATH: resolvedProbePath }
+    : {};
   if (commandResolvable && probeExecutable && !cwdCheckFailed) {
     const versionProbe = await runAdapterExecutionTargetProcess(
       `kimchi-envtest-${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -381,7 +395,7 @@ export async function testKimchiAcpEnvironment(
       ["--version"],
       {
         cwd,
-        env: {},
+        env: probeEnv,
         timeoutSec: 15,
         graceSec: 5,
         onLog: async () => {},
