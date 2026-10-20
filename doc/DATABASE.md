@@ -37,7 +37,7 @@ closure commit together. No terminal intent is inferred from a case's status.
 `case_access_sources` stores retained logical issue/project identities without
 deletion cascades from those sources. A missing source denies access. The case
 is readable only when every source's existing permissions allow it; unlinking a
-task or changing presentation metadata cannot widen that set. Migration 0355
+task or changing presentation metadata cannot widen that set. Migration 0362
 backfills historical project and linked-task sources conservatively and leaves
 all existing cases passive. Source identities are not grants.
 
