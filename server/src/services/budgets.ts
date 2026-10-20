@@ -89,7 +89,13 @@ function normalizeScopeName(scopeType: BudgetScopeType, name: string) {
   return name.trim().length > 0 ? name : scopeType;
 }
 
-async function resolveScopeRecord(db: Db, scopeType: BudgetScopeType, scopeId: string): Promise<ScopeRecord> {
+async function resolveScopeRecord(
+  db: Db,
+  scopeType: BudgetScopeType,
+  scopeId: string,
+  options: { companyId: string; strict?: boolean },
+): Promise<ScopeRecord> {
+  const { companyId: fallbackCompanyId, strict = true } = options;
   if (scopeType === "company") {
     const row = await db
       .select({
@@ -102,6 +108,10 @@ async function resolveScopeRecord(db: Db, scopeType: BudgetScopeType, scopeId: s
       .from(companies)
       .where(eq(companies.id, scopeId))
       .then((rows) => rows[0] ?? null);
+    // Deliberately strict even when strict is false. budget_policies.company_id
+    // and budget_incidents.company_id both carry a foreign key to companies, and
+    // upsertPolicy requires scope.companyId === companyId, so a company-scoped
+    // row cannot outlive its company the way an agent or project scope can.
     if (!row) throw notFound("Company not found");
     return {
       companyId: row.companyId,
@@ -122,7 +132,13 @@ async function resolveScopeRecord(db: Db, scopeType: BudgetScopeType, scopeId: s
       .from(agents)
       .where(eq(agents.id, scopeId))
       .then((rows) => rows[0] ?? null);
-    if (!row) throw notFound("Agent not found");
+    if (!row) {
+      if (strict) throw notFound("Agent not found");
+      // The agent may have been deleted after this policy/incident was created;
+      // scopeId is a soft polymorphic reference with no FK, so treat it as gone
+      // rather than breaking the whole budget/dashboard view.
+      return { companyId: fallbackCompanyId, name: "(deleted agent)", paused: false, pauseReason: null };
+    }
     return {
       companyId: row.companyId,
       name: row.name,
@@ -141,7 +157,12 @@ async function resolveScopeRecord(db: Db, scopeType: BudgetScopeType, scopeId: s
     .from(projects)
     .where(eq(projects.id, scopeId))
     .then((rows) => rows[0] ?? null);
-  if (!row) throw notFound("Project not found");
+  if (!row) {
+    if (strict) throw notFound("Project not found");
+    // Same rationale as the agent case above: scopeId has no FK, so a deleted
+    // project must degrade gracefully instead of throwing.
+    return { companyId: fallbackCompanyId, name: "(deleted project)", paused: false, pauseReason: null };
+  }
   return {
     companyId: row.companyId,
     name: row.name,
@@ -367,7 +388,10 @@ export function budgetServiceInTransaction(db: Db, publications: ActivityPublica
   }
 
   async function buildPolicySummary(policy: PolicyRow): Promise<BudgetPolicySummary> {
-    const scope = await resolveScopeRecord(db, policy.scopeType as BudgetScopeType, policy.scopeId);
+    const scope = await resolveScopeRecord(db, policy.scopeType as BudgetScopeType, policy.scopeId, {
+      companyId: policy.companyId,
+      strict: false,
+    });
     const observed = await computeObservedSpend(db, policy);
     const { total: observedAmount, totalExact: observedAmountExact, unpricedEventCount, pendingRunCount } = observed;
     const { windowStart: start, windowEnd: end } = observed;
@@ -427,7 +451,10 @@ export function budgetServiceInTransaction(db: Db, publications: ActivityPublica
     if (existing) return { incident: existing, created: false };
 
     const { total: amountObserved, totalExact: amountObservedExact } = observed;
-    const scope = await resolveScopeRecord(db, policy.scopeType as BudgetScopeType, policy.scopeId);
+    const scope = await resolveScopeRecord(db, policy.scopeType as BudgetScopeType, policy.scopeId, {
+      companyId: policy.companyId,
+      strict: false,
+    });
     const payload = buildApprovalPayload({
       policy,
       scopeName: normalizeScopeName(policy.scopeType as BudgetScopeType, scope.name),
@@ -531,7 +558,10 @@ export function budgetServiceInTransaction(db: Db, publications: ActivityPublica
     const approvalStatusById = new Map(approvalRows.map((row) => [row.id, row.status]));
 
     return mapBudgetReads(rows, async (row) => {
-      const scope = await resolveScopeRecord(db, row.scopeType as BudgetScopeType, row.scopeId);
+      const scope = await resolveScopeRecord(db, row.scopeType as BudgetScopeType, row.scopeId, {
+        companyId: row.companyId,
+        strict: false,
+      });
       return {
         id: row.id,
         companyId: row.companyId,
@@ -557,7 +587,7 @@ export function budgetServiceInTransaction(db: Db, publications: ActivityPublica
   }
 
   async function reconcileScope(companyId: string, scopeType: BudgetScopeType, scopeId: string) {
-    const scope = await resolveScopeRecord(db, scopeType, scopeId);
+    const scope = await resolveScopeRecord(db, scopeType, scopeId, { companyId, strict: true });
     if (scope.companyId !== companyId) throw notFound("Budget scope not found");
     const policies = await db.select().from(budgetPolicies).where(and(
       eq(budgetPolicies.companyId, companyId), eq(budgetPolicies.scopeType, scopeType), eq(budgetPolicies.scopeId, scopeId),
@@ -621,7 +651,7 @@ export function budgetServiceInTransaction(db: Db, publications: ActivityPublica
       input: BudgetPolicyUpsertInput,
       actorUserId: string | null,
     ): Promise<BudgetPolicySummary> => {
-      const scope = await resolveScopeRecord(db, input.scopeType, input.scopeId);
+      const scope = await resolveScopeRecord(db, input.scopeType, input.scopeId, { companyId, strict: true });
       if (scope.companyId !== companyId) {
         throw unprocessable("Budget scope does not belong to company");
       }
@@ -844,7 +874,7 @@ export function budgetServiceInTransaction(db: Db, publications: ActivityPublica
         ...(context?.projectId ? [{ scopeType: "project" as const, scopeId: context.projectId }] : []),
       ];
       for (const { scopeType, scopeId } of scopes) {
-        if ((await resolveScopeRecord(db, scopeType, scopeId)).companyId !== companyId) throw notFound("Budget scope not found");
+        if ((await resolveScopeRecord(db, scopeType, scopeId, { companyId, strict: true })).companyId !== companyId) throw notFound("Budget scope not found");
       }
       for (const { scopeType, scopeId } of scopes) {
         const block = await reconcileScope(companyId, scopeType, scopeId);
