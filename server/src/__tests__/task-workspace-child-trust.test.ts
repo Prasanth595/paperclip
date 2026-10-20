@@ -47,10 +47,13 @@ const support = await getEmbeddedPostgresTestSupport();
   });
   it("allows a parent run to patch an authorized child's existing workspace settings", async () => {
     const f = await fixture();
-    const child = await issueService(db).create(f.companyId, { ...f.input, status: "backlog" });
+    const child = await issueService(db).create(f.companyId, { ...f.input, status: "backlog", responsibleUserId: f.userId });
     const app = express();
     app.use(express.json());
-    app.use((req, _res, next) => { req.actor = f.actor; next(); });
+    app.use((req, _res, next) => {
+      req.actor = { ...f.actor, onBehalfOfMemberships: [{ companyId: f.companyId, status: "active", membershipRole: "operator" }] };
+      next();
+    });
     app.use("/api", issueRoutes(db));
     app.use(errorHandler);
     const response = await request(app).patch(`/api/issues/${child.id}`).set("X-Paperclip-Run-Id", f.runId)
