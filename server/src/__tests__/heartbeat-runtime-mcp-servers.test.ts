@@ -277,11 +277,37 @@ describeEmbeddedPostgres("heartbeat runtime MCP servers", () => {
 
   it("keeps the run gateway usable at minute 80, then rejects a completed run and expiry", async () => {
     const [owner] = await seedAssignedAgents(1);
+    const [connection] = await db.select().from(toolConnections);
+    await db.insert(toolCatalogEntries).values({
+      companyId: owner!.agent.companyId,
+      applicationId: connection!.applicationId,
+      connectionId: connection!.id,
+      name: "read_fixture",
+      toolName: "read_fixture",
+      versionHash: "fixture",
+      status: "active",
+    });
+    await db.insert(connectionGrants).values({
+      companyId: owner!.agent.companyId,
+      connectionId: connection!.id,
+      kind: "organization",
+      status: "active",
+      isDefault: true,
+    });
     const [server] = await buildPaperclipRuntimeMcpServers({ db, agent: owner!.agent, runId: owner!.run.id });
     const [gateway] = await db.select().from(toolMcpGateways);
-    // Keep protocol discovery local; the fixture's remote MCP URL is intentionally unreachable.
-    await db.update(toolConnections).set({ enabled: false });
-    const app = express().use(express.json()).use(mcpGatewayProtocolRoutes(createToolGatewayService(db)));
+    const service = createToolGatewayService(db, {
+      remoteHttpRequest: async (_url, init) => {
+        const body = JSON.parse(String(init.body));
+        return new Response(JSON.stringify({
+          jsonrpc: "2.0", id: body.id,
+          result: body.method === "initialize"
+            ? { protocolVersion: "2025-03-26", capabilities: {}, serverInfo: { name: "fixture", version: "1" } }
+            : { content: [{ type: "text", text: "fixture result" }], structuredContent: { resources: [] } },
+        }), { headers: { "content-type": "application/json" } });
+      },
+    });
+    const app = express().use(express.json()).use(mcpGatewayProtocolRoutes(service));
     const call = (method: string, params?: Record<string, unknown>) =>
       request(app).post(`/mcp/gateways/${gateway!.gatewayPublicId}`)
         .set("Authorization", `Bearer ${server!.token}`)
@@ -289,9 +315,16 @@ describeEmbeddedPostgres("heartbeat runtime MCP servers", () => {
     const mintedAt = Date.now();
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(mintedAt + 80 * 60 * 1_000);
-    await call("initialize").expect(200);
-    await call("tools/list").expect(200);
-    await call("tools/call", { name: "paperclip_list_resources", arguments: {} }).expect(200);
+    const initialized = await call("initialize").expect(200);
+    expect(initialized.body.result.protocolVersion).toBeTruthy();
+    const listed = await call("tools/list").expect(200);
+    const readTool = listed.body.result.tools.find((tool: { name: string }) => tool.name.includes("read_fixture"));
+    expect(readTool).toBeDefined();
+    const called = await call("tools/call", { name: readTool.name, arguments: {} }).expect(200);
+    expect(called.body.result.isError).toBe(false);
+    expect(called.body.result.structuredContent).toMatchObject({
+      structuredContent: { resources: [] }, isError: false,
+    });
     await db.update(heartbeatRuns).set({ status: "succeeded" }).where(eq(heartbeatRuns.id, owner!.run.id));
     await call("initialize").expect(401);
     await db.update(heartbeatRuns).set({ status: "running" }).where(eq(heartbeatRuns.id, owner!.run.id));

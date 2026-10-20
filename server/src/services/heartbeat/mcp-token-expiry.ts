@@ -2,7 +2,6 @@ const MIN_LIFETIME_MS = 4 * 60 * 60 * 1_000;
 const MAX_LIFETIME_MS = 24 * 60 * 60 * 1_000;
 const TIMEOUT_GRACE_MS = 15 * 60 * 1_000;
 
-/** Lifetime for static MCP headers delivered to one heartbeat run. */
 export function runScopedMcpTokenExpiresAt(
   config: Record<string, unknown>,
   mintedAtMs = Date.now(),
