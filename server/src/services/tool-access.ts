@@ -15614,6 +15614,7 @@ export function toolAccessService(
     claimId?: string | null;
     error?: string | null;
     actor?: ActorInfo;
+    onCommitted?: () => void;
   }): Promise<ConnectToolAppResult> {
     // Keep the local state live until the sealed claim is in the durable vault.
     // The broker binds repeat claim requests to this stable state value, so a
@@ -16002,6 +16003,7 @@ export function toolAccessService(
           .where(eq(issueThreadInteractions.id, stateRow.interactionId));
       }
     });
+    input.onCommitted?.();
     // The transaction above committed the connection's lifecycle write; a
     // Paperclip Cloud connector callback is the managed variant of an OAuth
     // callback completion.

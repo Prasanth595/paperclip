@@ -1,9 +1,29 @@
 import { describe, expect, it } from "vitest";
+import { HttpError } from "../errors.js";
+import { PaperclipCloudConnectorError } from "../services/paperclip-cloud-connector.js";
 import {
+  cloudConnectorCallbackFailure,
   cloudConnectorEnrollmentReturnPath,
   cloudConnectorEnrollmentOutcomeHtml,
   connectionIntentOAuthOutcomeHtml,
 } from "./tool-access.js";
+
+describe("managed connector callback failure diagnostics", () => {
+  it.each([
+    [new HttpError(400, "Paperclip denial", { code: "oauth_authorization_denied" }), "oauth_authorization_denied", 400],
+    [new HttpError(422, "Paperclip unavailable", { code: "paperclip_cloud_connector_unavailable" }), "paperclip_cloud_connector_unavailable", 422],
+    [new HttpError(422, "Provider text", { code: "provider_controlled_value" }), "cloud_connector_callback_http_422", 422],
+    [new PaperclipCloudConnectorError("Provider text", "REAUTHORIZATION_REQUIRED", 409), "REAUTHORIZATION_REQUIRED", 409],
+    [new PaperclipCloudConnectorError("Provider text", "CONNECTOR_REQUEST_FAILED", 503), "CONNECTOR_REQUEST_FAILED", 503],
+    [new PaperclipCloudConnectorError("Provider text", "provider_controlled_value", 503), "cloud_connector_callback_http_503", 503],
+    [new Error("Provider text"), "cloud_connector_callback_failed", 500],
+  ] as const)("classifies an error without recording provider text", (error, code, status) => {
+    const result = cloudConnectorCallbackFailure(error);
+    expect(result).toEqual({ code, status });
+    expect(JSON.stringify(result)).not.toContain("Provider text");
+    expect(JSON.stringify(result)).not.toContain("provider_controlled_value");
+  });
+});
 
 describe("Cloud connector enrollment return path", () => {
   it("returns to the company-prefixed Connections page", () => {

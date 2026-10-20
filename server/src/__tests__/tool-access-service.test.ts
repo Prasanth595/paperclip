@@ -89,10 +89,11 @@ import {
 } from "../services/tool-gateway.js";
 import { toolAccessRoutes } from "../routes/tool-access.js";
 import { errorHandler } from "../middleware/index.js";
+import { logger } from "../middleware/logger.js";
 import * as sentry from "../sentry.js";
 import { HttpError } from "../errors.js";
 import type { VercelConnectClient } from "../services/vercel-connect.js";
-import { invalidatePaperclipCloudConnectorCapabilities, type PaperclipCloudConnector } from "../services/paperclip-cloud-connector.js";
+import { invalidatePaperclipCloudConnectorCapabilities, PaperclipCloudConnectorError, type PaperclipCloudConnector } from "../services/paperclip-cloud-connector.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported
@@ -8722,6 +8723,313 @@ describeEmbeddedPostgres("tool access service", () => {
     } finally {
       driveDefinition.ownershipAvailability = previousOwnershipAvailability;
     }
+  });
+
+  it.each([
+    {
+      name: "Paperclip denial",
+      failure: new HttpError(400, "Authorization declined", { code: "oauth_authorization_denied" }),
+      expectedCode: "oauth_authorization_denied",
+      expectedOutcome: "denied",
+      dialog: false,
+      auditFailure: false,
+    },
+    {
+      name: "dialog denial",
+      failure: new HttpError(400, "Authorization declined", { code: "oauth_authorization_denied" }),
+      expectedCode: "oauth_authorization_denied",
+      expectedOutcome: "denied",
+      dialog: true,
+      auditFailure: false,
+    },
+    {
+      name: "unknown HttpError code",
+      failure: new HttpError(422, "Provider-controlled message", { code: "provider_controlled_value" }),
+      expectedCode: "cloud_connector_callback_http_422",
+      expectedOutcome: "failed",
+      dialog: false,
+      auditFailure: false,
+    },
+    {
+      name: "known Cloud client rejection",
+      failure: new PaperclipCloudConnectorError("Provider-controlled message", "REAUTHORIZATION_REQUIRED", 409),
+      expectedCode: "REAUTHORIZATION_REQUIRED",
+      expectedOutcome: "failed",
+      dialog: false,
+      auditFailure: false,
+    },
+    {
+      name: "unexpected provider error",
+      failure: new Error("Provider-controlled message"),
+      expectedCode: "cloud_connector_callback_failed",
+      expectedOutcome: "failed",
+      dialog: false,
+      auditFailure: false,
+    },
+    {
+      name: "audit write error",
+      failure: new Error("Provider-controlled message"),
+      expectedCode: "cloud_connector_callback_failed",
+      expectedOutcome: "failed",
+      dialog: false,
+      auditFailure: true,
+    },
+  ])("records a redacted $name callback failure before browser recovery", async ({ failure, expectedCode, expectedOutcome, dialog, auditFailure }) => {
+    const company = await createCompany(db);
+    const userId = `callback-member-${randomUUID()}`;
+    await grantBoardUser(db, company.id, userId, [], "owner");
+    const connector = fakeGoogleWorkspaceConnector(company.id, userId);
+    vi.mocked(connector.claim).mockRejectedValue(failure);
+    const service = createTestToolAccessService(db, { paperclipCloudConnector: connector });
+    const actor = { actorType: "user" as const, actorId: userId };
+    const interaction = dialog ? await (async () => {
+      const agent = await createAgent(db, company.id);
+      const { issue, run } = await createIssueAndRun(db, company.id, agent.id);
+      const [row] = await db.insert(issueThreadInteractions).values({
+        companyId: company.id, issueId: issue.id, sourceRunId: run.id,
+        kind: "connection_intent", status: "pending", createdByAgentId: agent.id,
+        addresseeUserId: userId, payload: {
+          version: 1, serviceSlug: "gmail", serviceName: "Gmail",
+          requestingAgentId: agent.id, requestingAgentName: agent.name, phase: "authorizing",
+        },
+      }).returning();
+      return row!;
+    })() : null;
+    const connected = await service.connectGalleryApp(company.id, {
+      galleryKey: "gmail", connectionMethodKey: "paperclip-draft", grantKind: "user", name: "Callback test",
+    }, actor);
+    const started = await service.startOAuth(company.id, connected.connectionId, {
+      redirectUri: "https://paperclip.example/api/tools/oauth/cloud-connector/callback", actor,
+      interactionId: interaction?.id,
+    });
+    const state = new URL(started.authorizationUrl).searchParams.get("state")!;
+    const logSpy = vi.spyOn(logger, "warn").mockImplementation(() => logger);
+    const auditErrorLog = vi.spyOn(logger, "error").mockImplementation(() => logger);
+    if (auditFailure) {
+      const originalInsert = db.insert.bind(db);
+      vi.spyOn(db, "insert").mockImplementation(((table: unknown) => {
+        if (table === activityLog) throw new Error("Provider-controlled audit error");
+        return originalInsert(table as typeof activityLog);
+      }) as typeof db.insert);
+    }
+    const app = createRouteApp(db, boardSessionActor(company.id, "owner", userId), undefined, {
+      paperclipCloudConnector: connector,
+    });
+
+    const callback = await request(app)
+      .get("/api/tools/oauth/cloud-connector/callback")
+      .query({ state, claim_id: "claim-for-test" })
+      .set("accept", "text/html");
+
+    if (dialog) {
+      expect(callback.status).toBe(200);
+      expect(callback.text).toContain('"outcome":"declined"');
+      const [updated] = await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.id, interaction!.id));
+      expect(updated.payload).toMatchObject({ phase: "needs_retry" });
+    } else {
+      expect(callback.status).toBe(303);
+      expect(callback.headers.location).toContain(`oauth=${expectedOutcome}`);
+    }
+    const failures = await db.select().from(activityLog).where(and(
+      eq(activityLog.companyId, company.id), eq(activityLog.entityId, connected.connectionId),
+      eq(activityLog.action, "tool_app.oauth_failed"),
+    ));
+    expect(failures).toHaveLength(auditFailure ? 0 : 1);
+    if (!auditFailure) expect(failures[0]?.details).toMatchObject({
+      code: expectedCode, status: failure instanceof HttpError || failure instanceof PaperclipCloudConnectorError
+        ? failure.status ?? 500 : 500,
+      provider: "paperclip_cloud_connector", traceId: expect.any(String),
+    });
+    const diagnostic = logSpy.mock.calls[0]?.[0] as { traceId: string };
+    expect(diagnostic.traceId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    if (!auditFailure) expect(failures[0]?.details).toMatchObject({ traceId: diagnostic.traceId });
+    expect(JSON.stringify(failures)).not.toContain("Provider-controlled message");
+    expect(JSON.stringify(logSpy.mock.calls)).not.toContain("Provider-controlled message");
+    expect(JSON.stringify(auditErrorLog.mock.calls)).not.toContain("Provider-controlled audit error");
+    if (auditFailure) expect(auditErrorLog).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "cloud_connector_callback_audit_failed" }), expect.any(String),
+    );
+    expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ code: expectedCode }), expect.any(String));
+    expect(callback.headers.location ?? callback.text).not.toContain("provider_controlled_value");
+  });
+
+  it("preserves managed GitHub installation recovery from a Paperclip callback error", async () => {
+    const company = await createCompany(db);
+    const userId = `github-callback-${randomUUID()}`;
+    await grantBoardUser(db, company.id, userId, [], "owner");
+    const connector = fakeGitHubConnector(company.id, userId);
+    vi.mocked(connector.claim).mockRejectedValue(new HttpError(422, "Install the app", {
+      code: "github_installation_required",
+      installationUrl: "https://github.com/apps/paperclip-development/installations/new",
+      managementUrl: "https://github.com/settings/installations",
+    }));
+    const service = createTestToolAccessService(db, { paperclipCloudConnector: connector });
+    const actor = { actorType: "user" as const, actorId: userId };
+    const connected = await service.connectGalleryApp(company.id, {
+      galleryKey: "github", connectionMethodKey: "managed", grantKind: "user", name: "GitHub callback",
+    }, actor);
+    const started = await service.startOAuth(company.id, connected.connectionId, {
+      redirectUri: "https://paperclip.example/api/tools/oauth/cloud-connector/callback", actor,
+    });
+    const state = new URL(started.authorizationUrl).searchParams.get("state")!;
+    const app = createRouteApp(db, boardSessionActor(company.id, "owner", userId), undefined, {
+      paperclipCloudConnector: connector,
+    });
+
+    const callback = await request(app).get("/api/tools/oauth/cloud-connector/callback")
+      .query({ state, claim_id: "github-claim-for-recovery" }).set("accept", "text/html");
+
+    expect(callback.status).toBe(303);
+    const recovery = new URL(callback.headers.location, "https://paperclip.example");
+    expect(recovery.searchParams.get("oauth")).toBe("failed");
+    expect(recovery.searchParams.get("code")).toBe("github_installation_required");
+    expect(recovery.searchParams.get("installation_url")).toBe("https://github.com/apps/paperclip-development/installations/new");
+    expect(recovery.searchParams.get("management_url")).toBe("https://github.com/settings/installations");
+    const failures = await db.select().from(activityLog).where(and(
+      eq(activityLog.companyId, company.id), eq(activityLog.entityId, connected.connectionId),
+      eq(activityLog.action, "tool_app.oauth_failed"),
+    ));
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.details).toMatchObject({ code: "github_installation_required", status: 422 });
+  });
+
+  it("propagates a non-HTML managed callback error without browser failure activity", async () => {
+    const company = await createCompany(db);
+    const userId = `callback-json-${randomUUID()}`;
+    await grantBoardUser(db, company.id, userId, [], "owner");
+    const connector = fakeGoogleWorkspaceConnector(company.id, userId);
+    vi.mocked(connector.claim).mockRejectedValue(new HttpError(422, "Cloud unavailable", {
+      code: "paperclip_cloud_connector_unavailable",
+    }));
+    const service = createTestToolAccessService(db, { paperclipCloudConnector: connector });
+    const actor = { actorType: "user" as const, actorId: userId };
+    const connected = await service.connectGalleryApp(company.id, {
+      galleryKey: "gmail", connectionMethodKey: "paperclip-draft", grantKind: "user", name: "Callback JSON",
+    }, actor);
+    const started = await service.startOAuth(company.id, connected.connectionId, {
+      redirectUri: "https://paperclip.example/api/tools/oauth/cloud-connector/callback", actor,
+    });
+    const state = new URL(started.authorizationUrl).searchParams.get("state")!;
+    const logSpy = vi.spyOn(logger, "warn").mockImplementation(() => logger);
+    const app = createRouteApp(db, boardSessionActor(company.id, "owner", userId), undefined, {
+      paperclipCloudConnector: connector,
+    });
+
+    const callback = await request(app).get("/api/tools/oauth/cloud-connector/callback")
+      .query({ state, claim_id: "claim-for-json-test" }).set("accept", "application/json");
+
+    expect(callback.status).toBe(422);
+    expect(callback.body.code).toBe("paperclip_cloud_connector_unavailable");
+    expect(callback.headers.location).toBeUndefined();
+    expect(logSpy).not.toHaveBeenCalled();
+    expect(await db.select().from(activityLog).where(and(
+      eq(activityLog.companyId, company.id), eq(activityLog.entityId, connected.connectionId),
+      eq(activityLog.action, "tool_app.oauth_failed"),
+    ))).toHaveLength(0);
+    expect(await service.peekOAuthState(state)).toMatchObject({ connectionId: connected.connectionId });
+  });
+
+  it("does not record OAuth failure when connected activity fails after managed completion", async () => {
+    const company = await createCompany(db);
+    const userId = `callback-post-completion-${randomUUID()}`;
+    await grantBoardUser(db, company.id, userId, [], "owner");
+    const connector = fakeGoogleWorkspaceConnector(company.id, userId);
+    const service = createTestToolAccessService(db, { paperclipCloudConnector: connector });
+    const actor = { actorType: "user" as const, actorId: userId };
+    const connected = await service.connectGalleryApp(company.id, {
+      galleryKey: "gmail", connectionMethodKey: "paperclip-draft", grantKind: "user", name: "Callback audit",
+    }, actor);
+    const started = await service.startOAuth(company.id, connected.connectionId, {
+      redirectUri: "https://paperclip.example/api/tools/oauth/cloud-connector/callback", actor,
+    });
+    const state = new URL(started.authorizationUrl).searchParams.get("state")!;
+    mockToolsList([]);
+    const originalInsert = db.insert.bind(db);
+    let failedConnectedAudit = false;
+    vi.spyOn(db, "insert").mockImplementation(((table: unknown) => {
+      if (table === activityLog && !failedConnectedAudit) {
+        failedConnectedAudit = true;
+        throw new Error("Provider-controlled audit error");
+      }
+      return originalInsert(table as typeof activityLog);
+    }) as typeof db.insert);
+    const warning = vi.spyOn(logger, "warn").mockImplementation(() => logger);
+    const errorLog = vi.spyOn(logger, "error").mockImplementation(() => logger);
+    const app = createRouteApp(db, boardSessionActor(company.id, "owner", userId), undefined, {
+      paperclipCloudConnector: connector,
+    });
+
+    const callback = await request(app).get("/api/tools/oauth/cloud-connector/callback")
+      .query({ state, claim_id: "claim-for-post-completion-test" }).set("accept", "text/html");
+
+    expect(failedConnectedAudit).toBe(true);
+    expect(callback.status).toBe(303);
+    expect(callback.headers.location).toContain("oauth=failed");
+    expect(callback.headers.location).not.toContain("success=1");
+    const [connection] = await db.select().from(toolConnections).where(eq(toolConnections.id, connected.connectionId));
+    expect(connection.status).toBe("active");
+    expect(await service.peekOAuthState(state)).toBeNull();
+    expect(await db.select().from(activityLog).where(and(
+      eq(activityLog.companyId, company.id), eq(activityLog.entityId, connected.connectionId),
+      eq(activityLog.action, "tool_app.oauth_failed"),
+    ))).toHaveLength(0);
+    expect(JSON.stringify([warning.mock.calls, errorLog.mock.calls])).not.toContain("Provider-controlled audit error");
+    expect(errorLog).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "cloud_connector_callback_post_completion_failed" }), expect.any(String),
+    );
+  });
+
+  it("does not audit OAuth failure when GitHub webhook binding fails after commit", async () => {
+    const company = await createCompany(db);
+    const userId = `github-post-commit-${randomUUID()}`;
+    await grantBoardUser(db, company.id, userId, [], "owner");
+    const connector = fakeGitHubConnector(company.id, userId);
+    vi.mocked(connector.setWebhookBinding!).mockRejectedValue(new Error("Provider-controlled webhook error"));
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+      const href = String(url);
+      if (href === "https://api.github.com/user") return mcpHttpResponse({ id: 42, login: "octocat" });
+      if (href.includes("https://api.github.com/user/installations?")) return mcpHttpResponse({
+        installations: [{ id: 101, repository_selection: "selected", html_url: "https://github.com/settings/installations/101", account: { login: "paperclipai" } }],
+      });
+      if (href.includes("https://api.github.com/user/installations/101/repositories?")) return mcpHttpResponse({
+        total_count: 1, repositories: [{ id: 1, full_name: "paperclipai/repo-1" }],
+      });
+      throw new Error(`unexpected fetch ${href}`);
+    });
+    const actor = { actorType: "user" as const, actorId: userId };
+    const service = createTestToolAccessService(db, { paperclipCloudConnector: connector });
+    const connected = await service.connectGalleryApp(company.id, {
+      galleryKey: "github", connectionMethodKey: "managed", grantKind: "user", name: "GitHub post-commit",
+    }, actor);
+    const started = await service.startOAuth(company.id, connected.connectionId, {
+      redirectUri: "https://paperclip.example/api/tools/oauth/cloud-connector/callback", actor,
+    });
+    const state = new URL(started.authorizationUrl).searchParams.get("state")!;
+    const warning = vi.spyOn(logger, "warn").mockImplementation(() => logger);
+    const errorLog = vi.spyOn(logger, "error").mockImplementation(() => logger);
+    const app = createRouteApp(db, boardSessionActor(company.id, "owner", userId), undefined, {
+      paperclipCloudConnector: connector,
+    });
+
+    const callback = await request(app).get("/api/tools/oauth/cloud-connector/callback")
+      .query({ state, claim_id: "github-post-commit-claim" }).set("accept", "text/html");
+
+    expect(connector.setWebhookBinding).toHaveBeenCalled();
+    expect(callback.status).toBe(303);
+    expect(callback.headers.location).toContain("oauth=failed");
+    expect(await service.peekOAuthState(state)).toBeNull();
+    const [connection] = await db.select().from(toolConnections).where(eq(toolConnections.id, connected.connectionId));
+    expect(connection.status).toBe("draft");
+    const [grant] = await db.select().from(connectionGrants).where(eq(connectionGrants.connectionId, connected.connectionId));
+    expect(grant.status).toBe("active");
+    expect(await db.select().from(activityLog).where(and(
+      eq(activityLog.companyId, company.id), eq(activityLog.entityId, connected.connectionId),
+      eq(activityLog.action, "tool_app.oauth_failed"),
+    ))).toHaveLength(0);
+    expect(JSON.stringify([warning.mock.calls, errorLog.mock.calls])).not.toContain("Provider-controlled webhook error");
+    expect(errorLog).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "cloud_connector_callback_post_completion_failed" }), expect.any(String),
+    );
   });
 
   it("activates allowed Drive write actions without approval defaults after a managed callback", async () => {

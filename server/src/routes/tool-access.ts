@@ -4,6 +4,7 @@ import { aiConnectionRouterService } from "../services/ai-connection-router.js";
 import { composioAppSetupSchema, composioAppsRefreshSchema, composioAppsSyncSchema, composioAppAccountSchema } from "@paperclipai/shared";
 import { aggregatorAppsSyncSchema, aggregatorAppsRefreshSchema, arcadeDiscoverySetupSchema } from "@paperclipai/shared/aggregator-apps";
 import { Router, type Request, type Response } from "express";
+import { randomUUID } from "node:crypto";
 import type { Db } from "@paperclipai/db";
 import { agents, companies, connectionGrants, issueThreadInteractions, toolConnectionInstalls } from "@paperclipai/db";
 import { and, eq, or } from "drizzle-orm";
@@ -68,6 +69,7 @@ import {
   appWithPaperclipCloudConnectorAvailability,
   isPaperclipCloudConnectorStrategy,
   invalidatePaperclipCloudConnectorCapabilities,
+  PaperclipCloudConnectorError,
   type PaperclipCloudConnector,
   paperclipCloudConnectorCapabilitiesFromEnv,
 } from "../services/paperclip-cloud-connector.js";
@@ -87,6 +89,7 @@ import { isLoopbackHost } from "../url-utils.js";
 import { trustedBoardMutationOrigin } from "../middleware/board-mutation-guard.js";
 import { connectionIntentService } from "../services/connection-intents.js";
 import { redactRemoteUrlCredential } from "../services/remote-url-credentials.js";
+import { logger } from "../middleware/logger.js";
 import { connectionIntentDeliveryService } from "../services/connection-intent-delivery.js";
 import type { heartbeatService } from "../services/heartbeat.js";
 
@@ -94,6 +97,40 @@ const COMPANY_INSTALL_DENIAL_REASON =
   "Only someone who can configure this connection can choose this.";
 const ORGANIZATION_GRANT_DENIAL_REASON =
   "Only a company owner, administrator, or connection manager can share this credential with the organization.";
+const CLOUD_CONNECTOR_CALLBACK_CODES = new Set([
+  "oauth_authorization_denied",
+  "paperclip_cloud_connector_failed",
+  "paperclip_cloud_connector_unavailable",
+  "oauth_refresh_missing",
+  "github_installation_required",
+]);
+const CLOUD_CONNECTOR_CLIENT_CODES = new Set([
+  "CONNECTOR_BAD_RESPONSE",
+  "CONNECTOR_BINDING_MISMATCH",
+  "CONNECTOR_CONFIG_INCOMPLETE",
+  "CONNECTOR_CONFIG_INVALID",
+  "CONNECTOR_MIGRATION_REQUIRED",
+  "CONNECTOR_REQUEST_FAILED",
+  "CONNECTOR_UNAVAILABLE",
+  "REAUTHORIZATION_REQUIRED",
+]);
+
+export function cloudConnectorCallbackFailure(error: unknown): { code: string; status: number } {
+  const clientStatus = error instanceof PaperclipCloudConnectorError
+    && typeof error.status === "number"
+    && Number.isInteger(error.status)
+    && error.status >= 400 && error.status <= 599 ? error.status : undefined;
+  const status = error instanceof HttpError ? error.status : clientStatus ?? 500;
+  const details = error instanceof HttpError && error.details && typeof error.details === "object"
+    && !Array.isArray(error.details) ? error.details as Record<string, unknown> : null;
+  const code = error instanceof PaperclipCloudConnectorError && CLOUD_CONNECTOR_CLIENT_CODES.has(error.code)
+    ? error.code
+    : typeof details?.code === "string" && CLOUD_CONNECTOR_CALLBACK_CODES.has(details.code)
+      ? details.code
+      : error instanceof HttpError || clientStatus !== undefined
+        ? `cloud_connector_callback_http_${status}` : "cloud_connector_callback_failed";
+  return { code, status };
+}
 type Heartbeat = ReturnType<typeof heartbeatService>;
 
 /** Allowlist (e.g. Google Sheets allowed spreadsheet ids) lives in connection config. */
@@ -1136,12 +1173,14 @@ function connectorEnrollmentPrincipal(req: Request): string {
       await assertToolConnectionConfigureAccess(req, pendingConnection);
     }
     const acceptsHtml = req.get("accept")?.includes("text/html") === true;
+    let completionSucceeded = false;
     try {
       const result = await svc.completePaperclipCloudConnectorCallback({
         state,
         claimId,
         error,
         actor: getActorInfo(req),
+        onCommitted: () => { completionSucceeded = true; },
       });
       const pendingConfig = pendingConnection.config ?? {};
       const oauthConfig = pendingConfig.oauth && typeof pendingConfig.oauth === "object"
@@ -1202,8 +1241,44 @@ function connectorEnrollmentPrincipal(req: Request): string {
       const details = callbackError instanceof HttpError && callbackError.details && typeof callbackError.details === "object"
         ? callbackError.details as Record<string, unknown>
         : null;
+      const classifiedFailure = cloudConnectorCallbackFailure(callbackError);
+      const failure = completionSucceeded
+        ? { ...classifiedFailure, code: "cloud_connector_callback_post_completion_failed" }
+        : classifiedFailure;
+      const traceId = randomUUID();
+      const diagnostic = {
+        ...failure,
+        provider: "paperclip_cloud_connector",
+        traceId,
+        companyId: pendingState.companyId,
+        connectionId: pendingState.connectionId,
+      };
+      if (completionSucceeded) {
+        logger.error(diagnostic, "Paperclip Cloud connector callback failed after completion");
+      } else {
+        logger.warn(diagnostic, "Paperclip Cloud connector callback failed");
+        try {
+          await logActivity(db, {
+            companyId: pendingState.companyId,
+            actorType: "user",
+            actorId: req.actor.userId ?? "board",
+            action: "tool_app.oauth_failed",
+            entityType: "tool_connection",
+            entityId: pendingState.connectionId,
+            details: { code: failure.code, status: failure.status, provider: diagnostic.provider, traceId },
+          });
+        } catch {
+          logger.error({
+            code: "cloud_connector_callback_audit_failed",
+            provider: diagnostic.provider,
+            traceId,
+            companyId: pendingState.companyId,
+            connectionId: pendingState.connectionId,
+          }, "Paperclip Cloud connector callback failure audit could not be written");
+        }
+      }
       if (pendingConnectionIntent && pendingState.interactionId && req.actor.userId) {
-        const outcome = details?.code === "oauth_authorization_denied" ? "declined" : "failed";
+        const outcome = failure.code === "oauth_authorization_denied" ? "declined" : "failed";
         await finishConnectionIntentOAuth({
           interactionId: pendingState.interactionId,
           userId: req.actor.userId,
@@ -1219,11 +1294,11 @@ function connectorEnrollmentPrincipal(req: Request): string {
         });
         return;
       }
-      const outcome = details?.code === "oauth_authorization_denied" ? "denied" : "failed";
+      const outcome = failure.code === "oauth_authorization_denied" ? "denied" : "failed";
       res.redirect(303, await oauthRecoveryPath(
         pendingConnection,
         outcome,
-        typeof details?.code === "string" ? details.code : null,
+        failure.code,
         {
           installationUrl: details?.installationUrl,
           managementUrl: details?.managementUrl,
