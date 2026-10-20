@@ -2312,7 +2312,9 @@ describe("issue comment reopen routes", () => {
         actorAgentId: "22222222-2222-4222-8222-222222222222",
         actorUserId: null,
       }),
+      mockTx,
     );
+    expect(mockIssueService.getByIdForUpdate).toHaveBeenCalledWith(issue.id, mockTx);
     expect(mockLogActivity).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
