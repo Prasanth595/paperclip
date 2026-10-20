@@ -173,4 +173,28 @@ describe("buildAgentUpdatePatch", () => {
       desiredSkills: ["research", "code-review"],
     });
   });
+
+  it("omits an unchanged stored role from the patch", () => {
+    const agent = makeAgent();
+    agent.role = "founder" as Agent["role"];
+
+    const patch = buildAgentUpdatePatch(
+      agent,
+      makeOverlay({ identity: { role: "founder", name: "Renamed" } }),
+    );
+
+    expect(patch).toEqual({ name: "Renamed" });
+  });
+
+  it("keeps a changed role in the patch", () => {
+    const agent = makeAgent();
+    agent.role = "founder" as Agent["role"];
+
+    const patch = buildAgentUpdatePatch(
+      agent,
+      makeOverlay({ identity: { role: "ceo" } }),
+    );
+
+    expect(patch).toEqual({ role: "ceo" });
+  });
 });

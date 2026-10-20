@@ -527,6 +527,14 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
     }));
   }
 
+  function unmark(group: RecordOverlayGroup, field: string) {
+    setOverlay((prev) => {
+      const nextGroup = { ...prev[group] };
+      delete nextGroup[field];
+      return { ...prev, [group]: nextGroup };
+    });
+  }
+
   function flushEnvironmentDraft() {
     return environmentVariablesEditorRef.current?.flushPendingDraft() ?? null;
   }
@@ -1519,7 +1527,10 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
               <NativeSelect
                 aria-label="Role"
                 value={eff("identity", "role", props.agent.role)}
-                onChange={(event) => mark("identity", "role", event.target.value)}
+                onChange={(event) => {
+                  if (event.target.value === props.agent.role) unmark("identity", "role");
+                  else mark("identity", "role", event.target.value);
+                }}
               >
                 {!(AGENT_ROLES as readonly string[]).includes(props.agent.role) && (
                   <option value={props.agent.role}>{props.agent.role}</option>

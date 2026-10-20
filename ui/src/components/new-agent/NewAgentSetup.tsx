@@ -158,8 +158,6 @@ function Setup({
     createdAgentId ? "saved" : connectionAdapter ? "connect" : "runtime",
   );
   const [model, setModel] = useState("");
-  // Null keeps the historical default: first agent is CEO, later hires are
-  // general. Picking a value in Configure overrides it for this hire.
   const [role, setRole] = useState<AgentRole | null>(null);
   const efforts = isRunner ? [] : setupEfforts(adapterType, model);
   const [effort, setEffort] = useState("");

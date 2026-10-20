@@ -3979,6 +3979,28 @@ describe("AgentConfigForm identity role", () => {
     expect(result.onSave).toHaveBeenCalledWith({ role: "ceo" });
     await act(async () => result.root.unmount());
   });
+
+  it("omits role from the save payload when the board returns to a stored legacy role", async () => {
+    const result = await renderForm([], { role: "founder" as Agent["role"] });
+    const select = result.container.querySelector<HTMLSelectElement>('select[aria-label="Role"]');
+    expect(select).toBeTruthy();
+    expect(select!.value).toBe("founder");
+    await act(async () => {
+      select!.value = "ceo";
+      select!.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flushReact();
+    await act(async () => {
+      select!.value = "founder";
+      select!.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flushReact();
+    await act(async () => setInputValue(result.container.querySelector<HTMLInputElement>('[placeholder="Agent name"]')!, "Renamed Founder"));
+    await flushReact();
+    await clickByText(result.container, "Save");
+    expect(result.onSave).toHaveBeenCalledWith({ name: "Renamed Founder" });
+    await act(async () => result.root.unmount());
+  });
 });
 
 describe("subtractPersistedOverlay", () => {
