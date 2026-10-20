@@ -1113,7 +1113,7 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
       if (staleness.outcome === "cancelled" || staleness.outcome === "deferred") {
         applyRunDispatchPostCommitEffects(staleness.postCommitEffects);
         if (staleness.outcome === "cancelled") {
-          await releaseIssueExecutionAndPromote(run, { suppressImmediateRecovery: true }).catch((err) => {
+          await releaseIssueExecutionAndPromote(run, { suppressImmediateRecovery: true, deferredPostCommitEffects }).catch((err) => {
             logger.warn({ err, runId: run.id, issueId }, "failed to promote deferred wakes after stale queued run cancellation");
           });
         }
