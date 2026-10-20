@@ -131,10 +131,8 @@ import {
   DEFAULT_MAX_SUCCESSFUL_RUN_HANDOFF_ATTEMPTS,
   FINISH_SUCCESSFUL_RUN_HANDOFF_REASON,
   SUCCESSFUL_RUN_MISSING_STATE_REASON,
-  buildSuccessfulRunHandoffExhaustedNotice,
   isPluginManagedIssueLifecycle,
   noticeMetadataReferencesRecoveryAction,
-  type SuccessfulRunHandoffNotice,
 } from "./successful-run-handoff.js";
 import {
   SANDBOX_PROVIDER_PLUGIN_NOT_READY_REASON,
@@ -155,6 +153,8 @@ import {
   dispositionRepairDelayMs,
   DISPOSITION_REPAIR_MAX_ATTEMPTS,
 } from "./disposition-repair.js";
+import { ensureMissingDispositionDecisionCard } from "./missing-disposition-escalation.js";
+import { readRecoveryEpisodeWakeUsage } from "./episode-budget.js";
 import {
   createActiveRunWatchdog,
   WatchdogDecisionApplicationError,
@@ -3931,6 +3931,22 @@ export function recoveryService(
       return escalated ? "escalated" : "skipped";
     }
 
+    const episodeUsage = await readRecoveryEpisodeWakeUsage(db, {
+      companyId: current.companyId,
+      issueId: current.id,
+    });
+    if (episodeUsage.exhausted) {
+      const escalated = await escalateDispositionRepair({
+        issue: current,
+        latestRun,
+        fingerprint: state.fingerprint,
+        attemptCount: sameFingerprintAttempt,
+        terminalReason: "recovery_episode_wake_budget_exhausted",
+        legacyEpisode: episode,
+      });
+      return escalated ? "escalated" : "skipped";
+    }
+
     if (sameFingerprintAttempt >= maxAttempts) {
       const escalated = await escalateDispositionRepair({
         issue: current,
@@ -4027,52 +4043,27 @@ export function recoveryService(
     const recoveryOwner = recoveryAction.ownerAgentId
       ? await getAgent(recoveryAction.ownerAgentId)
       : null;
-    const sourceAssignee = input.issue.assigneeAgentId
-      ? await getAgent(input.issue.assigneeAgentId)
-      : null;
-    let notice: SuccessfulRunHandoffNotice | null = null;
+    let missingDispositionDecisionCardId: string | null = null;
     if (
       input.recoveryCause === SUCCESSFUL_RUN_MISSING_STATE_REASON &&
       input.successfulRunHandoffEvidence
     ) {
-      const [sourceRun] = input.successfulRunHandoffEvidence.sourceRunId
-        ? await db
-            .select({
-              id: heartbeatRuns.id,
-              status: heartbeatRuns.status,
-              agentId: heartbeatRuns.agentId,
-            })
-            .from(heartbeatRuns)
-            .where(
-              and(
-                eq(
-                  heartbeatRuns.id,
-                  input.successfulRunHandoffEvidence.sourceRunId,
-                ),
-                eq(heartbeatRuns.companyId, input.issue.companyId),
-              ),
-            )
-            .limit(1)
-        : [];
-      notice = buildSuccessfulRunHandoffExhaustedNotice({
-        issue: input.issue,
-        sourceRun: sourceRun ?? null,
-        correctiveRun: input.latestRun
-          ? {
-              id: input.latestRun.id,
-              status: input.latestRun.status,
-              agentId: input.latestRun.agentId,
-            }
-          : null,
-        sourceAssignee,
-        recoveryIssue: null,
+      const decisionCard = await ensureMissingDispositionDecisionCard(db, {
+        issue: {
+          id: input.issue.id,
+          companyId: input.issue.companyId,
+          identifier: input.issue.identifier,
+          assigneeUserId: input.issue.assigneeUserId,
+          monitorNextCheckAt: input.issue.monitorNextCheckAt,
+        },
         recoveryActionId: recoveryAction.id,
-        recoveryOwner,
-        latestIssueStatus: input.issue.status,
-        latestHandoffRunStatus: input.latestRun?.status ?? "unknown",
+        sourceRunId: input.successfulRunHandoffEvidence.sourceRunId,
         missingDisposition:
           input.successfulRunHandoffEvidence.missingDisposition,
+        handoffAttemptsUsed:
+          input.successfulRunHandoffEvidence.handoffAttempt,
       });
+      missingDispositionDecisionCardId = decisionCard?.id ?? null;
     }
     const escalationNotice = buildStrandedRecoveryEscalationNotice({
       seed: input.notice,
@@ -4097,9 +4088,11 @@ export function recoveryService(
     });
 
     const shouldPostEscalationComment =
-      recoveryAction.attemptCount === 1 ||
-      input.recoveryCause === "workspace_validation_failed" ||
-      input.recoveryCause === "configuration_incomplete";
+      (input.recoveryCause !== SUCCESSFUL_RUN_MISSING_STATE_REASON ||
+        !input.successfulRunHandoffEvidence) &&
+      (recoveryAction.attemptCount === 1 ||
+        input.recoveryCause === "workspace_validation_failed" ||
+        input.recoveryCause === "configuration_incomplete");
     if (shouldPostEscalationComment) {
       const escalationCommentMarker = `Recovery action: \`${recoveryAction.id}\``;
 
@@ -4133,29 +4126,16 @@ export function recoveryService(
         );
 
       if (!hasEscalationComment) {
-        if (notice) {
-          await issuesSvc.addComment(
-            input.issue.id,
-            notice.body,
-            {},
-            {
-              authorType: "system",
-              presentation: notice.presentation,
-              metadata: notice.metadata,
-            },
-          );
-        } else {
-          await issuesSvc.addComment(
-            input.issue.id,
-            escalationNotice.body,
-            {},
-            {
-              authorType: "system",
-              presentation: escalationNotice.presentation,
-              metadata: escalationNotice.metadata,
-            },
-          );
-        }
+        await issuesSvc.addComment(
+          input.issue.id,
+          escalationNotice.body,
+          {},
+          {
+            authorType: "system",
+            presentation: escalationNotice.presentation,
+            metadata: escalationNotice.metadata,
+          },
+        );
       }
     }
 
@@ -4192,6 +4172,7 @@ export function recoveryService(
         latestRunErrorCode: input.latestRun?.errorCode ?? null,
         recoveryActionId: recoveryAction.id,
         recoveryOwnerType: recoveryAction.ownerType,
+        missingDispositionDecisionCardId,
         recoveryOwnerAgentId: recoveryAction.ownerAgentId,
         previousOwnerAgentId: recoveryAction.previousOwnerAgentId,
         returnOwnerAgentId: recoveryAction.returnOwnerAgentId,
@@ -5367,7 +5348,14 @@ export function recoveryService(
         // instead of interrupting them; other native interruptions are
         // reconciled by their own finalizer), so the recovery enqueue
         // returns null for them and they escalate exactly as before.
-        if (latestRun?.status === "interrupted") {
+        const interruptedHandoffUsage =
+          latestRun?.status === "interrupted"
+            ? await readRecoveryEpisodeWakeUsage(db, {
+                companyId: issue.companyId,
+                issueId: issue.id,
+              })
+            : null;
+        if (latestRun?.status === "interrupted" && !interruptedHandoffUsage?.exhausted) {
           if (await isInvocationBudgetBlocked(issue, agentId)) {
             result.skipped += 1;
             continue;
