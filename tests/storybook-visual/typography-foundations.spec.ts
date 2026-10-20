@@ -1,8 +1,19 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { THREAD_PREVIEW_CASES } from "../../ui/src/components/design-sandbox/task-thread-fixtures";
 
 async function openStory(page: Page, id: string) {
   await page.goto(`/iframe.html?id=${id}&viewMode=story&globals=theme:dark`);
+}
+
+async function resolvedColor(locator: Locator, token: string): Promise<string> {
+  return locator.evaluate((element, tokenName) => {
+    const probe = document.createElement("span");
+    probe.style.color = `var(${tokenName})`;
+    element.append(probe);
+    const color = getComputedStyle(probe).color;
+    probe.remove();
+    return color;
+  }, token);
 }
 
 test("proposal typography reaches shared buttons, prose and identifiers", async ({ page }) => {
@@ -156,21 +167,18 @@ test("proposal conversation uses two sizes with muted progress, contrasting bubb
     await expect(element).toHaveCSS("line-height", "20px");
   }
   await expect(human).toHaveCSS("color", "rgb(255, 255, 255)");
-  const tokens = await preview.evaluate(element => {
-    const style = getComputedStyle(element);
-    return { muted: style.getPropertyValue("--muted-foreground").trim(), foreground: style.getPropertyValue("--foreground").trim() };
-  });
-  await expect(final).toHaveCSS("color", tokens.foreground);
-  await expect(progress).toHaveCSS("color", tokens.muted);
+  const foregroundToken = await preview.evaluate(element => getComputedStyle(element).getPropertyValue("--foreground").trim());
+  await expect(final).toHaveCSS("color", await resolvedColor(preview, "--foreground"));
+  await expect(progress).toHaveCSS("color", await resolvedColor(preview, "--muted-foreground"));
   const pill = preview.locator('[data-preview-case="session-start"]').getByTestId("task-chat-live-run-pill");
   await expect(pill.locator(".shimmer-text")).toHaveCSS("font-size", "14px");
-  await expect(pill.locator(".shimmer-text")).toHaveCSS("--shimmer-base", "#fff");
+  await expect(pill.locator(".shimmer-text")).toHaveCSS("--shimmer-base", foregroundToken);
   await expect(pill.locator("span").filter({ hasText: /^for / }).last()).toHaveCSS("font-size", "12px");
   await guide.getByRole("button", { name: "Expand details & measure", exact: true }).click();
   expect(await guide.locator("[data-conversation-size]").evaluateAll(elements => elements.map(element => element.getAttribute("data-conversation-size")).sort())).toEqual(["12px", "14px"]);
   await expect(preview.locator('[data-testid="task-chat-runner-activity-detail"] .paperclip-markdown p').first()).toHaveCSS("font-size", "14px");
   const streamingFinal = preview.locator('[data-preview-case="streaming-final"] [data-conversation-text="final"] p').last();
-  await expect(streamingFinal).toHaveCSS("color", tokens.foreground);
+  await expect(streamingFinal).toHaveCSS("color", await resolvedColor(preview, "--foreground"));
   await expect(preview.locator('[data-testid="task-chat-turn-status-header"] [data-conversation-meta]').last()).toHaveCSS("font-size", "12px");
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await expect(pill.locator(".shimmer-text")).toHaveCSS("animation-name", "shimmer-text-slide");
@@ -200,10 +208,10 @@ test("conversation playback progresses through one thread and supports pause and
   const runningLabel = playback.locator('[data-conversation-tool-running="true"]').first();
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await expect(runningLabel).toHaveCSS("animation-name", "shimmer-text-slide");
-  await expect(runningLabel).toHaveCSS("color", "rgb(255, 255, 255)");
+  const foreground = await resolvedColor(playback, "--foreground");
+  await expect(runningLabel).toHaveCSS("color", foreground);
   await page.clock.runFor(7500);
   await expect(playback).toHaveAttribute("data-playback-stage", "6");
-  const foreground = await playback.evaluate(element => getComputedStyle(element).getPropertyValue("--foreground").trim());
   await expect(playback.locator('[data-conversation-text="final"] .paperclip-markdown').last()).toHaveCSS("color", foreground);
   await page.clock.runFor(7500);
   await expect(playback).toHaveAttribute("data-playback-stage", "9");
@@ -234,7 +242,7 @@ test("conversation metadata has hover and focus feedback and agent names stay bo
   await expect(name).toHaveCSS("font-size", "14px");
   await expect(name).toHaveCSS("line-height", "20px");
   await expect(name).toHaveCSS("font-weight", "600");
-  const foreground = await preview.evaluate(element => getComputedStyle(element).getPropertyValue("--foreground").trim());
+  const foreground = await resolvedColor(preview, "--foreground");
   await expect(name).toHaveCSS("color", foreground);
   const heading = preview.locator('[data-conversation-text="final"] h2').first();
   await expect(heading).toHaveCSS("font-size", "14px");
@@ -244,12 +252,12 @@ test("conversation metadata has hover and focus feedback and agent names stay bo
   const label = activity.locator("span").filter({ hasText: /^Activity$/ });
   const base = await label.evaluate(element => getComputedStyle(element).color);
   await activity.hover();
-  await expect(label).toHaveCSS("color", "rgb(255, 255, 255)");
+  await expect(label).toHaveCSS("color", foreground);
   await expect(activity).not.toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
   await page.mouse.move(0, 0);
   await expect(label).toHaveCSS("color", base);
   await activity.focus();
-  await expect(label).toHaveCSS("color", "rgb(255, 255, 255)");
+  await expect(label).toHaveCSS("color", foreground);
   await expect(activity).toHaveCSS("font-size", "12px");
 });
 
@@ -348,7 +356,7 @@ test("one current item owns shimmer and startup plumbing stays out of the conver
   await expect(owners).toHaveCount(1);
   await expect(owners).toHaveText("Thinking");
   const working = playback.getByTestId("task-chat-live-run-pill").getByText("Working", { exact: true });
-  const muted = await playback.evaluate(element => getComputedStyle(element).getPropertyValue("--muted-foreground").trim());
+  const muted = await resolvedColor(playback, "--muted-foreground");
   await expect(working).toHaveCSS("color", muted);
   await expect(working).toHaveCSS("animation-name", "none");
   await page.clock.runFor(3800);
