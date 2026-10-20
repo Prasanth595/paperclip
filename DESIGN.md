@@ -942,3 +942,11 @@ It keeps the existing installed-skill collection, defaults to Recently updated,
 and opens cards directly in Studio. Search, source filtering, scanning, import,
 folder creation and skill creation use the existing collection controllers.
 Studio editor routes and the legacy recency landing keep their own layouts.
+
+## Offline recovery
+
+The service worker recovery page uses a centered character, a dark surface, and
+a visible Reload page action. Keep the character inline and embed the marked
+`offline-recovery` section from `ui/src/index.css` at build time so the page needs
+no network requests or cached assets. Preserve the supplied character palette
+through the offline tokens.

@@ -3432,7 +3432,24 @@ export function secretService(db: Db | DbTransaction) {
         }
       }
     }
-    await db.delete(companySecrets).where(eq(companySecrets.id, secretId));
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await db.transaction(async tx => {
+          if (secret.scope !== "instance") {
+            await tx.select({ id: agents.id }).from(agents)
+              .where(eq(agents.companyId, secret.companyId)).orderBy(agents.id).for("no key update");
+          }
+          await tx.select({ id: companySecrets.id }).from(companySecrets)
+            .where(eq(companySecrets.id, secretId)).for("update", { noWait: true });
+          await tx.delete(companySecrets).where(eq(companySecrets.id, secretId));
+        });
+        break;
+      } catch (error) {
+        const failure = error as { code?: string; cause?: { code?: string } };
+        if ((failure?.cause?.code ?? failure?.code) !== "55P03") throw error;
+        if (attempt >= 2) throw conflict("Secret changed during removal. Retry removal.", { retryable: true });
+      }
+    }
     return secret;
   }
 
