@@ -169,4 +169,74 @@ describe("github-copilot-api direct protocol routing & provider matrix", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]!.url).toBe(`https://api.individual.githubcopilot.com${expectedPath}`);
   });
+
+  it("expires cached Copilot endpoint entries after the 10-minute TTL", async () => {
+    let now = 1_000_000;
+    const dateNowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    let userCalls = 0;
+    const mockFetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/copilot_internal/user")) {
+        userCalls += 1;
+        return new Response(
+          JSON.stringify({ endpoints: { api: `https://api-${userCalls}.githubcopilot.com` } }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.endsWith("/models")) {
+        return new Response(
+          JSON.stringify({
+            data: [{ id: "gpt-4.1", name: "GPT-4.1", vendor: "OpenAI", supported_endpoints: ["/chat/completions"], capabilities: { type: "chat" } }],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          id: "chatcmpl_ttl",
+          object: "chat.completion",
+          created: 1,
+          model: "gpt-4.1",
+          choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: ack } }],
+          usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      await probeCopilotDirectApi("gho_ttl_token", "gpt-4.1", mockFetch);
+      expect(userCalls).toBe(1);
+
+      // Within TTL: uses cached endpoint without calling /copilot_internal/user again
+      now += 5 * 60_000;
+      await runFastResponseProvider(
+        {
+          metadata: { provider: "github", method: "api_key" },
+          credential: "gho_ttl_token",
+          model: "gpt-4.1",
+          prompt: fastResponsePrompt({ agentName: "Alex", message: "Check TTL" }),
+          signal: AbortSignal.timeout(5000),
+        },
+        { fetch: mockFetch },
+      );
+      expect(userCalls).toBe(1);
+
+      // Past 10-minute TTL: refreshes endpoint via /copilot_internal/user
+      now += 6 * 60_000;
+      await runFastResponseProvider(
+        {
+          metadata: { provider: "github", method: "api_key" },
+          credential: "gho_ttl_token",
+          model: "gpt-4.1",
+          prompt: fastResponsePrompt({ agentName: "Alex", message: "Check expired TTL" }),
+          signal: AbortSignal.timeout(5000),
+        },
+        { fetch: mockFetch },
+      );
+      expect(userCalls).toBe(2);
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+  });
 });

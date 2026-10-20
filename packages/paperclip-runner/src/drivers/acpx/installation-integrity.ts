@@ -1478,7 +1478,7 @@ function commandLease(
   privateSnapshot: AcpxPrivateSnapshot | null,
 ): VerifiedAcpxCommandLease {
   let consumed = false;
-  let directoriesRelease: Promise<void> | undefined;
+  let directoriesReleased = false;
   let spawnedChild: ChildProcess | null = null;
   let childExit: Promise<void> | null = null;
   let snapshotCleanup: Promise<void> | null = null;
@@ -1490,23 +1490,24 @@ function commandLease(
     }
     return snapshotCleanup;
   };
-  const releaseDirectories = (): Promise<void> => {
-    return (directoriesRelease ??= Promise.all([
+  const releaseDirectories = async (): Promise<void> => {
+    if (directoriesReleased) return;
+    directoriesReleased = true;
+    await Promise.all([
       commandDirectory.close(),
       ...dependencyAncestors.map((handle) => handle.close()),
       ...(providerRuntimeExecutable === null
         ? []
         : [providerRuntimeExecutable.close()]),
-    ]).then(() => undefined));
+    ]);
   };
   const releaseDirectoriesBestEffort = (): void => {
     void releaseDirectories().catch(() => undefined);
   };
   const close = async (): Promise<void> => {
-    const wasConsumed = consumed;
+    if (consumed && privateSnapshot === null) return;
     consumed = true;
-    // A spawned command owns its source buffer until its pipe write completes.
-    if (!wasConsumed) verifiedBytes.fill(0);
+    verifiedBytes.fill(0);
     await releaseDirectories();
     // A spawned provider may still read the snapshot. Runtime shutdown runs in
     // parallel and retires that child; do not remove its bytes or report command
@@ -1601,7 +1602,7 @@ function commandLease(
           environment[VERIFIED_PROVIDER_RUNTIME_TARGET_ENV] =
             providerRuntimeEnvironmentVariable;
         }
-        child = spawnedChild = spawnChildProcess(
+        child = spawnChildProcess(
           runtimeHandoff.executable,
           guarded
             ? [

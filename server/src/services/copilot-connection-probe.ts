@@ -85,7 +85,7 @@ function requireVerified(value: unknown) {
 }
 
 export async function probeCopilotExecutionTarget(token: string, target: AdapterExecutionTarget | null | undefined, model?: string) {
-  if (!target || target.kind === "local") return probeLocalCopilotWithApiFallback(token, model);
+  if (!target || target.kind === "local") return requireVerified(await probeCopilotMetadata(token, model));
   // Same standard installed locations used by native runner admission. The
   // runtime verifier binds the inner executable and distribution before spawn.
   const command = 'for pack in /opt/paperclip-runner/provider-pack "$HOME/.local/share/paperclip-runner/provider-pack"; do if [ -f "$pack/provider-pack.json" ] && [ -f "$pack/dist/cli/copilot-metadata-probe.js" ]; then export PAPERCLIP_ACPX_PROVIDER_PACKAGE_ROOT="$pack" PAPERCLIP_ACPX_PROVIDER_PACKAGE_MANIFEST="$pack/package.json"; exec "$pack/node_modules/node/bin/node" "$pack/dist/cli/copilot-metadata-probe.js"; fi; done; exit 127';

@@ -233,10 +233,20 @@ describe("managed AI connections", () => {
       expect(allowed.status, JSON.stringify(allowed.body)).toBe(200);
       expect(probe).toHaveBeenCalledExactlyOnceWith(db, companyId, token, null, undefined, { pluginWorkerManager: undefined });
       probe.mockClear();
+      const installedAgentId = randomUUID();
+      await db.insert(agents).values({ id: installedAgentId, companyId, name: "Installed Copilot Agent", adapterType: "paperclip_runner" });
+      await service.save(companyId, owner, { provider: "github", method: "api_key", ownership: "shared", name: "Shared discovery", connectionId: account.connectionId, grantId: account.grantId, agentIds: [installedAgentId], allAgents: false });
+      const readOnlyViewer = "copilot-discovery-readonly-audience";
+      await db.insert(companyMemberships).values({ companyId, principalId: readOnlyViewer, principalType: "user", status: "active", membershipRole: "member" });
+      await db.insert(principalPermissionGrants).values({ companyId, principalId: readOnlyViewer, principalType: "user", permissionKey: "company_config:read" });
+      await db.insert(connectionGrantMembers).values({ companyId, grantId: account.grantId, subjectType: "user", subjectId: readOnlyViewer });
+      const deniedInstalledReadOnly = await request(app).get(url).set("x-test-user", readOnlyViewer).query({ ...query, agentId: installedAgentId });
+      expect(deniedInstalledReadOnly.status, JSON.stringify(deniedInstalledReadOnly.body)).toBe(403);
+      expect(probe).not.toHaveBeenCalled();
       const foreign = await request(app).get(url).set("x-test-user", owner).query({ ...query, agentId: randomUUID() });
       expect(foreign.status).toBe(404);
       expect(probe).not.toHaveBeenCalled();
-      expect(JSON.stringify([denied.body, allowed.body, foreign.body])).not.toContain(token);
+      expect(JSON.stringify([denied.body, allowed.body, deniedInstalledReadOnly.body, foreign.body])).not.toContain(token);
     } finally { probe.mockRestore(); }
   });
 

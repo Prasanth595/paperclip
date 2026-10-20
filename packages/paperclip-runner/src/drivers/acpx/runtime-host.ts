@@ -1,4 +1,3 @@
-import { composeCopilotSystemInstructions } from "./copilot-profile.js";
 import { piProviderConfiguration } from "./pi-provider-config.js";
 import { withAcpxTurnCancellation } from "./turn-cancellation.js";
 import { resolveAcpxProviderMode } from "./provider-mode.js";
@@ -510,10 +509,7 @@ export class AcpxRuntimeHost {
         // Do not race this write against cancellation: retain the lifetime lease
         // until the atomic refresh settles, then honor an intervening abort.
         options.signal?.throwIfAborted();
-        await refreshCopilotSystemInstructions(
-          sandbox,
-          composeCopilotSystemInstructions(boundedInstructions(options.systemInstructions)),
-        );
+        await refreshCopilotSystemInstructions(sandbox, boundedInstructions(options.systemInstructions));
         options.signal?.throwIfAborted();
       }
       if (options.agent === "pi") {
@@ -1256,9 +1252,11 @@ async function cleanupRuntimeResources(
       return error;
     }
   };
-  // The runtime must retire before its command snapshot can be removed.
-  // Keep both the snapshot and credential while the provider is still alive;
-  // failed cleanup remains owned and can be retried after process retirement.
+  // The command lease owns only the already-consumed verified launch
+  // snapshot, so it can be released as shutdown starts. The credential is
+  // different: a provider whose exact runtime close is pending or failed may
+  // still read or rewrite its home. Retain both the staged bytes and the
+  // exclusive home lease until that exact close succeeds.
   const runtimeOutcome = runtime
     ? settle(() => runtime.close({ reason }))
     : Promise.resolve(null);
@@ -1268,10 +1266,9 @@ async function cleanupRuntimeResources(
     await runtimeOutcome;
     return toolBridge === null ? null : await settle(() => toolBridge.close());
   })();
-  const commandOutcome = (async (): Promise<unknown | null> => {
-    await runtimeOutcome;
-    return command === null ? null : await settle(() => command.close());
-  })();
+  const commandOutcome = command
+    ? settle(() => command.close())
+    : Promise.resolve(null);
   const credentialOutcome = (async (): Promise<unknown | null> => {
     const runtimeError = await runtimeOutcome;
     if (runtimeError !== null || credential === null) return null;

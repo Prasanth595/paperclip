@@ -44,6 +44,16 @@ const asRecord = (value: unknown): RecordValue =>
 
 const endpointProtocolCache = new Map<string, { baseUrl: string; apiToken: string; models: Map<string, CopilotModelMetadata>; expiresAt: number }>();
 
+function getCachedCopilotEndpoint(token: string) {
+  const entry = endpointProtocolCache.get(token);
+  if (!entry) return undefined;
+  if (entry.expiresAt <= Date.now()) {
+    endpointProtocolCache.delete(token);
+    return undefined;
+  }
+  return entry;
+}
+
 /**
  * Determine which endpoint protocol to use for a Copilot model based on its
  * `supported_endpoints` array (from `GET /models`) and model ID / vendor.
@@ -216,7 +226,7 @@ export async function probeCopilotDirectApi(
   rawToken: string,
   requestedModel?: string,
   fetchImpl: typeof fetch = fetch,
-  profileDigest = "sha256:1fcb0d545bd1711b8871ff47dc4f0f3cc9933d4584f4da5355212189a14bc577",
+  profileDigest = "sha256:1dad3d26d91e66c6f911dbfa43e7963f36c0bbf0d7709f4bbb568029a8b4b46a",
 ): Promise<
   | CopilotVerificationResult
   | { status: "failed"; code: string; message: string; promptSent: false }
@@ -328,12 +338,12 @@ export function createGitHubCopilotLanguageModel(
   fetchImpl?: typeof fetch,
 ): Extract<LanguageModel, { specificationVersion: "v4" }> {
   const token = credential.trim();
-  const cached = endpointProtocolCache.get(token);
+  const cached = getCachedCopilotEndpoint(token);
   const cachedModel = cached?.models.get(modelId);
   const protocol = cachedModel?.protocol ?? resolveCopilotModelProtocol(modelId, cachedModel?.supportedEndpoints, cachedModel?.vendor);
 
   const copilotFetch: typeof fetch = async (inputUrl, init) => {
-    const activeCache = endpointProtocolCache.get(token);
+    const activeCache = getCachedCopilotEndpoint(token);
     let baseUrl = activeCache?.baseUrl;
     let apiToken = activeCache?.apiToken ?? token;
     if (!baseUrl) {

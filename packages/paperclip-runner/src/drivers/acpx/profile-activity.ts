@@ -28,7 +28,7 @@ export interface AcpxActivityAdapter {
 
 const adapters: Readonly<Record<string, AcpxActivityAdapter | undefined>> = {
   cursor: cursorActivityAdapter,
-  copilot: Object.freeze({ createToolEvidence: createCopilotToolEvidence }),
+  copilot: { createToolEvidence: createCopilotToolEvidence },
 };
 const noActivity: AcpxActivityAdapter = Object.freeze({});
 

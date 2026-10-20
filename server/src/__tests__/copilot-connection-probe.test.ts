@@ -98,4 +98,15 @@ describe("Copilot connection verification", () => {
     mocks.command.mockResolvedValue({ timedOut: false, stdout: JSON.stringify(verified), exitCode: 0 });
     await expect(probeCopilotExecutionTarget("private-token", remote, "missing")).rejects.toMatchObject({ details: { code: "COPILOT_MODEL_UNAVAILABLE" } });
   });
+  it("requires the verified local runtime for execution target readiness instead of falling back to direct API discovery", async () => {
+    mocks.metadata.mockResolvedValue({
+      status: "failed",
+      code: "COPILOT_INSTALLATION_INVALID",
+      message: "The selected environment does not have the verified Copilot runtime installed.",
+      promptSent: false,
+    });
+    await expect(probeCopilotExecutionTarget("private-token", null)).rejects.toMatchObject({
+      details: { code: "COPILOT_INSTALLATION_INVALID" },
+    });
+  });
 });

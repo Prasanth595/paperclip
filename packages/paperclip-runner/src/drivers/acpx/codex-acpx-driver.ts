@@ -1,4 +1,5 @@
 import { type CopilotToolEvidence } from "./copilot-tool-evidence.js";
+import { resolveCompletionContinuation } from "../completion-continuation.js";
 import { isProviderMode } from "../../contracts/provider-mode.js";
 import { acpxProfileActivity, type AcpxActivityAdapter, type AcpxToolEvidence } from "./profile-activity.js";
 
@@ -59,7 +60,6 @@ import {
 } from "../runner-tool-bridge.js";
 import {
   DEFAULT_CODEX_ACPX_RUNTIME_SHUTDOWN_BOUND_MS,
-  AcpxProviderProcessLostError,
   openCodexAcpxRuntime,
 } from "./codex-runtime-adapter.js";
 import { normalizeAcpxPermission } from "./acp-permission-adapter.js";
@@ -1133,7 +1133,16 @@ class CodexAcpxSession implements HarnessSession {
     }
     const tool = canonicalRunnerToolName(call.tool);
     if (tool === PRP_COMPLETION_TOOL_NAME || tool === PRP_BLOCK_TOOL_NAME) {
-      const validation = validatePrpStructuredRunResult(call.arguments);
+      const completionInput = await resolveCompletionContinuation(call.arguments, this.#input.runId,
+        this.#dynamicToolHandler ? () => this.#dynamicToolHandler!({
+          tool: "get_task_context", callId: `${call.callId}:continuation`,
+          providerSessionId: this.#host.identity().agentSessionId, turnId, arguments: {}, signal: call.signal,
+        }) : undefined);
+      this.#assertOpen();
+      if (this.#activeTurnId !== turnId || this.#pendingTerminal || call.signal.aborted) {
+        throw new Error("The turn ended while resolving completion");
+      }
+      const validation = validatePrpStructuredRunResult(completionInput);
       if (!validation.ok) throw new Error("Invalid semantic run result");
       const blocked = validation.result.reportedWorkDisposition === "blocked";
       if (
@@ -1569,7 +1578,7 @@ class CodexAcpxSession implements HarnessSession {
     } catch (error) {
       if (this.#terminalTurns.has(turnId)) return;
       if (error instanceof TerminalEventCapacityError) throw error;
-      this.#cancelPendingRuntimeRequests(error instanceof AcpxProviderProcessLostError ? error : "provider turn failed", turnId);
+      this.#cancelPendingRuntimeRequests("provider turn failed", turnId);
       if (this.#closed || this.#closingStarted) {
         const reaffirmedSemanticResult =
           this.#pendingSemanticTransfer?.turnId === turnId
@@ -1600,7 +1609,7 @@ class CodexAcpxSession implements HarnessSession {
               : { reaffirmedSemanticResult }),
           }),
           "turn.failed",
-          { status: "failed", error: { ...(error instanceof AcpxProviderProcessLostError ? { code: error.code } : {}), message: safeMessage(error) } },
+          { status: "failed", error: { message: safeMessage(error) } },
         );
       }
     }
@@ -1744,7 +1753,9 @@ class CodexAcpxSession implements HarnessSession {
         const pending = this.#pendingRuntimeRequests.get(requestId);
         if (!pending || pending.settling || !this.#pendingRuntimeRequests.delete(requestId)) return;
         pending.cleanup();
-        this.#emitRequestAbort(request, context.signal.reason);
+        this.#emit("runtime_request.cancelled", harnessRuntimeRequestOutcome(request, {
+          action: "cancel", reason: "provider request aborted",
+        }), { turnId, itemId });
         settle(input.cancel());
       };
       this.#pendingRuntimeRequests.set(requestId, {
@@ -1793,7 +1804,9 @@ class CodexAcpxSession implements HarnessSession {
         const pending = this.#pendingRuntimeRequests.get(requestId);
         if (!pending || pending.settling || !this.#pendingRuntimeRequests.delete(requestId)) return;
         pending.cleanup();
-        this.#emitRequestAbort(runtimeRequest, signal.reason);
+        this.#emit("runtime_request.cancelled", harnessRuntimeRequestOutcome(runtimeRequest, {
+          action: "cancel", reason: "provider request aborted",
+        }), { turnId, itemId: requestId });
         settle({ outcome: "cancel" });
       };
       this.#pendingRuntimeRequests.set(requestId, {
@@ -1927,7 +1940,14 @@ class CodexAcpxSession implements HarnessSession {
         if (!pending || pending.settling) return;
         if (!this.#pendingRuntimeRequests.delete(requestId)) return;
         pending.cleanup();
-        this.#emitRequestAbort(runtimeRequest, context.signal.reason);
+        this.#emit(
+          "runtime_request.cancelled",
+          harnessRuntimeRequestOutcome(runtimeRequest, {
+            action: "cancel",
+            reason: "provider request aborted",
+          }),
+          { turnId, itemId: requestId },
+        );
         settle({ action: "cancel" });
       };
       context.signal.addEventListener("abort", cancel, { once: true });
@@ -1945,23 +1965,22 @@ class CodexAcpxSession implements HarnessSession {
     });
   }
 
-  #emitRequestAbort(request: HarnessRuntimeRequest, reason: unknown): void {
-    const lost = reason instanceof AcpxProviderProcessLostError;
-    this.#emit(lost ? "runtime_request.expired" : "runtime_request.cancelled", {
-      ...harnessRuntimeRequestOutcome(request, {
-        ...(lost ? {} : { action: "cancel" as const }),
-        reason: lost ? "provider_process_lost" : typeof reason === "string" ? boundedText(reason, 1_000) : "provider request aborted",
-      }),
-      ...(lost ? { replayAllowed: false } : {}),
-    }, { turnId: request.turnId, itemId: request.itemId });
-  }
-
-  #cancelPendingRuntimeRequests(reason: string | AcpxProviderProcessLostError, turnId?: string): void {
+  #cancelPendingRuntimeRequests(reason: string, turnId?: string): void {
     for (const [requestId, pending] of this.#pendingRuntimeRequests) {
       if (turnId && pending.request.turnId !== turnId) continue;
       if (!this.#pendingRuntimeRequests.delete(requestId)) continue;
       pending.cleanup();
-      this.#emitRequestAbort(pending.request, reason);
+      this.#emit(
+        "runtime_request.cancelled",
+        harnessRuntimeRequestOutcome(pending.request, {
+          action: "cancel",
+          reason: boundedText(safeMessage(reason), 1_000),
+        }),
+        {
+          turnId: pending.request.turnId,
+          itemId: pending.request.itemId,
+        },
+      );
       pending.cancel();
     }
   }
