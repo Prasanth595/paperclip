@@ -305,10 +305,19 @@ describe("claude_local ACP lane", () => {
       effort: "high",
       agentCommand: "custom-claude-acp",
       mode: "persistent",
-      permissionMode: "approve-all",
+      permissionMode: "deny-all",
       nonInteractivePermissions: "deny",
       warmHandleIdleMs: 25,
     });
+  });
+
+  it("only approves all ACP tools when Claude's dangerous flag is explicitly enabled", () => {
+    expect(buildClaudeAcpConfig({}).permissionMode).toBe("deny-all");
+    expect(buildClaudeAcpConfig({ dangerouslySkipPermissions: false }).permissionMode).toBe("deny-all");
+    expect(buildClaudeAcpConfig({ dangerouslySkipPermissions: true }).permissionMode).toBe("approve-all");
+    expect(buildClaudeAcpConfig({ dangerouslySkipPermissions: true, permissionMode: "deny-all" }).permissionMode)
+      .toBe("deny-all");
+    expect(buildClaudeAcpConfig({ acpPermissionMode: "approve-reads" }).permissionMode).toBe("approve-reads");
   });
 
   it("checks the Node version required by the Claude ACP runtime", () => {

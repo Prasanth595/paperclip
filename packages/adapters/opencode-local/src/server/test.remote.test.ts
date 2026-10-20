@@ -1,4 +1,4 @@
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -210,5 +210,51 @@ describe("opencode remote environment diagnostics", () => {
     expect(probeCall?.[4].env.XDG_CONFIG_HOME).toBe(
       "/remote/workspace/.paperclip-runtime/runs/test/workspace/.paperclip-runtime/opencode/xdgConfig",
     );
+  });
+
+  it("stages the host runtime config for remote probes when it already carries the model", async () => {
+    const remoteTarget: AdapterExecutionTarget = {
+      kind: "remote",
+      transport: "sandbox",
+      providerKey: "cloudflare",
+      remoteCwd: "/remote/workspace",
+      runner: {
+        execute: async () => ({
+          exitCode: 0,
+          signal: null,
+          timedOut: false,
+          stdout: "",
+          stderr: "",
+          pid: null,
+          startedAt: new Date().toISOString(),
+        }),
+      },
+    };
+    await mkdir(path.join(configHome, "opencode"), { recursive: true });
+    await writeFile(
+      path.join(configHome, "opencode", "opencode.json"),
+      JSON.stringify({
+        provider: { anthropic: { models: { "claude-sonnet-4-5": { name: "Claude Sonnet 4.5" } } } },
+      }),
+      "utf8",
+    );
+
+    const result = await testEnvironment({
+      companyId: "company-1",
+      adapterType: "opencode_local",
+      config: {
+        command: "opencode",
+        model: "anthropic/claude-sonnet-4-5",
+        env: { XDG_CONFIG_HOME: configHome },
+      },
+      executionTarget: remoteTarget,
+      environmentName: "QA Cloudflare",
+    });
+
+    expect(result.status).toBe("pass");
+    const runtimeCalls = prepareAdapterExecutionTargetRuntime.mock.calls as unknown as Array<
+      [{ adapterKey: string; assets?: Array<{ key: string; localDir: string }> }]
+    >;
+    expect(runtimeCalls[0]?.[0].assets).toContainEqual(expect.objectContaining({ key: "xdgConfig" }));
   });
 });

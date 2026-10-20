@@ -309,6 +309,7 @@ describe("claude_local environment diagnostics", () => {
         engine: "cli",
         model: "claude-opus-5",
         command: "claude",
+        dangerouslySkipPermissions: true,
       },
       executionTarget: {
         kind: "remote",

@@ -35,7 +35,7 @@ subscription quota exhaustion merely because ACP labels them `limit`.
 | `timeoutSec` | number | No | Process timeout (0 = no timeout) |
 | `graceSec` | number | No | Grace period before force-kill |
 | `maxTurnsPerRun` | number | No | Max agentic turns per heartbeat (defaults to `300`) |
-| `dangerouslySkipPermissions` | boolean | No | Skip permission prompts (default: `true`); required for headless runs where interactive approval is impossible |
+| `dangerouslySkipPermissions` | boolean | No | Skip permission prompts (default: `false`); enable it for headless runs where interactive approval is impossible |
 
 On the CLI engine, version and `--effort` capability probes have a bounded
 20-second budget when `timeoutSec` is zero or unset. A positive run timeout below

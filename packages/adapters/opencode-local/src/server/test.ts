@@ -128,8 +128,8 @@ export async function testEnvironment(
   env.OPENCODE_DISABLE_PROJECT_CONFIG = "true";
   const preparedRuntimeConfig = await prepareOpenCodeRuntimeConfig({ env, config });
   const localRuntimeConfigHome =
-    preparedRuntimeConfig.notes.length > 0 ? preparedRuntimeConfig.env.XDG_CONFIG_HOME : "";
-  if (asBoolean(config.dangerouslySkipPermissions, true)) {
+    preparedRuntimeConfig.hasRuntimeConfig ? preparedRuntimeConfig.env.XDG_CONFIG_HOME : "";
+  if (asBoolean(config.dangerouslySkipPermissions, false)) {
     checks.push({
       code: "opencode_headless_permissions_enabled",
       level: "info",

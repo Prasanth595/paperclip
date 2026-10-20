@@ -25,7 +25,7 @@ The `codex_local` adapter runs OpenAI's Codex CLI locally. It supports session p
 | `timeoutSec` | number | No | Process timeout (0 = no timeout) |
 | `graceSec` | number | No | Grace period before force-kill |
 | `fastMode` | boolean | No | Enables Codex Fast mode. Currently supported on `gpt-5.4` only and burns credits faster |
-| `dangerouslyBypassApprovalsAndSandbox` | boolean | No | Skip safety checks (dev only) |
+| `dangerouslyBypassApprovalsAndSandbox` | boolean | No | Skip safety checks (dev only; default: `false`) |
 
 ## Session Persistence
 

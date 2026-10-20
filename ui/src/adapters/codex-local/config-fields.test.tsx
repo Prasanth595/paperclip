@@ -137,11 +137,12 @@ describe("Paperclip Runner Codex configuration", () => {
       await act(async () => root.render(<QueryClientProvider client={new QueryClient()}><TooltipProvider><Fixture /></TooltipProvider></QueryClientProvider>));
       const toggle = container.querySelector<HTMLButtonElement>('[aria-label="Bypass sandbox"]');
       expect(toggle).toBeDefined();
-      expect(toggle?.getAttribute("aria-checked")).toBe(String(resolveCodexLocalCliPolicy(buildCodexRunnerConfig(saved)).bypass));
+      const initialBypass = resolveCodexLocalCliPolicy(buildCodexRunnerConfig(saved)).bypass;
+      expect(toggle?.getAttribute("aria-checked")).toBe(String(initialBypass));
       await act(async () => toggle!.click());
       const config = buildCodexRunnerConfig(saved);
       expect(saved.runner).toBe("auto");
-      expect(config.dangerouslyBypassApprovalsAndSandbox).toBe(extraArgs !== "");
+      expect(config.dangerouslyBypassApprovalsAndSandbox).toBe(!initialBypass);
       expect(toggle?.getAttribute("aria-checked")).toBe(String(resolveCodexLocalCliPolicy(config).bypass));
     } finally {
       await act(async () => root.unmount());

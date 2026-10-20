@@ -606,6 +606,9 @@ function importAdapterValues(
       ...(sourceConfig.lifecycleMode === "warm" || sourceConfig.lifecycleMode === "per_turn" ? { paperclipRunnerLifecycleMode: sourceConfig.lifecycleMode } : {}),
       ...(typeof sourceConfig.idleTimeoutMs === "number" ? { paperclipRunnerIdleTimeoutMs: sourceConfig.idleTimeoutMs } : {}),
     } : {}),
+    ...(sourceConfig && choice === sourceAdapterType && (choice === "claude_local" || choice === "opencode_local") && typeof sourceConfig.dangerouslySkipPermissions === "boolean"
+      ? { dangerouslySkipPermissions: sourceConfig.dangerouslySkipPermissions }
+      : {}),
     ...(sourceAdapterType === "paperclip_runner" && choice !== "openai_dot"
       ? { adapterSchemaValues: { ...sourceConfig } } : {}),
     ...(choice === "openai_dot" ? {

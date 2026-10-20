@@ -15,6 +15,13 @@ describe("Claude full-auto permission args", () => {
     });
   }
 
+  it("emits no bypass flag when the setting is absent", () => {
+    for (const build of [buildClaudeExecutionPermissionArgs, buildClaudeProbePermissionArgs]) {
+      expect(build({ targetIsRemote: false, localProcessUid: 1000, dangerouslySkipPermissions: undefined as unknown as boolean }))
+        .toEqual([]);
+    }
+  });
+
   it("identifies managed sandboxes for Claude's root launch check only when full auto is enabled", () => {
     expect(claudeSandboxPermissionEnv({ dangerouslySkipPermissions: true, targetIsSandbox: true })).toEqual({ IS_SANDBOX: "1" });
     expect(claudeSandboxPermissionEnv({ dangerouslySkipPermissions: false, targetIsSandbox: true })).toEqual({});

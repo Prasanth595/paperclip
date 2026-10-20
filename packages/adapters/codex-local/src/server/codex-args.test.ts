@@ -8,7 +8,7 @@ describe("buildCodexExecArgs", () => {
     { config: { args: ["-c", "approval_policy=on-request"] }, bypass: false, args: ["exec", "--json", "-c", 'sandbox_mode="workspace-write"', "-c", "sandbox_workspace_write.network_access=true", "-c", "approval_policy=on-request", "-"] },
     { config: { extraArgs: [], args: ["--profile", "restricted"] }, bypass: false, args: ["exec", "--json", "--profile", "restricted", "-"] },
     { config: { extraArgs: [0, null], args: ["--sandbox", "read-only"] }, bypass: false, args: ["exec", "--json", "--sandbox", "read-only", "-"] },
-    { config: { extraArgs: ["--color", "never"], args: ["--sandbox", "read-only"] }, bypass: true, args: ["exec", "--json", "--dangerously-bypass-approvals-and-sandbox", "--color", "never", "-"] },
+    { config: { extraArgs: ["--color", "never"], args: ["--sandbox", "read-only"] }, bypass: false, args: ["exec", "--json", "-c", 'sandbox_mode="workspace-write"', "-c", "sandbox_workspace_write.network_access=true", "--color", "never", "-"] },
     { config: { dangerouslyBypassApprovalsAndSandbox: true, extraArgs: ["--sandbox", "read-only"] }, bypass: true, args: ["exec", "--json", "--dangerously-bypass-approvals-and-sandbox", "--sandbox", "read-only", "-"] },
     { config: { dangerouslyBypassSandbox: true, args: ["--sandbox", "read-only"] }, bypass: true, args: ["exec", "--json", "--dangerously-bypass-approvals-and-sandbox", "--sandbox", "read-only", "-"] },
     { config: { dangerouslyBypassApprovalsAndSandbox: false, dangerouslyBypassSandbox: true, extraArgs: ["--color", "never"] }, bypass: false, args: ["exec", "--json", "-c", 'sandbox_mode="workspace-write"', "-c", "sandbox_workspace_write.network_access=true", "--color", "never", "-"] },
@@ -17,10 +17,10 @@ describe("buildCodexExecArgs", () => {
     expect(buildCodexExecArgs(config).args).toEqual(args);
   });
 
-  it.each([null, "existing-session"])("defaults direct and resumed launches to full bypass (%s)", (resumeSessionId) => {
+  it.each([null, "existing-session"])("defaults direct and resumed launches to no bypass (%s)", (resumeSessionId) => {
     const { args } = buildCodexExecArgs({}, { resumeSessionId });
-    expect(args).toContain("--dangerously-bypass-approvals-and-sandbox");
-    expect(args).not.toContain('sandbox_mode="workspace-write"');
+    expect(args).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(args).toContain('sandbox_mode="workspace-write"');
     if (resumeSessionId) expect(args.slice(-3)).toEqual(["resume", resumeSessionId, "-"]);
   });
 
@@ -29,6 +29,7 @@ describe("buildCodexExecArgs", () => {
       model,
       modelReasoningEffort: effort,
       fastMode: true,
+      dangerouslyBypassApprovalsAndSandbox: true,
     });
 
     expect(result.model).toBe(model);
@@ -68,6 +69,7 @@ describe("buildCodexExecArgs", () => {
       model: "gpt-5.4",
       search: true,
       fastMode: true,
+      dangerouslyBypassApprovalsAndSandbox: true,
     });
 
     expect(result.fastModeRequested).toBe(true);
@@ -92,6 +94,7 @@ describe("buildCodexExecArgs", () => {
     const result = buildCodexExecArgs({
       model: "gpt-5.5",
       fastMode: true,
+      dangerouslyBypassApprovalsAndSandbox: true,
     });
 
     expect(result.fastModeRequested).toBe(true);
@@ -115,6 +118,7 @@ describe("buildCodexExecArgs", () => {
     const result = buildCodexExecArgs({
       model: "future-codex-model",
       fastMode: true,
+      dangerouslyBypassApprovalsAndSandbox: true,
     });
 
     expect(result.fastModeRequested).toBe(true);
@@ -137,6 +141,7 @@ describe("buildCodexExecArgs", () => {
   it("enables Codex fast mode overrides when model is omitted (CLI default)", () => {
     const result = buildCodexExecArgs({
       fastMode: true,
+      dangerouslyBypassApprovalsAndSandbox: true,
     });
 
     expect(result.fastModeRequested).toBe(true);
@@ -158,6 +163,7 @@ describe("buildCodexExecArgs", () => {
     const result = buildCodexExecArgs({
       model: "gpt-5",
       fastMode: true,
+      dangerouslyBypassApprovalsAndSandbox: true,
     });
 
     expect(result.fastModeRequested).toBe(true);
@@ -179,6 +185,7 @@ describe("buildCodexExecArgs", () => {
     const result = buildCodexExecArgs({
       model: "gpt-5.4-mini",
       fastMode: true,
+      dangerouslyBypassApprovalsAndSandbox: true,
     });
 
     expect(result.fastModeRequested).toBe(true);
@@ -197,6 +204,7 @@ describe("buildCodexExecArgs", () => {
     const result = buildCodexExecArgs(
       {
         model: "gpt-5.5",
+        dangerouslyBypassApprovalsAndSandbox: true,
       },
       { skipGitRepoCheck: true },
     );
@@ -217,6 +225,7 @@ describe("buildCodexExecArgs", () => {
       {
         model: "gpt-5.5",
         extraArgs: ["--skip-git-repo-check"],
+        dangerouslyBypassApprovalsAndSandbox: true,
       },
       { skipGitRepoCheck: true },
     );

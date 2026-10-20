@@ -12,7 +12,7 @@ export const SANDBOX_INSTALL_COMMAND = "npm install -g @openai/codex";
 // bare `gpt-5.6` alias: OpenAI ships no model metadata for the bare slug, so passing it makes the
 // Codex CLI warn ("Model metadata for `gpt-5.6` not found") and fall back to generic context limits.
 export const DEFAULT_CODEX_LOCAL_MODEL = PAPERCLIP_RUNNER_DEFAULT_MODELS.codex;
-export const DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX = true;
+export const DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX = false;
 
 export function resolveCodexLocalCliPolicy(config: unknown, options: { networkAccess?: boolean } = {}) {
   const record = typeof config === "object" && config !== null && !Array.isArray(config)
@@ -227,7 +227,7 @@ Core fields:
 - promptTemplate (string, optional): run prompt template
 - search (boolean, optional): run codex with --search
 - fastMode (boolean, optional): enable Codex Fast mode; supported on GPT-6 (astra/sol/luna), GPT-6.1 Sol, GPT-5.6 (sol/terra/luna), GPT-5.5, GPT-5.4 and passed through for manual model IDs
-- dangerouslyBypassApprovalsAndSandbox (boolean, optional): run with bypass flag
+- dangerouslyBypassApprovalsAndSandbox (boolean, optional, default false): run with bypass flag
 - command (string, optional): defaults to "codex"
 - extraArgs (string[], optional): additional CLI args
 - env (object, optional): KEY=VALUE environment variables

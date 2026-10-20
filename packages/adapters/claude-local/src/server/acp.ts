@@ -130,9 +130,13 @@ export function buildClaudeAcpConfig(
   const agentCommand = firstNonEmptyString(config.agentCommand, config.acpAgentCommand);
   const stateDir = firstNonEmptyString(config.stateDir, config.acpStateDir);
   const mode = firstNonEmptyString(config.mode, config.acpMode) ?? DEFAULT_ACP_ENGINE_MODE;
+  // Claude's default engine is ACP, so the shared engine default ("approve-all")
+  // would auto-approve every tool for agents that never opted in. Keep the
+  // permissive mode only when the adapter's own dangerous flag is explicit.
+  const skipPermissions = asBoolean(config.dangerouslySkipPermissions, false);
   const permissionMode =
     firstNonEmptyString(config.permissionMode, config.acpPermissionMode) ??
-    DEFAULT_ACP_ENGINE_PERMISSION_MODE;
+    (skipPermissions ? DEFAULT_ACP_ENGINE_PERMISSION_MODE : "deny-all");
   const nonInteractivePermissions =
     firstNonEmptyString(config.nonInteractivePermissions, config.acpNonInteractivePermissions) ??
     DEFAULT_ACP_ENGINE_NON_INTERACTIVE_PERMISSIONS;
@@ -670,13 +674,13 @@ export async function probeClaudeAcpSandboxLogin(input: {
   }
 
   Object.assign(env, claudeSandboxPermissionEnv({
-    dangerouslySkipPermissions: asBoolean(config.dangerouslySkipPermissions, true), targetIsSandbox,
+    dangerouslySkipPermissions: asBoolean(config.dangerouslySkipPermissions, false), targetIsSandbox,
   }));
   const args = ["--print", "-", "--output-format", "stream-json", "--verbose"];
   if (config.managedAiConnection) args.push("--setting-sources", "user");
   args.push(
     ...buildClaudeProbePermissionArgs({
-      dangerouslySkipPermissions: asBoolean(config.dangerouslySkipPermissions, true),
+      dangerouslySkipPermissions: asBoolean(config.dangerouslySkipPermissions, false),
       targetIsRemote,
       localProcessUid: process.getuid?.() ?? null,
     }),

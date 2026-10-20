@@ -943,6 +943,7 @@ describe("claude execute", () => {
           engine: "cli",
           command: commandPath,
           cwd: localWorkspace,
+          dangerouslySkipPermissions: true,
           env: {
             PAPERCLIP_TEST_CAPTURE_PATH: capturePath1,
           },

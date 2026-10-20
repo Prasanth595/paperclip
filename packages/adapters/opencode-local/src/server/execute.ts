@@ -332,7 +332,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   }
   const preparedRuntimeConfig = await prepareOpenCodeRuntimeConfig({ env, config });
   const localRuntimeConfigHome =
-    preparedRuntimeConfig.notes.length > 0 ? preparedRuntimeConfig.env.XDG_CONFIG_HOME : "";
+    preparedRuntimeConfig.hasRuntimeConfig ? preparedRuntimeConfig.env.XDG_CONFIG_HOME : "";
   try {
     const runtimeEnv = Object.fromEntries(
       Object.entries(ensurePathInEnv({ ...process.env, ...preparedRuntimeConfig.env })).filter(

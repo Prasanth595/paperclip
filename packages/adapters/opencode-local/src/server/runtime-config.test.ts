@@ -32,6 +32,39 @@ async function makeConfigHome(initialConfig?: Record<string, unknown>) {
 }
 
 describe("prepareOpenCodeRuntimeConfig", () => {
+  it("does not inject a permissions override for an empty config by default", async () => {
+    const configHome = await makeConfigHome();
+    const env = { XDG_CONFIG_HOME: configHome };
+
+    const prepared = await prepareOpenCodeRuntimeConfig({ env, config: {} });
+
+    expect(prepared.env).toEqual(env);
+    expect(prepared.notes).toEqual([]);
+    expect(prepared.hasRuntimeConfig).toBe(false);
+    await prepared.cleanup();
+  });
+
+  it("reports a prepared runtime config when the host config already has the model", async () => {
+    const configHome = await makeConfigHome({
+      provider: {
+        openrouter: {
+          models: { "openai/gpt-oss-120b:nitro": { name: "GPT-OSS 120B (nitro)" } },
+        },
+      },
+    });
+
+    const prepared = await prepareOpenCodeRuntimeConfig({
+      env: { XDG_CONFIG_HOME: configHome },
+      config: { model: "openrouter/openai/gpt-oss-120b:nitro" },
+    });
+    cleanupPaths.add(prepared.env.XDG_CONFIG_HOME);
+
+    expect(prepared.hasRuntimeConfig).toBe(true);
+    expect(prepared.notes).toEqual(["Prepared isolated OpenCode provider configuration."]);
+    expect(prepared.env.XDG_CONFIG_HOME).not.toBe(configHome);
+    await prepared.cleanup();
+  });
+
   it("attributes custom OpenRouter aliases and inline overrides without changing other endpoints", async () => {
     const other = { options: { baseURL: "https://other.example/v1", headers: { "X-Title": "Other" } } };
     const configHome = await makeConfigHome({ provider: { other, openrouter: other } });
@@ -53,7 +86,7 @@ describe("prepareOpenCodeRuntimeConfig", () => {
     await prepared.cleanup();
   });
 
-  it("allows all tools and connected tools by default", async () => {
+  it("allows all tools and connected tools when explicitly enabled", async () => {
     const configHome = await makeConfigHome({
       permission: {
         read: "allow",
@@ -65,7 +98,7 @@ describe("prepareOpenCodeRuntimeConfig", () => {
 
     const prepared = await prepareOpenCodeRuntimeConfig({
       env: { XDG_CONFIG_HOME: configHome },
-      config: {},
+      config: { dangerouslySkipPermissions: true },
     });
     cleanupPaths.add(prepared.env.XDG_CONFIG_HOME);
 
@@ -84,6 +117,37 @@ describe("prepareOpenCodeRuntimeConfig", () => {
     await prepared.cleanup();
     cleanupPaths.delete(prepared.env.XDG_CONFIG_HOME);
     await expect(fs.access(prepared.env.XDG_CONFIG_HOME)).rejects.toThrow();
+  });
+
+  it("registers custom providers without granting permissions when the flag is absent", async () => {
+    const configHome = await makeConfigHome({ permission: { read: "allow" } });
+    const providers = {
+      bifrost: {
+        npm: "@ai-sdk/openai-compatible",
+        models: { "example/model-a": {} },
+      },
+    };
+
+    const prepared = await prepareOpenCodeRuntimeConfig({
+      env: {
+        XDG_CONFIG_HOME: configHome,
+        PAPERCLIP_OPENCODE_PROVIDERS: JSON.stringify(providers),
+      },
+      config: {},
+    });
+    cleanupPaths.add(prepared.env.XDG_CONFIG_HOME);
+
+    expect(prepared.env.XDG_CONFIG_HOME).not.toBe(configHome);
+    const runtimeConfig = JSON.parse(
+      await fs.readFile(path.join(prepared.env.XDG_CONFIG_HOME, "opencode", "opencode.json"), "utf8"),
+    ) as Record<string, unknown>;
+    expect(runtimeConfig.provider).toMatchObject({ bifrost: providers.bifrost });
+    expect(runtimeConfig.permission).toEqual({ read: "allow" });
+    expect(runtimeConfig.permission).not.toBe("allow");
+    expect(prepared.notes).not.toContain(
+      "Injected runtime OpenCode config with permission=allow for all tools and connections.",
+    );
+    await prepared.cleanup();
   });
 
   it("merges custom providers from PAPERCLIP_OPENCODE_PROVIDERS into the config", async () => {
@@ -105,7 +169,7 @@ describe("prepareOpenCodeRuntimeConfig", () => {
         XDG_CONFIG_HOME: configHome,
         PAPERCLIP_OPENCODE_PROVIDERS: JSON.stringify(providers),
       },
-      config: {},
+      config: { dangerouslySkipPermissions: true },
     });
     cleanupPaths.add(prepared.env.XDG_CONFIG_HOME);
 
@@ -127,7 +191,7 @@ describe("prepareOpenCodeRuntimeConfig", () => {
     try {
       const prepared = await prepareOpenCodeRuntimeConfig({
         env: { XDG_CONFIG_HOME: configHome },
-        config: {},
+        config: { dangerouslySkipPermissions: true },
       });
       cleanupPaths.add(prepared.env.XDG_CONFIG_HOME);
       const runtimeConfig = JSON.parse(
@@ -151,7 +215,7 @@ describe("prepareOpenCodeRuntimeConfig", () => {
     };
     const prepared = await prepareOpenCodeRuntimeConfig({
       env: { XDG_CONFIG_HOME: configHome, PAPERCLIP_OPENCODE_PROVIDERS: JSON.stringify(providers), ANTHROPIC_API_KEY: "sk-bf-REALVK" },
-      config: {},
+      config: { dangerouslySkipPermissions: true },
     });
     cleanupPaths.add(prepared.env.XDG_CONFIG_HOME);
     const runtimeConfig = JSON.parse(
@@ -168,7 +232,7 @@ describe("prepareOpenCodeRuntimeConfig", () => {
     const providers = { bifrost: { options: { apiKey: "{env:DEFINITELY_UNSET_VAR_XYZ}" }, models: { "x/y": {} } } };
     const prepared = await prepareOpenCodeRuntimeConfig({
       env: { XDG_CONFIG_HOME: configHome, PAPERCLIP_OPENCODE_PROVIDERS: JSON.stringify(providers) },
-      config: {},
+      config: { dangerouslySkipPermissions: true },
     });
     cleanupPaths.add(prepared.env.XDG_CONFIG_HOME);
     const runtimeConfig = JSON.parse(
@@ -182,7 +246,7 @@ describe("prepareOpenCodeRuntimeConfig", () => {
     const configHome = await makeConfigHome({ permission: { read: "allow" } });
     const prepared = await prepareOpenCodeRuntimeConfig({
       env: { XDG_CONFIG_HOME: configHome, PAPERCLIP_OPENCODE_SMALL_MODEL: "example/model-a" },
-      config: {},
+      config: { dangerouslySkipPermissions: true },
     });
     cleanupPaths.add(prepared.env.XDG_CONFIG_HOME);
     const runtimeConfig = JSON.parse(
@@ -196,7 +260,7 @@ describe("prepareOpenCodeRuntimeConfig", () => {
     const configHome = await makeConfigHome({ permission: { read: "allow" } });
     const prepared = await prepareOpenCodeRuntimeConfig({
       env: { XDG_CONFIG_HOME: configHome, PAPERCLIP_OPENCODE_PROVIDERS: "not json" },
-      config: {},
+      config: { dangerouslySkipPermissions: true },
     });
     cleanupPaths.add(prepared.env.XDG_CONFIG_HOME);
     const runtimeConfig = JSON.parse(
@@ -213,7 +277,7 @@ describe("prepareOpenCodeRuntimeConfig", () => {
     const configHome = await makeConfigHome({ permission: { read: "allow" } });
     const prepared = await prepareOpenCodeRuntimeConfig({
       env: { XDG_CONFIG_HOME: configHome, PAPERCLIP_OPENCODE_PROVIDERS: "[1,2,3]" },
-      config: {},
+      config: { dangerouslySkipPermissions: true },
     });
     cleanupPaths.add(prepared.env.XDG_CONFIG_HOME);
     const runtimeConfig = JSON.parse(
@@ -236,7 +300,7 @@ describe("prepareOpenCodeRuntimeConfig", () => {
           usable: { options: { baseURL: "http://gateway.example/v1" } },
         }),
       },
-      config: {},
+      config: { dangerouslySkipPermissions: true },
     });
     cleanupPaths.add(prepared.env.XDG_CONFIG_HOME);
     const runtimeConfig = JSON.parse(
@@ -257,7 +321,7 @@ describe("prepareOpenCodeRuntimeConfig", () => {
         XDG_CONFIG_HOME: configHome,
         PAPERCLIP_OPENCODE_PROVIDERS: JSON.stringify({ bifrost: "http://gateway.example/v1" }),
       },
-      config: {},
+      config: { dangerouslySkipPermissions: true },
     });
     cleanupPaths.add(prepared.env.XDG_CONFIG_HOME);
     const runtimeConfig = JSON.parse(
@@ -274,7 +338,7 @@ describe("prepareOpenCodeRuntimeConfig", () => {
     const configHome = await makeConfigHome({ permission: { read: "allow" } });
     const prepared = await prepareOpenCodeRuntimeConfig({
       env: { XDG_CONFIG_HOME: configHome },
-      config: { model: "openrouter/openai/gpt-oss-120b:nitro" },
+      config: { model: "openrouter/openai/gpt-oss-120b:nitro", dangerouslySkipPermissions: true },
     });
     cleanupPaths.add(prepared.env.XDG_CONFIG_HOME);
     const runtimeConfig = JSON.parse(
@@ -304,7 +368,7 @@ describe("prepareOpenCodeRuntimeConfig", () => {
         XDG_CONFIG_HOME: configHome,
         PAPERCLIP_OPENCODE_PROVIDERS: JSON.stringify(providers),
       },
-      config: { model: "openrouter/openai/gpt-oss-120b:nitro" },
+      config: { model: "openrouter/openai/gpt-oss-120b:nitro", dangerouslySkipPermissions: true },
     });
     cleanupPaths.add(prepared.env.XDG_CONFIG_HOME);
     const runtimeConfig = JSON.parse(
@@ -323,7 +387,7 @@ describe("prepareOpenCodeRuntimeConfig", () => {
     const configHome = await makeConfigHome({ permission: { read: "allow" } });
     const prepared = await prepareOpenCodeRuntimeConfig({
       env: { XDG_CONFIG_HOME: configHome },
-      config: { model: "not-a-provider-model" },
+      config: { model: "not-a-provider-model", dangerouslySkipPermissions: true },
     });
     cleanupPaths.add(prepared.env.XDG_CONFIG_HOME);
     const runtimeConfig = JSON.parse(

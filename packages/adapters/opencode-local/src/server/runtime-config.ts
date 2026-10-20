@@ -7,6 +7,8 @@ import { asBoolean } from "@paperclipai/adapter-utils/server-utils";
 type PreparedOpenCodeRuntimeConfig = {
   env: Record<string, string>;
   notes: string[];
+  /** True when a temporary XDG config home was written and must follow the run. */
+  hasRuntimeConfig: boolean;
   cleanup: () => Promise<void>;
 };
 
@@ -108,7 +110,7 @@ export async function prepareOpenCodeRuntimeConfig(input: {
   config: Record<string, unknown>;
   targetIsRemote?: boolean;
 }): Promise<PreparedOpenCodeRuntimeConfig> {
-  const skipPermissions = asBoolean(input.config.dangerouslySkipPermissions, true);
+  const skipPermissions = asBoolean(input.config.dangerouslySkipPermissions, false);
 
   // For remote execution targets the host XDG_CONFIG_HOME path is meaningless
   // (and actively harmful — it leaks a macOS-only path into the remote Linux
@@ -119,6 +121,33 @@ export async function prepareOpenCodeRuntimeConfig(input: {
     return {
       env: input.env,
       notes: [],
+      hasRuntimeConfig: false,
+      cleanup: async () => {},
+    };
+  }
+
+  const resolveEnv = (name: string): string | undefined => input.env[name] ?? process.env[name];
+  const gatewayProvidersRaw = input.env.PAPERCLIP_OPENCODE_PROVIDERS ?? process.env.PAPERCLIP_OPENCODE_PROVIDERS;
+  const configuredModel = parseConfiguredModelRef(input.config.model);
+  const smallModel = (input.env.PAPERCLIP_OPENCODE_SMALL_MODEL ?? process.env.PAPERCLIP_OPENCODE_SMALL_MODEL)?.trim();
+  const inlineContent = input.env.OPENCODE_CONFIG_CONTENT ?? process.env.OPENCODE_CONFIG_CONTENT;
+  const skipPermissionsExplicit = typeof input.config.dangerouslySkipPermissions === "boolean";
+  // Custom providers, model registration, small_model, and the isolated inline
+  // config are independent of the permission override. An explicit permission
+  // policy also marks a deliberate configuration. Only skip the temporary config
+  // when the secure default applies and there is nothing else to prepare.
+  if (
+    !skipPermissions &&
+    !skipPermissionsExplicit &&
+    gatewayProvidersRaw === undefined &&
+    !configuredModel &&
+    !smallModel &&
+    !inlineContent
+  ) {
+    return {
+      env: input.env,
+      notes: [],
+      hasRuntimeConfig: false,
       cleanup: async () => {},
     };
   }
@@ -144,7 +173,9 @@ export async function prepareOpenCodeRuntimeConfig(input: {
 
   const existingConfig = await readJsonObject(runtimeConfigPath);
   const notes = [
-    skipPermissions ? "Injected runtime OpenCode config with permission=allow for all tools and connections." : "Prepared isolated OpenCode provider configuration.",
+    skipPermissions
+      ? "Injected runtime OpenCode config with permission=allow for all tools and connections."
+      : "Prepared isolated OpenCode provider configuration.",
   ];
 
   // Merge gateway/custom provider definitions supplied via PAPERCLIP_OPENCODE_PROVIDERS
@@ -154,9 +185,8 @@ export async function prepareOpenCodeRuntimeConfig(input: {
   // gateway model (e.g. an EU LLM gateway exposing OpenAI-compatible /v1) requires a
   // custom provider with an explicit models map. We accept it as config (not
   // hard-coded) so the gateway URL, key env, and model list stay declarative.
-  const resolveEnv = (name: string): string | undefined => input.env[name] ?? process.env[name];
   const gatewayProviders = parseProviderConfig(
-    input.env.PAPERCLIP_OPENCODE_PROVIDERS ?? process.env.PAPERCLIP_OPENCODE_PROVIDERS,
+    gatewayProvidersRaw,
     resolveEnv,
     notes,
   );
@@ -178,7 +208,6 @@ export async function prepareOpenCodeRuntimeConfig(input: {
   // An empty entry deep-merges with catalog metadata, so this is a no-op for models
   // the catalog already knows, and we never clobber an explicit definition from the
   // user config or PAPERCLIP_OPENCODE_PROVIDERS.
-  const configuredModel = parseConfiguredModelRef(input.config.model);
   if (configuredModel) {
     const providerEntry = isPlainObject(nextProvider[configuredModel.provider])
       ? { ...(nextProvider[configuredModel.provider] as Record<string, unknown>) }
@@ -200,7 +229,6 @@ export async function prepareOpenCodeRuntimeConfig(input: {
     ...existingConfig,
     ...(skipPermissions ? { permission: "allow" } : {}),
   };
-  const inlineContent = input.env.OPENCODE_CONFIG_CONTENT ?? process.env.OPENCODE_CONFIG_CONTENT;
   let inlineConfig: Record<string, unknown> | undefined;
   if (inlineContent) {
     try {
@@ -222,7 +250,6 @@ export async function prepareOpenCodeRuntimeConfig(input: {
   // for the anthropic provider); when that provider is repointed at a gateway that
   // does not serve that exact model, the title-gen call fails and aborts the run.
   // Setting small_model to a gateway-served model keeps every call on supported models.
-  const smallModel = (input.env.PAPERCLIP_OPENCODE_SMALL_MODEL ?? process.env.PAPERCLIP_OPENCODE_SMALL_MODEL)?.trim();
   if (smallModel) {
     nextConfig.small_model = smallModel;
     notes.push(`Pinned OpenCode small_model to ${smallModel}.`);
@@ -237,6 +264,7 @@ export async function prepareOpenCodeRuntimeConfig(input: {
         ? JSON.stringify({ ...inlineConfig, provider: nextProvider }) : inlineContent } : {}),
     },
     notes,
+    hasRuntimeConfig: true,
     cleanup: async () => {
       await fs.rm(runtimeConfigHome, { recursive: true, force: true });
     },

@@ -60,13 +60,13 @@ Follows the existing `NewIssueDialog` / `NewProjectDialog` pattern: a `Dialog` c
 | Field | Control | Default |
 |-------|---------|---------|
 | Max Turns Per Run | Number input | 80 |
-| Skip Permissions | Toggle | true |
+| Skip Permissions | Toggle | false |
 
 *codex_local:*
 | Field | Control | Default |
 |-------|---------|---------|
 | Search | Toggle | false |
-| Bypass Sandbox | Toggle | true |
+| Bypass Sandbox | Toggle | false |
 
 *process:*
 | Field | Control | Default |

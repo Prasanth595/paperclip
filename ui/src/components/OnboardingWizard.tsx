@@ -1932,8 +1932,6 @@ function OnboardingWizardInner({
       command,
       args,
       url,
-      dangerouslySkipPermissions:
-        adapterType === "claude_local" || adapterType === "opencode_local",
       dangerouslyBypassSandbox:
         adapterType === "codex_local"
           ? runner === "legacy" && DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX

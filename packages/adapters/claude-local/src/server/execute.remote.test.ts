@@ -194,8 +194,10 @@ describe("claude remote execution", () => {
       | [string, string, string[], { env: Record<string, string>; remoteExecution?: { remoteCwd: string } | null }]
       | undefined;
     expect(call?.[2]).toEqual(expect.arrayContaining(["--model", "claude-opus-5-5"]));
-    expect(call?.[2]).toContain("--dangerously-skip-permissions");
     expect(call?.[2]).not.toContain("--allowedTools");
+    // An adapter config that never stored `dangerouslySkipPermissions` must not
+    // request Claude's permission bypass: the adapter default is false.
+    expect(call?.[2]).not.toContain("--dangerously-skip-permissions");
     expect(call?.[2]).toContain("--append-system-prompt-file");
     expect(call?.[2]).toContain(
       `${managedRemoteWorkspace}/.paperclip-runtime/claude/skills/agent-instructions.md`,
@@ -642,6 +644,71 @@ describe("claude remote execution", () => {
     expect(retry).not.toContain("## Compact assignment");
     expect(retry.indexOf("comment-first")).toBeLessThan(retry.indexOf("comment-second"));
     expect(retry.split("Append the same ledger entry.")).toHaveLength(3);
+  });
+
+  // Regression guard for the secure-by-default flip: `execute` used to read
+  // `asBoolean(config.dangerouslySkipPermissions, true)`. These cases drive the
+  // real CLI-lane argument builder through a config whose field is absent (the
+  // default) or explicit, so they fail if that default ever flips back to true.
+  describe("CLI-lane permission bypass default", () => {
+    async function cliLaneArgs(prefix: string, config: Record<string, unknown>) {
+      const rootDir = await mkdtemp(path.join(os.tmpdir(), prefix));
+      cleanupDirs.push(rootDir);
+
+      await execute({
+        runId: "run-claude-permission-default",
+        agent: {
+          id: "agent-1",
+          companyId: "company-1",
+          name: "Claude Coder",
+          adapterType: "claude_local",
+          adapterConfig: {},
+        },
+        runtime: {
+          sessionId: null,
+          sessionParams: null,
+          sessionDisplayId: null,
+          taskKey: null,
+        },
+        config: {
+          engine: "cli",
+          command: "claude",
+          cwd: rootDir,
+          paperclipRuntimeSkills: [],
+          ...config,
+        },
+        context: {},
+        onLog: async () => {},
+      });
+
+      const call = runChildProcess.mock.calls.find((candidate) =>
+        (candidate[2] as string[]).includes("--print"),
+      ) as unknown as [string, string, string[]] | undefined;
+      return call?.[2] ?? [];
+    }
+
+    it("omits the bypass flag when the setting was never stored", async () => {
+      const args = await cliLaneArgs("paperclip-claude-permission-default-", {});
+
+      expect(args).toContain("--print");
+      expect(args).not.toContain("--dangerously-skip-permissions");
+    });
+
+    it("keeps the bypass flag for an explicit opt-in", async () => {
+      const args = await cliLaneArgs("paperclip-claude-permission-optin-", {
+        dangerouslySkipPermissions: true,
+      });
+
+      expect(args).toContain("--dangerously-skip-permissions");
+    });
+
+    it("omits the bypass flag for an explicit opt-out", async () => {
+      const args = await cliLaneArgs("paperclip-claude-permission-off-", {
+        dangerouslySkipPermissions: false,
+      });
+
+      expect(args).not.toContain("--dangerously-skip-permissions");
+    });
   });
 
 });

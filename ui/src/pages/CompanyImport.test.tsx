@@ -1219,7 +1219,7 @@ describe("CompanyImport", () => {
     { sourceType: "codex_local", sourceRunner: undefined, runner: "legacy" as const, sourcePolicy: { extraArgs: ["--sandbox", "read-only"] }, expectedBypass: false },
     { sourceType: "codex_local", sourceRunner: undefined, runner: "legacy" as const, sourcePolicy: { args: ["-c", "approval_policy=on-request"] }, expectedBypass: false },
     { sourceType: "codex_local", sourceRunner: undefined, runner: "legacy" as const, sourcePolicy: { extraArgs: [], args: ["--profile", "restricted"] }, expectedBypass: false },
-    { sourceType: "codex_local", sourceRunner: undefined, runner: "legacy" as const, sourcePolicy: { extraArgs: ["--color", "never"], args: ["--sandbox", "read-only"] }, expectedBypass: true },
+    { sourceType: "codex_local", sourceRunner: undefined, runner: "legacy" as const, sourcePolicy: { extraArgs: ["--color", "never"], args: ["--sandbox", "read-only"] }, expectedBypass: false },
     { sourceType: "codex_local", sourceRunner: undefined, runner: "legacy" as const, sourcePolicy: { extraArgs: ["-c", "sandbox_workspace_write.network_access=false"] }, expectedBypass: false },
     { sourceType: "codex_local", sourceRunner: undefined, runner: "legacy" as const, sourcePolicy: { dangerouslyBypassApprovalsAndSandbox: true, extraArgs: ["--sandbox", "read-only"] }, expectedBypass: true },
     { sourceType: "codex_local", sourceRunner: undefined, runner: "legacy" as const, sourcePolicy: { dangerouslyBypassSandbox: true, args: ["--sandbox", "read-only"] }, expectedBypass: true },
@@ -1359,6 +1359,44 @@ describe("CompanyImport", () => {
     });
     expect(lastImportMeta().adapterOverrides?.coder?.adapterConfig).not.toHaveProperty("model");
     expect(lastImportMeta().adapterOverrides?.coder?.adapterConfig).not.toHaveProperty("codexLegacySandboxBypass");
+  });
+
+  it.each(["claude_local", "opencode_local"] as const)("preserves a saved %s skip-permissions opt-in during an ordinary import edit", async (adapterType) => {
+    mockOptionalCompany.mockReturnValue({ selectedCompanyId: "company-1" });
+    mockAdaptersApi.list.mockResolvedValue([
+      { type: "claude_local", disabled: false },
+      { type: "opencode_local", disabled: false },
+    ]);
+    const preview = buildPreviewResult();
+    preview.manifest.agents[0]!.adapterType = adapterType;
+    preview.manifest.agents[0]!.adapterConfig = {
+      model: adapterType === "claude_local" ? "claude-sonnet-5" : "openrouter/example/model",
+      dangerouslySkipPermissions: true,
+    };
+    mockCompaniesApi.importPreview.mockResolvedValue(preview);
+    await renderPage();
+    await enterGithubUrl();
+    await clickButton(text => text === "Preview import");
+    await clickButton(text => text.includes("configure adapter"));
+    if (adapterType === "claude_local") {
+      // Change an unrelated field so the import sends an explicit override.
+      await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Model"]')!.click());
+      const defaultModel = [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')].find(option => option.textContent?.trim() === "Default");
+      expect(defaultModel).toBeTruthy();
+      await act(async () => defaultModel!.click());
+    } else {
+      // OpenCode's only create-mode adapter field is this toggle; flip it back
+      // to true so the edit does not change the saved opt-in.
+      const toggle = container.querySelector<HTMLButtonElement>('[aria-label="Skip permissions"]');
+      expect(toggle?.getAttribute("aria-checked")).toBe("true");
+      await act(async () => toggle!.click());
+      await flushReact();
+      await act(async () => toggle!.click());
+      await flushReact();
+    }
+    await clickButton(text => text.startsWith("Import 3 file"));
+    await settle();
+    expect(lastImportMeta().adapterOverrides?.coder?.adapterConfig).toMatchObject({ dangerouslySkipPermissions: true });
   });
 
   it.each(["codex_local", "claude_local"].flatMap(harness => ["model-clear", "effort-clear", "env-remove", "legacy-model", "changed-harness"].map(edit => ({ harness, edit }))))("preserves native source configuration during an ordinary import edit ($harness, $edit)", async ({ harness, edit }) => {
