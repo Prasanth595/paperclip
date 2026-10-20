@@ -189,11 +189,11 @@ describe("claude remote execution", () => {
       remoteDir: `${managedRemoteWorkspace}/.paperclip-runtime/claude/mcp-config`,
       followSymlinks: true,
     }));
-    expect(runChildProcess).toHaveBeenCalledTimes(1);
-    const call = runChildProcess.mock.calls[0] as unknown as
+    expect(runChildProcess.mock.calls.filter(call => !call[2].includes("--version"))).toHaveLength(1);
+    const call = runChildProcess.mock.calls.find(call => !call[2].includes("--version")) as unknown as
       | [string, string, string[], { env: Record<string, string>; remoteExecution?: { remoteCwd: string } | null }]
       | undefined;
-    expect(call?.[2]).toEqual(expect.arrayContaining(["--model", "claude-opus-5"]));
+    expect(call?.[2]).toEqual(expect.arrayContaining(["--model", "claude-opus-5-5"]));
     expect(call?.[2]).not.toContain("--allowedTools");
     // An adapter config that never stored `dangerouslySkipPermissions` must not
     // request Claude's permission bypass: the adapter default is false.
@@ -257,7 +257,7 @@ describe("claude remote execution", () => {
         sessionDisplayId: "12345678-1234-4abc-9def-123456789012",
         taskKey: null,
       },
-      config: {
+      config: { model: "claude-opus-5",
         engine: "cli",
         command: "claude",
       },
@@ -282,8 +282,8 @@ describe("claude remote execution", () => {
       onLog: async () => {},
     });
 
-    expect(runChildProcess).toHaveBeenCalledTimes(1);
-    const call = runChildProcess.mock.calls[0] as unknown as [string, string, string[]] | undefined;
+    expect(runChildProcess.mock.calls.filter(call => !call[2].includes("--version"))).toHaveLength(1);
+    const call = runChildProcess.mock.calls.find(call => !call[2].includes("--version")) as unknown as [string, string, string[]] | undefined;
     expect(call?.[2]).not.toContain("--resume");
   });
 
@@ -305,7 +305,7 @@ describe("claude remote execution", () => {
         sessionDisplayId: null,
         taskKey: null,
       },
-      config: { engine: "cli", command: "claude", cwd: rootDir, paperclipRuntimeSkills: [] },
+      config: { model: "claude-opus-5", engine: "cli", command: "claude", cwd: rootDir, paperclipRuntimeSkills: [] },
       context: {},
       onLog,
     });
@@ -347,7 +347,7 @@ describe("claude remote execution", () => {
         sessionDisplayId: "12345678-1234-4abc-9def-123456789012",
         taskKey: null,
       },
-      config: {
+      config: { model: "claude-opus-5",
         engine: "cli",
         command: "claude",
       },
@@ -372,8 +372,8 @@ describe("claude remote execution", () => {
       onLog: async () => {},
     });
 
-    expect(runChildProcess).toHaveBeenCalledTimes(1);
-    const call = runChildProcess.mock.calls[0] as unknown as [string, string, string[]] | undefined;
+    expect(runChildProcess.mock.calls.filter(call => !call[2].includes("--version"))).toHaveLength(1);
+    const call = runChildProcess.mock.calls.find(call => !call[2].includes("--version")) as unknown as [string, string, string[]] | undefined;
     expect(call?.[2]).toContain("--resume");
     expect(call?.[2]).toContain("12345678-1234-4abc-9def-123456789012");
   });
@@ -415,7 +415,7 @@ describe("claude remote execution", () => {
         sessionDisplayId: null,
         taskKey: null,
       },
-      config: {
+      config: { model: "claude-opus-5",
         engine: "cli",
         command: "claude",
       },
@@ -465,7 +465,7 @@ describe("claude remote execution", () => {
           sessionDisplayId: null,
           taskKey: null,
         },
-        config: {
+        config: { model: "claude-opus-5",
         engine: "cli",
           command: "claude",
           ...config,
@@ -621,7 +621,7 @@ describe("claude remote execution", () => {
         sessionDisplayId: "12345678-1234-4abc-9def-123456789012",
         taskKey: null,
       },
-      config: {
+      config: { model: "claude-opus-5",
         engine: "cli",
         command: "claude",
         env: { ANTHROPIC_API_KEY: "fixture-anthropic-key" },
@@ -635,7 +635,7 @@ describe("claude remote execution", () => {
 
     expect(result.exitCode).toBe(0);
     expect(runChildProcess).toHaveBeenCalledTimes(2);
-    const first = (runChildProcess.mock.calls[0] as unknown as [string, string, string[], { stdin?: string }])[3]?.stdin ?? "";
+    const first = (runChildProcess.mock.calls.find(call => !call[2].includes("--version")) as unknown as [string, string, string[], { stdin?: string }])[3]?.stdin ?? "";
     const retry = (runChildProcess.mock.calls[1] as unknown as [string, string, string[], { stdin?: string }])[3]?.stdin ?? "";
     expect(first).toContain("## Compact assignment");
     expect(first).not.toContain("Explain the next step before starting work.");

@@ -40,6 +40,16 @@ Setup is covered in [connection setup](./connection-setup.md).
 
 Automated: [channel integration](../../server/src/__tests__/chat-channels.integration.test.ts) uses provider fixtures; it does not prove a live Slack, Discord, Teams, Telegram, GitHub, email, or Photon delivery.
 
+GitHub review comment regression (2026-10-19): repeated PR review requests reuse
+one main App comment, including across restart and reconnect. Test a leading
+request for an external bot (`@greptile review`) and verify it creates no wake or
+acknowledgement. Stop execution before a milestone is staged, run maintenance,
+and verify the existing comment reports the stop; saved requests on a blocked
+task show paused state. Preserve newer progress and confirmed or uncertain replies.
+Repeat terminal reconciliation with native identity and no legacy wake fields.
+Check delayed acknowledgements, check-only assessments followed by formal reviews,
+and combined requests with separate pre-upgrade placeholders.
+
 Manual: For each supported provider being changed, send a unique message, verify the intended agent/company receives it, and inspect the actual external reply in the original thread. Repeat with an unlinked/unauthorized sender, duplicate inbound delivery, and one supported attachment. Record provider-specific results separately.
 
 For Slack, enable **Require at-mention** and **Allow direct messages**. Send a
@@ -118,7 +128,11 @@ their App-scoped checks and comments remain independent.
 
 For GitHub publication recovery, interrupt a response after GitHub accepts a
 write and verify one summary, finding, and App-scoped check. Retry the same tool
-call and verify it returns the saved receipt. Leave a transient failure queued,
+call and verify it returns the saved receipt. Include text longer than 500
+characters and coverage with more than 50 entries. Change only the text suffix
+or final coverage entry and verify rejection without another write. Remove the
+durable publication and verify that a retry cannot dispatch a new write.
+Leave a transient failure queued,
 restart the instance, and verify publication resumes at its saved deadline
 without another inbound message. Revoked access and permanent rejections must
 stop retries. These recipes are separate from live provider proof.

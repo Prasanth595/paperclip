@@ -98,7 +98,10 @@ live GitHub credential recovery.
 
 GitHub publication recovery (2026-10-14): assigned-agent `submit_review`, `comment`,
 and `update_comment` calls reuse their run-, task-, endpoint-, and argument-bound
-publication on an exact retry. Fresh gateway policy and provider authority remain
+publication on an exact retry. Identity uses the complete durable request rather
+than the shortened audit preview. A changed suffix, changed nested entry, or
+missing publication cannot authorize another write. Exact retries only read the
+receipt; the worker owns pending provider retries. Fresh gateway policy and provider authority remain
 required. The durable worker resumes transient failures after restart and stops
 at its retry cap, revoked authority, or a superseded head. A pending receipt is
 not task completion. Source:
@@ -106,6 +109,16 @@ not task completion. Source:
 [gateway](../../server/src/services/tool-gateway.ts). Verification uses
 PostgreSQL-backed provider fixtures; this entry does not claim live provider
 qualification for the new retry path.
+
+GitHub main-response identity (2026-10-19): PR requests share a company-, App-,
+repository- and PR-bound comment. Agents still supply no comment destination.
+Current sender, assignee, repository and publication authority are checked before
+edits, including maintenance failure notices. Leading mentions for another
+recipient are filtered before task work; explicit mentions of this bot still
+follow normal access checks. Provider-fixture coverage is not live GitHub proof.
+Native terminal reconciliation resolves the accepted run identity through the
+existing chat provenance resolver; an older run's reply cannot complete a newer
+request merely because both requests share the same PR comment.
 
 Speko browser sessions use `POST /api/companies/{companyId}/voice-sessions`,
 with GET inspection/notification and POST `/{sessionId}/end` operations below

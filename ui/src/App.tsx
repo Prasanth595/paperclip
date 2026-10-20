@@ -18,6 +18,7 @@ import {
 import { useHiddenSettings } from "./hooks/useHiddenSettings";
 import { OnboardingWizardVariant } from "./components/OnboardingWizardVariant";
 import { CloudAccessGate } from "./components/CloudAccessGate";
+import { ShellConfigurationGate } from "./components/ShellConfigurationGate";
 import { PaperclipLoading } from "./components/AnimatedPaperclipIcon";
 import { AGENT_FILTER_TABS } from "./lib/agent-filter-tabs";
 import { useCombinedInboxTasksEnabled } from "./hooks/useCombinedInboxTasksEnabled";
@@ -259,7 +260,7 @@ function boardRoutes(streamlinedUiEnabled: boolean, combinedInboxTasksEnabled: b
       <Route path="company/settings/:settingsRoutePath/*" element={<CompanySettingsPluginPage />} />
       <Route path="skills/sources" element={<SkillSources />} />
       <Route path="skills/sources/:sourceId" element={<SkillSources />} />
-      <Route path="skills/studio" element={<SkillStudio />} />
+      <Route path="skills/studio" element={streamlinedUiEnabled ? <CompanySkills collectionView="authored" /> : <SkillStudio />} />
       <Route path="skills/studio/new" element={<SkillStudio />} />
       <Route path="skills/studio/:skillId" element={<SkillStudio />} />
       <Route path="skills/:skillId/studio" element={<LegacySkillStudioRedirect />} />
@@ -367,12 +368,13 @@ function boardRoutes(streamlinedUiEnabled: boolean, combinedInboxTasksEnabled: b
       <Route path="approvals/all" element={<Approvals />} />
       <Route path="approvals/:approvalId" element={<ApprovalDetail />} />
       <Route path="activity" element={streamlinedUiEnabled ? <CompanyActivity /> : <ProductionSurface><ProductionCompanyActivity /></ProductionSurface>} />
+      <Route path="activity/commentary" element={<AuditHub section="commentary" />} />
+      <Route path="activity/runs" element={<AuditHub section="runs" />} />
+      <Route path="activity/costs" element={<AuditHub section="costs" />} />
+      <Route path="activity/budgets" element={<AuditHub section="budgets" />} />
+      <Route path="activity/timeline" element={<AuditHub section="timeline" />} />
       {streamlinedUiEnabled ? (
         <>
-          <Route path="activity/runs" element={<AuditHub section="runs" />} />
-          <Route path="activity/costs" element={<AuditHub section="costs" />} />
-          <Route path="activity/budgets" element={<AuditHub section="budgets" />} />
-          <Route path="activity/timeline" element={<AuditHub section="timeline" />} />
           <Route path="audit" element={<AuditCompatibilityRedirect to="/activity" forceAgentMode />} />
           <Route path="audit/activity" element={<AuditCompatibilityRedirect to="/activity" />} />
           <Route path="audit/runs" element={<AuditCompatibilityRedirect to="/activity/runs" />} />
@@ -776,17 +778,20 @@ export function App() {
         <Route path="assistant-connections" element={<AssistantConnectionsPage />} />
         <Route path="cli-auth/:id" element={<CliAuthPage />} />
         <Route path="invite/:token" element={<InviteLandingPage />} />
-        <Route element={streamlinedUiLoaded ? <CloudAccessGate allowMembershipRequest /> : <PaperclipLoading />}>
+        <Route element={<CloudAccessGate allowMembershipRequest />}>
+          <Route element={<ShellConfigurationGate loaded={streamlinedUiLoaded} />}>
           {/* The identity APIs enforce the chat rollout flag. Nonmembers cannot
               read experimental settings, but a private invitation may request membership. */}
           <Route path="chat-identity/confirm" element={<ChatIdentityConfirm />} />
+          </Route>
         </Route>
         <Route path="tests/perf/long-thread" element={<IssueChatLongThreadPerf />} />
         <Route path="ux-lab/bootstrap-setup" element={<BootstrapSetupUxLab />} />
         <Route path="ux-lab/responsible-user-denial" element={<ResponsibleUserDenialUxLab />} />
         <Route path="ux-lab/cross-issue-collaboration" element={<CrossIssueCollaborationUxLab />} />
 
-        <Route element={streamlinedUiLoaded ? <CloudAccessGate /> : <PaperclipLoading />}>
+        <Route element={<CloudAccessGate />}>
+          <Route element={<ShellConfigurationGate loaded={streamlinedUiLoaded} />}>
           <Route index element={<CompanyRootRedirect />} />
           <Route path="onboarding" element={<OnboardingRoutePage />} />
           <Route path="instance" element={<LegacySettingsRedirect />} />
@@ -852,6 +857,7 @@ export function App() {
             {boardRoutes(streamlinedUiEnabled, combinedInboxTasksEnabled)}
           </Route>
           <Route path="*" element={<NotFoundPage scope="global" />} />
+          </Route>
         </Route>
       </Routes></Suspense>
       <OnboardingWizardVariant />

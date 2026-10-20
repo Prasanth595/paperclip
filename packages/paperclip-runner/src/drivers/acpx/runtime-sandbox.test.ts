@@ -42,6 +42,8 @@ describe("ACPX runtime sandbox", () => {
     const pages = { PAPERCLIP_PAGE_AWS_SECRET_ACCESS_KEY: "task-pages-secret", CUSTOM_TOKEN: "task-service-secret" };
     const sandbox = await prepareAcpxRuntimeSandbox({ binding: fixture.binding, agent: "codex", environment: {
       PATH: process.env.PATH, OPENAI_API_KEY: "provider-secret", HOST_SECRET: "unselected-secret",
+      PAPERCLIP_OBSERVABILITY_CODEX_CONFIG: JSON.stringify({ exporter: "none", trace_exporter: "none", metrics_exporter: "none" }),
+      OTEL_EXPORTER_OTLP_LOGS_HEADERS: "authorization=Bearer%20export-canary",
       ...configuredEnvironmentProjection(pages), ...(identity ? { PAPERCLIP_AGENT_KEY_ID: "agent-key" } : {}),
     } });
     const config = await readFile(join(sandbox.agentHomeDirectory, "config.toml"), "utf8");
@@ -49,6 +51,9 @@ describe("ACPX runtime sandbox", () => {
     expect(keys).toEqual(expect.arrayContaining(Object.keys(pages)));
     expect(keys).not.toContain("OPENAI_API_KEY");
     expect(keys).not.toContain("HOST_SECRET");
+    expect(keys).not.toContain("PAPERCLIP_OBSERVABILITY_CODEX_CONFIG");
+    expect(keys).not.toContain("OTEL_EXPORTER_OTLP_LOGS_HEADERS");
+    expect(sandbox.persistedEnvironment).not.toHaveProperty("PAPERCLIP_OBSERVABILITY_CODEX_CONFIG");
     expect(sandbox.launchEnvironment).toMatchObject(pages);
     for (const value of Object.values(pages)) expect(config).not.toContain(value);
   });
@@ -121,6 +126,7 @@ describe("ACPX runtime sandbox", () => {
         binding: { ...fixture.binding, requestedModel: model },
         agent: "claude",
       });
+      await sandbox.initializeOwnedConfiguration?.();
       const settingsPath = join(sandbox.agentHomeDirectory, "settings.json");
       expect(JSON.parse(await readFile(settingsPath, "utf8"))).toMatchObject({
         model,
@@ -136,10 +142,27 @@ describe("ACPX runtime sandbox", () => {
       const binding = { ...fixture.binding, requestedModel: model, effectiveModel: model };
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const sandbox = await prepareAcpxRuntimeSandbox({ binding, agent: "claude" });
+        await sandbox.initializeOwnedConfiguration?.();
         const settings = JSON.parse(await readFile(join(sandbox.agentHomeDirectory, "settings.json"), "utf8"));
         expect(settings).toMatchObject({ model, availableModels: [model] });
       }
     }
+  });
+
+  it("restores bound Claude effort in private settings across cold connections", async () => {
+    const fixture = await sandboxFixture("claude");
+    for (const claudeEffort of ["high", "xhigh", "max"] as const) {
+      const binding = { ...fixture.binding, claudeEffort };
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const sandbox = await prepareAcpxRuntimeSandbox({ binding, agent: "claude" });
+        await sandbox.initializeOwnedConfiguration?.();
+        const settings = JSON.parse(await readFile(join(sandbox.agentHomeDirectory, "settings.json"), "utf8"));
+        expect(settings.effortLevel).toBe(claudeEffort);
+      }
+    }
+    const sandbox = await prepareAcpxRuntimeSandbox({ binding: fixture.binding, agent: "claude" });
+    await sandbox.initializeOwnedConfiguration?.();
+    expect(JSON.parse(await readFile(join(sandbox.agentHomeDirectory, "settings.json"), "utf8"))).not.toHaveProperty("effortLevel");
   });
 
   it.each([

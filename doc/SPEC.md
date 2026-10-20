@@ -773,6 +773,12 @@ opt-in plugin. See [the experimental contract](connections/AI-CONNECTION-ROUTERS
 
 ## Internal agent commentary
 
+The Audit → Commentary tab exposes searchable suggestions and complaints,
+with agent/type filters, message previews and full attributed context. The viewer
+preserves company, commentary-permission and task-privacy boundaries independently
+of the agent submission path. All human company members can read commentary by
+default, including viewers, without receiving agent-action audit access.
+
 `agent_commentary` stores company-scoped, attributed complaints and suggestions
 as free-form text in the instance database. Legacy agents use the default
 `complain` and `suggestion-box` runtime skills; native runs use dedicated tools
@@ -799,3 +805,10 @@ A company may use a shared API model to acknowledge accepted human messages acro
 
 Pipelines is no longer a product feature. Its database tables remain for existing
 data preservation; Cases and Routines continue independently.
+
+### Recent task navigation summaries
+
+Recent-task navigation refreshes a bounded, authorized summary projection for
+its saved task IDs. The projection avoids full task/workspace enrichment and
+preserves company/task access rules. The HTTP contract is defined in
+`SPEC-implementation.md` section 10.4.

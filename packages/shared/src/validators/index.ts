@@ -420,6 +420,7 @@ export {
 
 export {
   createIssueSchema,
+  issueSummariesQuerySchema,
   setIssueTitleSchema,
   type SetIssueTitle,
   createIssueInputSchema,
@@ -441,6 +442,7 @@ export {
   resolveIssueRecoveryActionSchema,
   isValidExistingBranchName,
   retryWorkspaceExportSchema,
+  recoverWorkspaceSchema,
   reconstructWorkspaceSchema,
   resumeWorkspaceFinalizationSchema,
   issueReviewRequestSchema,
