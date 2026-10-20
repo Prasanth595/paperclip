@@ -1,4 +1,5 @@
 export const COMPANY_STATUSES = ["active", "paused", "archived"] as const;
+export const ISSUE_SUMMARIES_MAX_IDS = 5;
 export type CompanyStatus = (typeof COMPANY_STATUSES)[number];
 
 export const DEPLOYMENT_MODES = ["local_trusted", "authenticated"] as const;
@@ -1010,6 +1011,7 @@ export const PERMISSION_KEYS = [
   "tools:manage_profiles",
   "tools:view_audit",
   "audit:view_agent_actions",
+  "commentary:view",
   "tools:use",
   "tools:manage_runtime",
   "inbox:manage",

@@ -355,6 +355,7 @@ export {
   AGENT_ICON_NAMES,
   PROJECT_ICON_NAMES,
   ISSUE_STATUSES,
+  ISSUE_SUMMARIES_MAX_IDS,
   INBOX_MINE_ISSUE_STATUSES,
   INBOX_MINE_ISSUE_STATUS_FILTER,
   ISSUE_PRIORITIES,
@@ -1055,6 +1056,7 @@ export type {
   ExternalObjectSummary,
   ExternalObjectSummaryItem,
   CompactIssue,
+  IssueSummary,
   Issue,
   IssueVisibility,
   IssuePrivacyConstraints,
@@ -1929,6 +1931,7 @@ export {
   type CompanySearchExtractQuery,
   type CompanySearchQuery,
   createIssueSchema,
+  issueSummariesQuerySchema,
   setIssueTitleSchema,
   type SetIssueTitle,
   createIssueInputSchema,
@@ -1950,6 +1953,7 @@ export {
   resolveIssueRecoveryActionSchema,
   isValidExistingBranchName,
   retryWorkspaceExportSchema,
+  recoverWorkspaceSchema,
   reconstructWorkspaceSchema,
   resumeWorkspaceFinalizationSchema,
   issueReviewRequestSchema,
@@ -2825,3 +2829,4 @@ export * from "./fast-response.js";
 export { HUMAN_TASK_ORIGIN_KINDS, isAgentCreatedIssue, type IssueCreationSourceFields } from "./issue-creation-source.js";
 
 export * from "./grok-bot.js";
+export * from "./agent-observability.js";

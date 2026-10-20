@@ -68,6 +68,12 @@ V1 implementation extends this baseline into a company-centric, governance-aware
 
 ## 5.1 In Scope
 
+Company administrators may opt in to native Codex and Claude Code logs/traces
+through [company agent observability](agent-observability.md), using a single
+company destination and encrypted credentials. This is separate from first-party
+Telemetry and infrastructure tracing.
+
+
 - Company lifecycle (create/list/get/update/archive)
 - Goal hierarchy linked to company mission
 - Agent lifecycle with org structure and adapter configuration
@@ -1206,6 +1212,7 @@ Invites tab does not hide this Cloud action.
 ## 10.4 Tasks (Issues)
 
 - `GET /companies/:companyId/issues`
+- `GET /companies/:companyId/issues/summaries?ids=<uuid>,<uuid>`
 - `POST /companies/:companyId/issues`
 - `GET /issues/:issueId`
 - `PATCH /issues/:issueId`
@@ -1239,6 +1246,17 @@ revision, and a negotiated action; they return `202`, replay the original result
 for a duplicate request id, and return `409` with the current projection for a
 stale revision or an unconfirmed unfinished-goal replacement. These controls do
 not create issue comments.
+
+The task-summary endpoint accepts one to five comma-separated UUIDs, normalizes
+case and whitespace, and removes duplicates after validating the five-entry
+bound. It returns accessible, non-hidden tasks in request order with only ID,
+company ID, title, identifier, status, update time, and external-conversation
+state. Missing, foreign-company and unauthorized tasks are omitted. Company
+access and normal task-read authorization apply; task-bridge keys are denied.
+Only the `ids` query parameter is accepted. Malformed, repeated, nested, empty
+and oversized ID parameters return `400`, including mixed scalar/nested syntax.
+Responses are private and not stored by HTTP caches. Reads do not trigger
+full-detail enrichment, workspace inspection or execution recovery.
 
 ### 10.4.1 Atomic Checkout Contract
 
@@ -1926,6 +1944,19 @@ when the run fails, before generic recovery retries. Reconnect preserves account
 identity and permissions. Compatible legacy agents may explicitly adopt a
 validated connection inline; late failures must not invalidate newer credentials.
 
+### External channel failure scope
+
+Publication, provider-reply, and form-open permission failures fail the affected
+operation. An unclassified provider 403 does not establish that the whole
+connection is unusable. Known destination failures quarantine only that resource;
+provider rate limits retain their retry deadlines. Confirmed authentication
+failures put the endpoint in attention and mark connection health failed without
+changing the connection's enabled setting. Admission and background reconciliation
+block sends, assigned channel tools, and background receiver restart until
+credentials are repaired. Signed provider lifecycle events remain admissible so
+installation revocation still takes effect during an authentication stop.
+Explicit disable and disconnect retain their existing behavior.
+
 ### Task-bound email
 
 AgentMail is a default connection and does not require the experimental chat
@@ -2218,6 +2249,17 @@ successor. Permanent model/auth incompatibility and usage-limit exhaustion retai
 their existing operator recovery requirements.
 
 ## Internal agent commentary
+
+Audit → Commentary is a board-only page with agent/type filters, text search,
+50-message pages and full-message dialogs. Filters, page offsets and selected
+messages have shareable URLs. Read endpoints require company membership,
+`commentary:view` and source-task visibility. All human company roles, including
+viewers, receive this permission by default. An upgrade migration grants it to
+existing active human members while preserving existing commentary grants.
+Human invitation approval adds the commentary default when a saved grant list
+omits it, including invitations created before the upgrade, and preserves explicit scopes.
+The separate `audit:view_agent_actions` permission continues to govern agent-action
+audit reads, detailed audit filters and CSV exports.
 
 `agent_commentary` stores company-scoped, attributed complaints and suggestions
 as free-form text in the instance database. Legacy agents use the default
