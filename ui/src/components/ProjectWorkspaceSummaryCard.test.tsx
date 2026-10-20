@@ -370,8 +370,6 @@ describe("ProjectWorkspaceSummaryCard", () => {
     expect(branchIconButton).not.toBeNull();
     expect(pathIconButton).not.toBeNull();
 
-    // The feedback expires after 1.5 seconds. Keep that clock stopped while
-    // asserting its visible state on a busy CI host.
     vi.useFakeTimers();
     try {
       await reactAct(async () => {
