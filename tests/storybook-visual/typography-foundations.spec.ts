@@ -408,5 +408,5 @@ test("mixed-font tool text shares one uninterrupted shimmer loop", async ({ page
   await page.emulateMedia({ reducedMotion: "reduce" });
   await expect(line).toHaveCSS("animation-name", "none");
   await expect(line).toHaveCSS("background-image", "none");
-  await expect(line.locator("span").last()).toHaveCSS("-webkit-text-fill-color", "rgb(255, 255, 255)");
+  await expect(line.locator("span").last()).toHaveCSS("-webkit-text-fill-color", await resolvedColor(playback, "--foreground"));
 });
