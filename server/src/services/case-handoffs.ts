@@ -169,9 +169,26 @@ async function assertCaseContentsFitTask(tx: Db, caseRow: CaseRow, issue: IssueR
     if (!sourceIssue) throw notFound("Case source task not found");
     const [project] = sourceIssue.projectId ? await tx.select().from(projects).where(eq(projects.id, sourceIssue.projectId)) : [];
     if (project?.visibility === "private" && issue.projectId !== sourceIssue.projectId) throw unprocessable("Primary task must preserve the case's private project boundary");
-    if (sourceIssue.visibility === "private" && (issue.visibility !== "private" ||
-      (issue.privacyParentIssueId !== sourceIssue.id && issue.privacyRootIssueId !== (sourceIssue.privacyRootIssueId ?? sourceIssue.id)))) {
-      throw unprocessable("Primary task must preserve the case's private task boundary");
+    if (sourceIssue.visibility === "private") {
+      if (issue.visibility !== "private") throw unprocessable("Primary task must preserve the case's private task boundary");
+      // Match the canonical privacy ancestry: private task/project grants flow
+      // down parent edges, never sideways to a sibling sharing root metadata.
+      // UNION limits traversal to distinct task identities, including cycles.
+      const [ancestry] = await tx.execute<{ inherited: boolean }>(sql`
+        WITH RECURSIVE privacy_ancestors AS (
+          SELECT p.id, p.company_id, p.privacy_parent_issue_id FROM issues p
+          WHERE p.id = ${issue.id} AND p.company_id = ${issue.companyId}
+          UNION
+          SELECT p.id, p.company_id, p.privacy_parent_issue_id FROM issues p
+          JOIN privacy_ancestors child ON p.id = child.privacy_parent_issue_id AND p.company_id = child.company_id
+          WHERE p.visibility = 'private' OR EXISTS (
+            SELECT 1 FROM projects project WHERE project.id = p.project_id
+              AND project.company_id = p.company_id AND project.visibility = 'private'
+          )
+        )
+        SELECT EXISTS (SELECT 1 FROM privacy_ancestors WHERE id = ${sourceIssue.id}) AS inherited
+      `);
+      if (!ancestry?.inherited) throw unprocessable("Primary task must preserve the case's private task boundary");
     }
   }
 }
