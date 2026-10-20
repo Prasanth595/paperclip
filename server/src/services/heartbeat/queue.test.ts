@@ -326,6 +326,19 @@ describe.skipIf(!support.supported)("heartbeat queue database wiring", () => {
     expect(deps.canStartNewExternalBotWork).not.toHaveBeenCalled();
   });
 
+  it("promotes deferred wakes when the stale queued run gate cancels the lock holder", async () => {
+    const { run, agent, issue, company } = await fixture("queued");
+    const [reviewer] = await db.insert(agents).values({ companyId: company.id, name: "Reviewer", role: "engineer", status: "idle", adapterType: "process", adapterConfig: {} }).returning();
+    await db.update(issues).set({ assigneeAgentId: reviewer.id }).where(eq(issues.id, issue.id));
+    const deps = callbacks(db);
+    deps.getAgent.mockResolvedValue(agent);
+    expect(await createHeartbeatQueue(db, deps).claimQueuedRun({ ...run, responsibleUserId: "queue-test-user" })).toBeNull();
+    expect((await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, run.id)))[0]).toMatchObject({ status: "cancelled", errorCode: "issue_assignee_changed" });
+    expect((await db.select().from(issues).where(eq(issues.id, issue.id)))[0].executionRunId).toBeNull();
+    expect(deps.releaseIssueExecutionAndPromote).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: run.id }), { suppressImmediateRecovery: true });
+    expect(deps.executeRun).not.toHaveBeenCalled();
+  });
+
   it("cancels at the daily run cap before claiming or dispatching", async () => {
     const { run, agent } = await fixture("queued");
     const cappedAgent = { ...agent, runtimeConfig: { heartbeat: { maxDailyRuns: 0 } } };
