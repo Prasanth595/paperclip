@@ -565,7 +565,7 @@ export function executionWorkspaceRepositoryService(db: Db) {
     const sourceActors: AuthorizationActor[] = [];
     const projectReaders: AuthorizationActor[] = [];
     await measureRunPhase("workspace.readers", async () => {
-      const identities = await loadRepositoryRootReaders(tx, input.companyId, readers);
+      const identities = await loadRepositoryRootReaders(tx, input.companyId, readers, input.reader?.runId);
       const projectIds = [...new Set([...sourceProjectIds, ...sourceProjects.flatMap(source => source.projectId ? [source.projectId] : []),
         ...identities.flatMap(reader => reader.issue.projectId ? [reader.issue.projectId] : [])])];
       const projectRows: RootProject[] = [];
@@ -712,7 +712,7 @@ export function executionWorkspaceRepositoryService(db: Db) {
     const [run] = await measureRunPhase("workspace.sources.inventory", async () => tx.select({ responsibleUserId: heartbeatRuns.responsibleUserId }).from(heartbeatRuns).where(and(eq(heartbeatRuns.id, input.runId), eq(heartbeatRuns.companyId, input.companyId))));
     const [{ actor }] = await loadRepositoryRootReaders(tx, input.companyId, [{
       scopeId: input.runId, issueId: input.issueId, agentId: input.agentId, responsibleUserId: run?.responsibleUserId ?? null,
-    }]);
+    }], input.runId);
     return { workspace, actor };
   }
   async function guardForPublication(input: PublicationInput) {

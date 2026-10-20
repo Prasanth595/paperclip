@@ -14,11 +14,13 @@ import { hasRemoteTerminationReceipt } from "./remote-execution-termination.js";
 import { readNativeWorkspaceSyncReference } from "./native-runtime/native-workspace-sync.js";
 import { hasVerifiedWorkspaceRepair, workspaceRecoveryDisplay } from "./workspace-recovery-receipt.js";
 
-export async function hasPendingRunCleanup(db: Db, companyId: string, runId: string): Promise<boolean> {
-  const [state] = await db.execute<{ pending: boolean }>(sql`SELECT
+export async function loadRunCleanupStates(db: Pick<Db, "execute">, companyId: string, runIds: string[]) {
+  const states = new Map<string, { pending: boolean; retained: boolean }>();
+  for (let offset = 0; offset < runIds.length; offset += 500) {
+    const rows = await db.execute<{ id: string; pending: boolean; retained: boolean }>(sql`SELECT ${heartbeatRuns.id} AS id,
     ${heartbeatRuns.runnerProfileJson}->>'nativeWorkspaceFinalizationOwner' IS NOT NULL
     OR EXISTS (SELECT 1 FROM ${environmentLeases}
-      WHERE ${environmentLeases.companyId} = ${companyId} AND ${environmentLeases.heartbeatRunId} = ${runId}
+      WHERE ${environmentLeases.companyId} = ${companyId} AND ${environmentLeases.heartbeatRunId} = ${heartbeatRuns.id}
         AND (( ${environmentLeases.releasedAt} IS NULL AND NOT COALESCE(
             ${environmentLeases.status} = 'retained' AND ${environmentLeases.leasePolicy} = 'reuse_by_environment'
               AND ${environmentLeases.cleanupStatus} = 'success', false))
@@ -34,11 +36,21 @@ export async function hasPendingRunCleanup(db: Db, companyId: string, runId: str
             OR (${environmentLeases.status} = 'retained' AND ${environmentLeases.leasePolicy} = 'reuse_by_environment'
               AND ${environmentLeases.cleanupStatus} = 'success'), false))))
     OR EXISTS (SELECT 1 FROM ${nativeRunFinalizations}
-      WHERE ${nativeRunFinalizations.companyId} = ${companyId} AND ${nativeRunFinalizations.runId} = ${runId}
+      WHERE ${nativeRunFinalizations.companyId} = ${companyId} AND ${nativeRunFinalizations.runId} = ${heartbeatRuns.id}
         AND (${nativeRunFinalizations.leaseOwner} IS NOT NULL
-          OR ${nativeRunFinalizations.phase} NOT IN ('committed', 'applied', 'terminal_failure'))) AS pending
-    FROM ${heartbeatRuns} WHERE ${heartbeatRuns.companyId} = ${companyId} AND ${heartbeatRuns.id} = ${runId} LIMIT 1`);
-  return state?.pending !== false;
+          OR ${nativeRunFinalizations.phase} NOT IN ('committed', 'applied', 'terminal_failure'))) AS pending,
+    EXISTS (SELECT 1 FROM ${environmentLeases}
+      WHERE ${environmentLeases.companyId} = ${companyId}
+        AND ${environmentLeases.heartbeatRunId} = ${heartbeatRuns.id}
+        AND ${environmentLeases.status} = 'retained') AS retained
+    FROM ${heartbeatRuns} WHERE ${heartbeatRuns.companyId} = ${companyId} AND ${inArray(heartbeatRuns.id, runIds.slice(offset, offset + 500))}`);
+    for (const row of rows) states.set(row.id, row);
+  }
+  return states;
+}
+
+export async function hasPendingRunCleanup(db: Pick<Db, "execute">, companyId: string, runId: string): Promise<boolean> {
+  return (await loadRunCleanupStates(db, companyId, [runId])).get(runId.toLowerCase())?.pending !== false;
 }
 
 /** Resolved recovery bookkeeping can still carry an effective no-replay hold. */

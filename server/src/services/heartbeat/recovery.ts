@@ -2384,6 +2384,11 @@ export function createHeartbeatRecovery(db: Db, dependencies: HeartbeatRecoveryD
           error: shouldRetry ? `${baseMessage}; retrying once` : baseMessage,
           errorCode: "process_lost",
           finishedAt: now,
+          ...(restartInterruptedBeforeDispatch || (tracksLegacyLocalChild
+            && (revokedState.processPid || revokedState.processGroupId)
+            && !isProcessAlive(revokedState.processPid)
+            && !isProcessGroupAlive(revokedState.processGroupId))
+            ? { controllerLeaseExpiresAt: null } : {}),
           resultJson: (() => {
             const result = mergeRunStopMetadataForAgent(
               { adapterType, adapterConfig },
