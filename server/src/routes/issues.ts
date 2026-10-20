@@ -169,6 +169,7 @@ import { getTelemetryClient } from "../telemetry.js";
 import { isUniqueViolation } from "../db-errors.js";
 import type { StorageService } from "../storage/types.js";
 import { validate, validateIssueMutationBody } from "../middleware/validate.js";
+import { assertHostWatcherCommentQuota, hostWatcherRequestAllowed } from "../middleware/cron-service-key.js";
 import * as serviceIndex from "../services/index.js";
 import {
   accessService,
@@ -327,8 +328,6 @@ import {
   applyIssueExecutionPolicyTransition,
   normalizeIssueExecutionPolicy,
   parseIssueExecutionState,
-  redactIssueMonitorExternalRef,
-  setIssueExecutionPolicyMonitorScheduledBy,
 } from "../services/issue-execution-policy.js";
 import { buildExecutionWorkspaceAdapterConfig, parseProjectExecutionWorkspacePolicy, parseIssueExecutionWorkspaceSettings } from "../services/execution-workspace-policy.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
@@ -791,9 +790,7 @@ function authenticatedActorResponsibleUserId(req: Request) {
     : undefined;
 }
 
-// Matches the partial unique index that guarantees at most one onboarding
-// first-task issue per company (packages/db/src/schema/issues.ts).
-function isOnboardingFirstTaskConflict(error: unknown): boolean {
+function isUniqueIndexConflict(error: unknown, constraintName: string): boolean {
   for (
     let current = error, depth = 0;
     current && typeof current === "object" && depth < 5;
@@ -806,9 +803,9 @@ function isOnboardingFirstTaskConflict(error: unknown): boolean {
     };
     if (
       candidate.code === "23505" &&
-      (candidate.constraint === "issues_onboarding_first_task_uq" ||
+      (candidate.constraint === constraintName ||
         (typeof candidate.message === "string" &&
-          candidate.message.includes("issues_onboarding_first_task_uq")))
+          candidate.message.includes(constraintName)))
     ) {
       return true;
     }
@@ -3645,6 +3642,13 @@ export function issueRoutes(
     issue: { id: string; identifier?: string | null; companyId: string },
     kind: CrossIssueInfluenceKind,
   ) {
+    // Host keys have no heartbeat run. Their exact operation and target are
+    // bounded by hostWatcherKeyGuard before a route reaches this check.
+    if (isHostWatcherKeyActor(req)) return true;
+    // The host cron key's route, body and issue boundary was already checked
+    // by cronServiceKeyGuard before this assignee ownership shortcut.
+    if (req.actor.source === "agent_key" && req.actor.keyId
+      && req.actor.keyScope?.kind === "cron_service") return true;
     if (req.actor.type !== "agent") return true;
     if (!req.actor.agentId || !req.actor.runId)
       throw crossIssueInfluenceRunContextError();
@@ -4909,6 +4913,11 @@ export function issueRoutes(
     );
   }
 
+  function isHostWatcherKeyActor(req: Request) {
+    return req.actor.type === "agent" && req.actor.source === "agent_key"
+      && req.actor.keyScope?.kind === "host_watcher";
+  }
+
   function isSkillTestScopedActor(req: Request) {
     return (
       req.actor.type === "agent" && req.actor.keyScope?.kind === "skill_test"
@@ -4918,6 +4927,14 @@ export function issueRoutes(
   function taskBridgeOriginForActor(req: Request) {
     return isTaskBridgeKeyActor(req) && req.actor.keyId
       ? { originKind: "task_bridge", originId: req.actor.keyId }
+      : null;
+  }
+
+  function hostWatcherOriginForActor(req: Request) {
+    return req.actor.type === "agent" && req.actor.source === "agent_key"
+      && req.actor.keyScope?.kind === "host_watcher"
+      && req.actor.keyScope.service === "fleet_hourly" && req.actor.agentId
+      ? { originKind: "host_watcher", originId: req.actor.agentId }
       : null;
   }
 
@@ -5589,6 +5606,10 @@ export function issueRoutes(
     },
     options: { allowVisibleIssueWrite?: boolean } = {},
   ) {
+    // The host watcher guard has already validated the exact method, body,
+    // target issue and current row. Disk guard can mutate but cannot read its
+    // pinned issue, so its mutation must not require issue:read.
+    if (isHostWatcherKeyActor(req)) return true;
     if (!(await assertIssueReadAllowed(req, res, issue))) return false;
     if (req.actor.type !== "agent") return true;
     const actorAgentId = req.actor.agentId;
@@ -5596,6 +5617,10 @@ export function issueRoutes(
       res.status(403).json({ error: "Agent authentication required" });
       return false;
     }
+    // The cron guard checked the exact method, body and issue before this
+    // assignee run lock. Host service keys have no heartbeat run of their own.
+    if (req.actor.source === "agent_key" && req.actor.keyId
+      && req.actor.keyScope?.kind === "cron_service") return true;
     if (req.actor.source === "agent_jwt" && req.actor.runId &&
         issue.assigneeAgentId === null && issue.assigneeUserId) {
       const run = await heartbeat.getRun(req.actor.runId);
@@ -6901,6 +6926,7 @@ export function issueRoutes(
       }
     }
 
+    if (isHostWatcherKeyActor(req)) return true;
     if (req.actor.type !== "agent") return true;
 
     const actorAgentId = req.actor.agentId;
@@ -9243,7 +9269,14 @@ export function issueRoutes(
       "Issue not found",
     );
     if (!issue) return;
-    if (!(await timing.time("authorization", () => assertIssueReadAllowed(req, res, issue, { allowBreakGlass: true })))) return;
+    const hostWatcherKeyActor = isHostWatcherKeyActor(req);
+    if (!(await timing.time("authorization", () => assertIssueReadAllowed(req, res, issue, { allowBreakGlass: !hostWatcherKeyActor })))) return;
+    // The full issue view embeds ancestor, relation, project, and document
+    // content. A host watcher may read only its pinned issue row.
+    if (hostWatcherKeyActor) {
+      res.json(issue);
+      return;
+    }
     const inboxArchiveFieldsPromise =
       req.actor.type === "board" && req.actor.userId
         ? timing.time("inbox", () => svc.getActiveInboxArchiveFields(issue, req.actor.userId!))
@@ -12447,6 +12480,10 @@ export function issueRoutes(
         workspaceSelectionActor: req.actor,
         projectId: createAssignmentScope.projectId,
         ...(taskBridgeOriginForActor(req) ?? {}),
+        ...(hostWatcherOriginForActor(req) ?? {}),
+        ...(isHostWatcherKeyActor(req) && req.actor.keyScope?.kind === "host_watcher"
+          ? { hostWatcherScope: req.actor.keyScope }
+          : {}),
         id: issueId,
         originRunId: createBody.originRunId ?? actor.runId,
         originIdentityContextId: req.actor.identityContextId ?? null,
@@ -12480,11 +12517,14 @@ export function issueRoutes(
       try {
         issue = await createAcceptedIssue(createInput);
       } catch (error) {
+        if (isHostWatcherKeyActor(req) && isUniqueIndexConflict(error, "issues_open_host_watcher_order_uq")) {
+          throw conflict("Host watcher already has an open work order");
+        }
         // Concurrent onboarding creates can both pass the zero-count fast path;
         // the issues_onboarding_first_task_uq index rejects the loser here. Fail
         // closed: drop the privileged origin (and with it the agent-attributed
         // greeting) and create an ordinary issue instead.
-        if (!(isOnboardingFirstTask && isOnboardingFirstTaskConflict(error)))
+        if (!(isOnboardingFirstTask && isUniqueIndexConflict(error, "issues_onboarding_first_task_uq")))
           throw error;
         isOnboardingFirstTask = false;
         const { originKind: _onboardingOriginKind, ...ordinaryCreateInput } =
@@ -12492,14 +12532,15 @@ export function issueRoutes(
         issue = await createAcceptedIssue(ordinaryCreateInput);
       }
       if (deduplicationReason) {
-      const referenceSummary = await issueReferencesSvc.listIssueReferenceSummary(issue.id);
-      const visibleReferenceSummary = await redactIssueReferenceEdges(req, companyId, referenceSummary);
+        if (isHostWatcherKeyActor(req)) throw conflict("Host watcher already has an open work order");
+        const referenceSummary = await issueReferencesSvc.listIssueReferenceSummary(issue.id);
+        const visibleReferenceSummary = await redactIssueReferenceEdges(req, companyId, referenceSummary);
         res.status(200).json({
           ...issue,
           deduplicated: true,
           deduplicationReason,
-        relatedWork: visibleReferenceSummary,
-        referencedIssueIdentifiers: visibleReferenceSummary.outbound.map((item) => item.issue.identifier ?? item.issue.id),
+          relatedWork: visibleReferenceSummary,
+          referencedIssueIdentifiers: visibleReferenceSummary.outbound.map((item) => item.issue.identifier ?? item.issue.id),
         });
         return;
       }
@@ -13602,7 +13643,18 @@ export function issueRoutes(
         "Issue not found",
       );
       if (!existing) return;
-      if (!(await assertIssueReadAllowed(req, res, existing))) return;
+      const cronWatchdogMonitorPatch = req.actor.type === "agent"
+        && req.actor.source === "agent_key" && Boolean(req.actor.keyId)
+        && req.actor.keyScope?.kind === "cron_service"
+        && req.actor.keyScope.service === "agent_watchdog"
+        && req.actor.companyId === existing.companyId
+        && req.actor.keyScope.alarmIssueIds.includes(existing.id);
+      // Host watcher PATCH is authorized by the exact HTTP scope and row guard.
+      // Disk guard has issue:mutate but deliberately lacks issue:read.
+      const hostWatcherPatch = req.actor.type === "agent" && req.actor.source === "agent_key"
+        && req.actor.keyScope?.kind === "host_watcher" && Boolean(req.actor.keyId)
+        && req.actor.companyId === existing.companyId && req.actor.keyScope.issueId === existing.id;
+      if (!hostWatcherPatch && !(await assertIssueReadAllowed(req, res, existing))) return;
       if (req.body.expectedStatusVersion !== undefined && (
         existing.statusVersion !== req.body.expectedStatusVersion || existing.status !== "backlog"
       )) {
@@ -14103,6 +14155,14 @@ export function issueRoutes(
         throw unprocessable("Snapshot-guarded policy updates cannot change task status or ownership");
       }
       Object.assign(updateFields, transition.patch);
+      if (cronWatchdogMonitorPatch && nextExecutionPolicy?.monitor) {
+        // Keep the exact review and authorization fields from the issue row.
+        // The service checks this snapshot under its write lock before saving.
+        updateFields.executionPolicy = {
+          ...(existing.executionPolicy ?? { mode: "normal", stages: [] }),
+          monitor: nextExecutionPolicy.monitor,
+        };
+      }
 
       const nextStatus = updateFields.status ?? existing.status;
       if (updateFields.unblockDescriptor && nextStatus !== "blocked") {
@@ -14435,6 +14495,17 @@ export function issueRoutes(
       const postCommitIssueActions: IssuePostCommitAction[] = [];
       const issueUpdateData = {
         ...updateFields,
+        ...(isHostWatcherKeyActor(req) && req.actor.type === "agent" ? {
+          companyGuard: req.actor.companyId,
+          hostWatcherScope: req.actor.keyScope,
+        } : {}),
+        ...(cronWatchdogMonitorPatch ? {
+          companyGuard: existing.companyId,
+          cronWatchdogMonitorRequest: {
+            policy: res.locals.cronWatchdogExecutionPolicy,
+            issueUpdatedAt: existing.updatedAt,
+          },
+        } : {}),
         workspaceSelectionActor: req.actor,
         expectedExecutionPolicy,
         expectedStatusVersion,
@@ -14584,12 +14655,13 @@ export function issueRoutes(
       const commentWithAdapterOverrides = Boolean(
         commentBody && updateFields.assigneeAdapterOverrides !== undefined,
       );
-      const transactionalCommentSourceTrust = commentAttachmentIds?.length || commentWithAdapterOverrides
+      const transactionalCommentSourceTrust = commentAttachmentIds?.length || commentWithAdapterOverrides || isHostWatcherKeyActor(req)
         ? await sourceTrustForActorWrite(existing, actor)
         : undefined;
       const shouldUseTransactionalIssueUpdate =
         Boolean(commentAttachmentIds?.length) ||
         commentWithAdapterOverrides ||
+        (isHostWatcherKeyActor(req) && Boolean(commentBody)) ||
         Boolean(decision) ||
         shouldRelayStop ||
         persistReviewActivityTransactionally ||
@@ -14604,9 +14676,16 @@ export function issueRoutes(
               return null;
             const updated = await updateIssue(tx);
             if (!updated) return null;
-            if (commentAttachmentIds?.length || commentWithAdapterOverrides) {
+            if (commentAttachmentIds?.length || commentWithAdapterOverrides || isHostWatcherKeyActor(req)) {
               // Adapter settings, reassignment, comment and upload binding commit together.
               // A failed comment or invalid receipt rolls back the issue update.
+              if (isHostWatcherKeyActor(req) && req.actor.type === "agent") {
+                await assertHostWatcherCommentQuota(tx as unknown as Db, {
+                  companyId: req.actor.companyId!,
+                  issueId: id,
+                  serviceAgentId: req.actor.agentId!,
+                });
+              }
               transactionalComment = await svc.addComment(
                 id,
                 commentBody,
@@ -18560,6 +18639,7 @@ export function issueRoutes(
         currentIssue.executionPolicy ?? null,
       );
       const shouldAutoApproveReviewComment =
+        !isHostWatcherKeyActor(req) &&
         currentIssue.status === "in_review" &&
         currentExecutionState?.status === "pending" &&
         actorMatchesExecutionParticipant(
@@ -18750,22 +18830,68 @@ export function issueRoutes(
             commentOptions,
             dbOrTx,
           );
-        const needsFastResponse = actor.actorType === "user" && currentIssue.assigneeAgentId && !["done", "cancelled", "backlog"].includes(currentIssue.status);
-        comment = needsFastResponse ? await db.transaction(async tx => {
-          const saved = await add(tx as unknown as Db);
-          if (actor.actorType === "user" && currentIssue.assigneeAgentId && !["done", "cancelled", "backlog"].includes(currentIssue.status)) {
-            await enqueueFastResponse(tx as unknown as Db, { companyId: currentIssue.companyId, issueId: currentIssue.id, agentId: currentIssue.assigneeAgentId,
-              responsibleUserId: actor.actorId, sourceCommentId: saved.id, sourceKey: `comment:${saved.id}`, acceptedAt: new Date(saved.createdAt) });
+        const needsFastResponse = actor.actorType === "user" && currentIssue.assigneeAgentId
+          && !["done", "cancelled", "backlog"].includes(currentIssue.status);
+        if (isHostWatcherKeyActor(req) && req.actor.type === "agent") {
+          const scope = req.actor.keyScope;
+          const url = new URL(req.originalUrl, "http://localhost");
+          comment = await db.transaction(async (tx) => {
+            const locked = await tx.select({
+              companyId: issueRows.companyId,
+              status: issueRows.status,
+              assigneeAgentId: issueRows.assigneeAgentId,
+              projectId: issueRows.projectId,
+            }).from(issueRows).where(and(eq(issueRows.id, id), eq(issueRows.companyId, req.actor.companyId!)))
+              .for("update").then((rows) => rows[0] ?? null);
+            const allowed = scope?.kind === "host_watcher" && await hostWatcherRequestAllowed(scope, {
+              method: req.method,
+              path: url.pathname,
+              query: url.search,
+              body: req.body,
+              companyId: req.actor.companyId!,
+              serviceAgentId: req.actor.agentId!,
+            }, async () => locked, async () => false);
+            if (!allowed) throw conflict("Host watcher target changed before the comment");
+            await assertHostWatcherCommentQuota(tx as unknown as Db, {
+              companyId: req.actor.companyId!,
+              issueId: id,
+              serviceAgentId: req.actor.agentId!,
+            });
+            return add(tx as unknown as Db);
+          });
+        } else if (needsFastResponse) {
+          comment = await db.transaction(async (tx) => {
+            const saved = await add(tx as unknown as Db);
+            await enqueueFastResponse(tx as unknown as Db, {
+              companyId: currentIssue.companyId,
+              issueId: currentIssue.id,
+              agentId: currentIssue.assigneeAgentId!,
+              responsibleUserId: actor.actorId,
+              sourceCommentId: saved.id,
+              sourceKey: `comment:${saved.id}`,
+              acceptedAt: new Date(saved.createdAt),
+            });
             fastResponseEnqueued = true;
-          }
-          return saved;
-        }) : await add();
+            return saved;
+          });
+        } else {
+          comment = req.body.attachmentIds?.length
+            ? await db.transaction(async (tx) => add(tx as unknown as Db))
+            : await add();
+        }
       }
 
-      if (!fastResponseEnqueued && actor.actorType === "user" && currentIssue.assigneeAgentId && !["done", "cancelled", "backlog"].includes(currentIssue.status)) {
-        await db.transaction(tx => enqueueFastResponse(tx as unknown as Db, { companyId: currentIssue.companyId, issueId: currentIssue.id, agentId: currentIssue.assigneeAgentId,
-          responsibleUserId: actor.actorId, sourceCommentId: comment.id, sourceKey: `comment:${comment.id}`, acceptedAt: new Date(comment.createdAt) }))
-          .catch(() => logger.warn({ issueId: currentIssue.id }, "fast response admission unavailable"));
+      if (!fastResponseEnqueued && actor.actorType === "user" && currentIssue.assigneeAgentId
+        && !["done", "cancelled", "backlog"].includes(currentIssue.status)) {
+        await db.transaction((tx) => enqueueFastResponse(tx as unknown as Db, {
+          companyId: currentIssue.companyId,
+          issueId: currentIssue.id,
+          agentId: currentIssue.assigneeAgentId!,
+          responsibleUserId: actor.actorId,
+          sourceCommentId: comment.id,
+          sourceKey: `comment:${comment.id}`,
+          acceptedAt: new Date(comment.createdAt),
+        })).catch(() => logger.warn({ issueId: currentIssue.id }, "fast response admission unavailable"));
       }
 
       await issueReferencesSvc.syncComment(comment.id);

@@ -78,6 +78,7 @@ export interface UpdateAgentOptions {
   allowBuiltInAgentMetadata?: boolean;
   allowPendingApprovalConfigUpdate?: boolean;
   claudeLogin?: ClaudeLoginContext;
+  watchdogRecovery?: boolean;
 }
 
 export type CreateAgentData = Omit<typeof agents.$inferInsert, "companyId" | "lifecycleState" | "lifecycleRequiredPluginIds" | "lifecycleHolds" | "lifecycleVersion" | "lifecycleError" | "lifecycleOperation"> & { runner?: AgentRunnerChoice };

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type {
   IssueExecutionDecision,
   IssueExecutionMonitorClearReason,
@@ -327,6 +328,18 @@ export function stripMonitorFromExecutionPolicy(policy: IssueExecutionPolicy | n
   if (!policy.monitor) return policy;
   const { monitor: _monitor, ...remainingPolicy } = policy;
   return normalizeIssueExecutionPolicy(remainingPolicy);
+}
+
+/** Compare the policy a monitor-only caller supplied with the locked issue row. */
+export function executionPolicyOutsideMonitorEqual(left: unknown, right: unknown): boolean {
+  const withoutMonitor = (value: unknown) => {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      return { mode: "normal", stages: [] };
+    }
+    const { monitor: _monitor, ...rest } = value as Record<string, unknown>;
+    return { mode: "normal", stages: [], ...rest };
+  };
+  return isDeepStrictEqual(withoutMonitor(left), withoutMonitor(right));
 }
 
 export function setIssueExecutionPolicyMonitorScheduledBy(

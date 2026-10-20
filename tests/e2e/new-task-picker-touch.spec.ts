@@ -25,19 +25,23 @@ async function swipeToLastOption(page: Page, picker: Locator, list = picker.getB
   expect(targetHandle).not.toBeNull();
   try {
     expect(await list.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+    let touchScrolled = false;
     for (let attempt = 0; attempt < 20; attempt += 1) {
       // Momentum can finish between protocol round trips. Observe geometry and
       // scrollTop together so a stale target cannot trigger a swipe at the end.
-      const { bounds, target, before } = await list.evaluate((element, option) => {
+      const { bounds, target, before, maxScrollTop } = await list.evaluate((element, option) => {
         const container = element.getBoundingClientRect();
         const item = option!.getBoundingClientRect();
         return {
           bounds: { x: container.x, y: container.y, width: container.width, height: container.height },
           target: { y: item.y, height: item.height },
           before: element.scrollTop,
+          maxScrollTop: element.scrollHeight - element.clientHeight,
         };
       }, targetHandle);
       if (target.y >= bounds.y && target.y + target.height <= bounds.y + bounds.height) break;
+      // A gesture cannot advance native scrolling past its limit.
+      if (before >= maxScrollTop) break;
       const x = bounds.x + bounds.width / 2;
       const y = bounds.y + bounds.height - 20;
       const distance = Math.min(180, bounds.height - 40);
@@ -51,9 +55,11 @@ async function swipeToLastOption(page: Page, picker: Locator, list = picker.getB
       }
       await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
       await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBeGreaterThan(before);
+      touchScrolled = true;
       // A drag must not choose a row or dismiss the picker.
       await expect(picker).toBeVisible();
     }
+    expect(touchScrolled).toBe(true);
     const bounds = (await list.boundingBox())!;
     const target = (await last.boundingBox())!;
     expect(target.y).toBeGreaterThanOrEqual(bounds.y);

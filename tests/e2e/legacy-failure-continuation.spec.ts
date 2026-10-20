@@ -113,7 +113,23 @@ for (const action of ["task_retry", "thread_retry", "inbox_retry", "message", "q
         expect(response.ok(), `${response.status()} ${await response.text()}`).toBe(true);
         await page.goto(taskUrl);
       } else {
-        await page.getByRole("button", { name: action === "thread_retry" ? "Try again" : "Retry", exact: true }).click();
+        const retry = page.getByRole("button", { name: action === "thread_retry" ? "Try again" : "Retry", exact: true });
+        if (action === "inbox_retry") {
+          // A direct navigation can abort the inbox's pending wakeup request.
+          const [retryResponse] = await Promise.all([
+            page.waitForResponse((response) => {
+              const url = new URL(response.url());
+              return response.request().method() === "POST"
+                && url.pathname === `/api/agents/${agent.id}/wakeup`
+                && url.searchParams.get("companyId") === company.id;
+            }),
+            retry.click(),
+          ]);
+          expect(retryResponse.ok()).toBe(true);
+          await page.goto(taskUrl);
+        } else {
+          await retry.click();
+        }
       }
       await expect(page.getByText("Answered the pending follow-up once.", { exact: false })).toBeVisible({ timeout: 45_000 });
       await expect(page.getByRole("status", { name: "Task recovery" })).toHaveCount(0);
