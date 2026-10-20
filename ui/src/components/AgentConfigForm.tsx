@@ -24,7 +24,7 @@ import type {
   EnvSecretRefBinding,
   Environment,
 } from "@paperclipai/shared";
-import { AGENT_DEFAULT_MAX_CONCURRENT_RUNS, supportedEnvironmentDriversForAdapter, isValidBrowserCode, ADAPTER_AUTH_MISSING_CHECK_CODE } from "@paperclipai/shared";
+import { AGENT_DEFAULT_MAX_CONCURRENT_RUNS, AGENT_ROLES, AGENT_ROLE_LABELS, supportedEnvironmentDriversForAdapter, isValidBrowserCode, ADAPTER_AUTH_MISSING_CHECK_CODE } from "@paperclipai/shared";
 import type { AdapterModel } from "../api/agents";
 import { agentsApi } from "../api/agents";
 import { ApiError } from "../api/client";
@@ -525,6 +525,14 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
       ...prev,
       [group]: { ...prev[group], [field]: value },
     }));
+  }
+
+  function unmark(group: RecordOverlayGroup, field: string) {
+    setOverlay((prev) => {
+      const nextGroup = { ...prev[group] };
+      delete nextGroup[field];
+      return { ...prev, [group]: nextGroup };
+    });
   }
 
   function flushEnvironmentDraft() {
@@ -1514,6 +1522,25 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                 className={inputClass}
                 placeholder="e.g. VP of Engineering"
               />
+            </Field>
+            <Field label="Role" hint={help.role}>
+              <NativeSelect
+                aria-label="Role"
+                value={eff("identity", "role", props.agent.role)}
+                onChange={(event) => {
+                  if (event.target.value === props.agent.role) unmark("identity", "role");
+                  else mark("identity", "role", event.target.value);
+                }}
+              >
+                {!(AGENT_ROLES as readonly string[]).includes(props.agent.role) && (
+                  <option value={props.agent.role}>{props.agent.role}</option>
+                )}
+                {AGENT_ROLES.map((r) => (
+                  <option key={r} value={r}>
+                    {AGENT_ROLE_LABELS[r]}
+                  </option>
+                ))}
+              </NativeSelect>
             </Field>
             <Field label="Reports to" hint={help.reportsTo}>
               <ReportsToPicker

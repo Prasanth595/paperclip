@@ -21,7 +21,9 @@ export function buildAgentUpdatePatch(agent: Agent, overlay: AgentConfigOverlay)
   if (overlay.runner !== undefined) patch.runner = overlay.runner;
 
   if (Object.keys(overlay.identity).length > 0) {
-    Object.assign(patch, overlay.identity);
+    const identity = { ...overlay.identity };
+    if (identity.role === agent.role) delete identity.role;
+    Object.assign(patch, identity);
   }
 
   if (overlay.adapterType !== undefined) {
