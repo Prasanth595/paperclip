@@ -2223,6 +2223,7 @@ export function agentRoutes(
     claude_local: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"],
     codex_local: ["OPENAI_API_KEY", "CODEX_API_KEY"],
     grok_local: ["XAI_API_KEY"],
+    muse_code_local: ["META_API_KEY"],
   };
 
   function isInheritableCredentialReference(value: unknown): value is Record<string, unknown> {
@@ -2598,6 +2599,7 @@ export function agentRoutes(
     ...INHERITABLE_AGENT_CREDENTIAL_ENV_KEYS,
     gemini_local: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
     kimi_local: ["KIMI_MODEL_API_KEY"],
+    muse_code_local: ["META_API_KEY"],
     opencode_local: ["PAPERCLIP_OPENCODE_PROVIDERS", "OPENCODE_AUTH_JSON"],
   };
   const POOL_AUTH_OVERRIDE_ENV_KEYS = [
