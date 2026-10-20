@@ -1,6 +1,7 @@
 import { Languages } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { TruncatedText } from "./TruncatedText";
 import { availableLocales, setLocale, useTranslation } from "@/i18n";
 import { localeDisplayName } from "@/i18n/locale-preference";
 
@@ -73,7 +74,7 @@ export function LanguageToggle({
       <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
         <Languages className="size-4" />
       </span>
-      <span className="min-w-0 flex-1 truncate">{label}</span>
+      <TruncatedText className="min-w-0 flex-1 truncate">{label}</TruncatedText>
     </button>
   );
 }
