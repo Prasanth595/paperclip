@@ -77,7 +77,8 @@
       "signOut": "Sign out",
       "signingOut": "Signing out...",
       "signOutDescription": "End this browser session.",
-      "shareFeedback": "Share feedback"
+      "shareFeedback": "Share feedback",
+      "label": "Account"
     },
     "organizationMenu": {
       "title": "Organizations",

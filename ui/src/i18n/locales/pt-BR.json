@@ -77,7 +77,8 @@
       "signOut": "Sair",
       "signingOut": "Saindo...",
       "signOutDescription": "Encerra esta sessão do navegador.",
-      "shareFeedback": "Enviar feedback"
+      "shareFeedback": "Enviar feedback",
+      "label": "Conta"
     },
     "organizationMenu": {
       "title": "Empresas",

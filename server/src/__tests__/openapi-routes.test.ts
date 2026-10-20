@@ -455,6 +455,14 @@ describe("openapi routes", () => {
     expect(wake.responses["409"]).toBeDefined();
     expect(wake.description).toContain("durable queued/deferred receipt");
   });
+  it("advertises the guarded prepared-task promotion contract to API clients", async () => {
+    const res = await request(createApp()).get("/api/openapi.json");
+    const patch = res.body.paths["/api/issues/{id}"].patch;
+    expect(patch.requestBody.content["application/json"].schema.properties.expectedStatusVersion)
+      .toMatchObject({ type: "integer", minimum: 0 });
+    expect(patch.responses["409"]).toBeDefined();
+    expect(patch.description).toContain("send exactly status=todo and expectedStatusVersion");
+  });
   it("serves the generated OpenAPI document", async () => {
     const res = await request(createApp()).get("/api/openapi.json");
 

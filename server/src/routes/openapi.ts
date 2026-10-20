@@ -4293,7 +4293,7 @@ registry.registerPath({
   tags: ["issues"],
   summary: "Update an issue",
   description:
-    "When posting a comment, attachmentIds selects up to 20 unique uploaded attachments from this exact task and company. The comment, attachment binding, and issue update commit atomically. attachmentIds without a comment is rejected; Markdown links alone do not bind uploads.",
+    "When posting a comment, attachmentIds selects up to 20 unique uploaded attachments from this exact task and company. The comment, attachment binding, and issue update commit atomically. attachmentIds without a comment is rejected; Markdown links alone do not bind uploads. For a prepared backlog task, send exactly status=todo and expectedStatusVersion from the task response. The locked promotion returns 409 if the status or assignment changed. Other mutation fields with this guard return 422.",
   request: {
     params: z.object({ id: z.string() }),
     body: jsonBody(updateIssueSchema.partial()),
@@ -4303,6 +4303,7 @@ registry.registerPath({
     400: r.badRequest,
     401: r.unauthorized,
     404: r.notFound,
+    409: r.conflict,
     422: r.unprocessable,
   },
 });
@@ -5701,7 +5702,7 @@ registry.registerPath({
   path: "/api/companies/{companyId}/agent-commentary",
   tags: ["agents"],
   summary: "Browse agent suggestions and complaints",
-  description: "Board-only. Requires company membership, audit:view_agent_actions. Source-task privacy filters both previews and counts. Returns items, total, limit and offset; previews contain at most 280 characters and omit full bodies.",
+  description: "Board-only. Requires company membership and commentary:view, granted by default to all human company roles. Source-task privacy filters both previews and counts. Returns items, total, limit and offset; previews contain at most 280 characters and omit full bodies.",
   request: { params: z.object({ companyId: z.string() }), query: agentCommentaryQuerySchema },
   responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized, 403: r.forbidden, 404: r.notFound },
 });

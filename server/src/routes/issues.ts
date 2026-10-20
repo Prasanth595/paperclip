@@ -13549,6 +13549,15 @@ export function issueRoutes(
 
   router.patch(
     "/issues/:id",
+    (req, _res, next) => {
+      if (req.body?.expectedStatusVersion !== undefined && (
+        req.body.status !== "todo" ||
+        Object.keys(req.body).some(key => key !== "status" && key !== "expectedStatusVersion")
+      )) {
+        throw unprocessable("expectedStatusVersion requires a status-only backlog-to-todo promotion");
+      }
+      next();
+    },
     validateIssueMutationBody(updateIssueRouteSchema),
     async (req, res) => {
       // Snapshot-guarded writes are policy-only. Do not admit task-control
@@ -13568,6 +13577,13 @@ export function issueRoutes(
       );
       if (!existing) return;
       if (!(await assertIssueReadAllowed(req, res, existing))) return;
+      if (req.body.expectedStatusVersion !== undefined && (
+        existing.statusVersion !== req.body.expectedStatusVersion || existing.status !== "backlog"
+      )) {
+        throw conflict("The task status or assignment changed. Read the task again before starting work.", {
+          code: "issue_status_version_changed",
+        });
+      }
       if (req.body.parentId) {
         const parent = await svc.getById(req.body.parentId);
         if (!parent || parent.companyId !== existing.companyId || !(await assertIssueReadAllowed(req, res, parent))) {
@@ -13646,6 +13662,7 @@ export function issueRoutes(
         deferWakeForGoal,
         hiddenAt: hiddenAtRaw,
         expectedExecutionPolicy,
+        expectedStatusVersion,
         onBehalfOfUserId: _requestedOnBehalfOfUserId,
         ...updateFields
       } = req.body;
@@ -14011,7 +14028,9 @@ export function issueRoutes(
         req.body.executionPolicy !== undefined && monitorChanged,
       );
 
-      const transition = applyIssueExecutionPolicyTransition({
+      const transition: ReturnType<typeof applyIssueExecutionPolicyTransition> = expectedStatusVersion !== undefined
+        ? { patch: {} }
+        : applyIssueExecutionPolicyTransition({
         issue: existing,
         policy: nextExecutionPolicy,
         previousPolicy: previousExecutionPolicy,
@@ -14391,6 +14410,7 @@ export function issueRoutes(
         ...updateFields,
         workspaceSelectionActor: req.actor,
         expectedExecutionPolicy,
+        expectedStatusVersion,
         actorAgentId: actor.agentId ?? null,
         actorRunId: actor.agentId ? actor.runId : null,
         actorRunStopId: actor.agentId && interruptedRunId === actor.runId ? issueMutationStopId : null,

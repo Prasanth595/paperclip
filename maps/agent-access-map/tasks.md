@@ -86,6 +86,16 @@ necessarily shared server preferences.
 
 Review: `baseline`.
 
+Agent REST callers can promote a prepared backlog task with
+`PATCH /api/issues/{id}` and exactly `{ "status": "todo", "expectedStatusVersion": N }`.
+The optional nonnegative integer version comes from the current task response.
+The server checks both the version and backlog state under the task row lock;
+status or ownership changes, including changes back to their earlier values,
+return `409` without promoting or waking the task. Mixed mutation fields return
+`422`. Existing company, task, assignment and run authority still apply.
+Route and real-PostgreSQL service tests cover the contract; no live agent journey
+or dedicated native tool is claimed.
+
 API: `present` — representative operation IDs:
 
 - `PATCH /api/issues/{id}`.
@@ -119,6 +129,11 @@ remaining operations before qualifying the whole capability. Focused route
 regressions in [ownership tests](../../server/src/__tests__/issue-agent-mutation-ownership-routes.test.ts)
 cover a human handoff and stop enforcement for other actors, runtimes and targets;
 they use mocked services and do not claim live execution proof.
+
+Queue and HTTP/2 sandbox callbacks admit `GET /api/issues/{id}/diagnostics/wakes`
+and `POST /api/issues/{id}/monitor/check-now`. The controller still checks task
+read access or monitor-management permission and assignment ownership. Recovery
+resolution and scheduled-retry controls remain outside this bridge surface.
 
 Monitor verification: submit flat scheduling fields, observe the schema rejection
 and unchanged task, then retry with the nested `monitor` object and the same

@@ -41,6 +41,8 @@ import { queryKeys } from "@/lib/queryKeys";
 import { cn, SIDEBAR_RAIL_HIDDEN_LABEL } from "@/lib/utils";
 import { useSidebar } from "../context/SidebarContext";
 import { CompanyPatternIcon } from "./CompanyPatternIcon";
+import { TruncatedText } from "./TruncatedText";
+import { FlyoutHeader, FlyoutOptions } from "./ui/flyout";
 
 import { PluginOrganizationSwitcher } from "./PluginOrganizationSwitcher";
 import { useTranslation } from "@/i18n";
@@ -48,6 +50,7 @@ import { useTranslation } from "@/i18n";
 interface SidebarCompanyMenuProps {
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  showChevron?: boolean;
 }
 
 const TRIGGER_WORKSPACE_ICON_CLASS = "size-5 shrink-0 rounded-md text-(length:--text-micro)";
@@ -93,6 +96,7 @@ function SortableCompanyItem({
   return (
     <DropdownMenuItem
       ref={setNodeRef}
+      data-selected={isSelected || undefined}
       style={{
         transform: CSS.Transform.toString(transform),
         transition,
@@ -113,13 +117,13 @@ function SortableCompanyItem({
     >
       <WorkspaceIcon company={company} inPopover />
       <span className="min-w-0 flex-1">
-        <span className="block truncate font-medium leading-(--organization-popover-name-line-height)">
+        <TruncatedText className="block truncate font-medium leading-(--organization-popover-name-line-height)">
           {company.name}
-        </span>
+        </TruncatedText>
         {isEditing ? null : (
-          <span className="block truncate text-(length:--text-nano) leading-(--organization-popover-prefix-line-height) text-muted-foreground">
+          <TruncatedText className="block truncate text-(length:--text-nano) leading-(--organization-popover-prefix-line-height) text-muted-foreground">
             {company.issuePrefix}
-          </span>
+          </TruncatedText>
         )}
       </span>
       {isEditing ? (
@@ -146,15 +150,15 @@ function SortableCompanyItem({
   );
 }
 
-export function SidebarCompanyMenu(props: SidebarCompanyMenuProps = {}) {
+export function SidebarCompanyMenu({ showChevron, ...props }: SidebarCompanyMenuProps = {}) {
   return (
     <PluginOrganizationSwitcher {...props}>
-      <BuiltinCompanyMenu {...props} />
+      <BuiltinCompanyMenu {...props} showChevron={showChevron} />
     </PluginOrganizationSwitcher>
   );
 }
 
-function BuiltinCompanyMenu({ open: controlledOpen, onOpenChange }: SidebarCompanyMenuProps) {
+function BuiltinCompanyMenu({ open: controlledOpen, onOpenChange, showChevron = true }: SidebarCompanyMenuProps) {
   const { t } = useTranslation();
   const [internalOpen, setInternalOpen] = useState(false);
   const [isEditingOrder, setIsEditingOrder] = useState(false);
@@ -280,7 +284,8 @@ function BuiltinCompanyMenu({ open: controlledOpen, onOpenChange }: SidebarCompa
                 control (~142px on mobile, which hides it) — search moved to
                 the nav to buy that width. A name that still
                 truncates stays hover-recoverable via title. */}
-            <span
+            <TruncatedText
+              marqueeResetKey={open}
               className={cn(
                 "min-w-0 truncate text-sm font-bold text-foreground",
                 rail && SIDEBAR_RAIL_HIDDEN_LABEL,
@@ -288,9 +293,9 @@ function BuiltinCompanyMenu({ open: controlledOpen, onOpenChange }: SidebarCompa
               title={currentName ?? undefined}
             >
               {currentName ?? t("nav.organizationMenu.select")}
-            </span>
+            </TruncatedText>
           </span>
-          {!rail && <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />}
+          {!rail && showChevron && <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
@@ -298,7 +303,7 @@ function BuiltinCompanyMenu({ open: controlledOpen, onOpenChange }: SidebarCompa
         sideOffset={8}
         className="ml-2 w-(--organization-popover-width) max-w-(--sz-calc-24) overflow-hidden rounded-xl border-border bg-popover p-0 shadow-(--shadow-profile-popover)"
       >
-        <div className="flex h-(--organization-popover-header-height) items-center justify-between gap-2 px-3.5">
+        <FlyoutHeader className="flex h-(--organization-popover-header-height) items-center justify-between gap-2 px-3.5">
           <DropdownMenuLabel className="p-0 text-(length:--text-compact) font-semibold text-foreground">
             {t("nav.organizationMenu.title")}
           </DropdownMenuLabel>
@@ -313,8 +318,8 @@ function BuiltinCompanyMenu({ open: controlledOpen, onOpenChange }: SidebarCompa
           >
             {isEditingOrder ? t("nav.organizationMenu.done") : t("nav.organizationMenu.edit")}
           </button>
-        </div>
-        <div className="flex max-h-96 flex-col gap-0.5 overflow-y-auto px-2.5 pb-2 pt-1">
+        </FlyoutHeader>
+        <FlyoutOptions className="flex max-h-96 flex-col gap-0.5 overflow-y-auto px-2.5 pb-2 pt-1">
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
@@ -358,8 +363,8 @@ function BuiltinCompanyMenu({ open: controlledOpen, onOpenChange }: SidebarCompa
               <DropdownMenuItem disabled>{t("nav.organizationMenu.empty")}</DropdownMenuItem>
             )
           ) : null}
-        </div>
-        <div className="flex flex-col gap-0.5 border-t border-border px-2.5 pb-2.5 pt-2">
+        </FlyoutOptions>
+        <FlyoutOptions className="flex flex-col gap-0.5 border-t border-border px-2.5 pb-2.5 pt-2">
           {!companyCreationManaged && (
             <DropdownMenuItem
               onClick={addCompany}
@@ -369,7 +374,7 @@ function BuiltinCompanyMenu({ open: controlledOpen, onOpenChange }: SidebarCompa
               <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
                 <Plus className="size-4" />
               </span>
-              <span className="min-w-0 flex-1 truncate">{t("nav.organizationMenu.create")}</span>
+              <TruncatedText className="min-w-0 flex-1 truncate">{t("nav.organizationMenu.create")}</TruncatedText>
             </DropdownMenuItem>
           )}
           {showInvitePeople ? (
@@ -387,9 +392,9 @@ function BuiltinCompanyMenu({ open: controlledOpen, onOpenChange }: SidebarCompa
                 <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
                   <UserPlus className="size-4" />
                 </span>
-                <span className="min-w-0 flex-1 truncate">
+                <TruncatedText className="min-w-0 flex-1 truncate">
                   {currentName ? t("nav.organizationMenu.inviteTo", { name: currentName }) : t("nav.organizationMenu.invite")}
-                </span>
+                </TruncatedText>
               </Link>
             </DropdownMenuItem>
           ) : null}
@@ -402,12 +407,12 @@ function BuiltinCompanyMenu({ open: controlledOpen, onOpenChange }: SidebarCompa
               <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
                 <LogOut className="size-4" />
               </span>
-              <span className="min-w-0 flex-1 truncate">
+              <TruncatedText className="min-w-0 flex-1 truncate">
                 {signOutMutation.isPending ? t("nav.account.signingOut") : t("nav.account.signOut")}
-              </span>
+              </TruncatedText>
             </DropdownMenuItem>
           ) : null}
-        </div>
+        </FlyoutOptions>
       </DropdownMenuContent>
     </DropdownMenu>
   );
