@@ -9,7 +9,7 @@ import { resolveCoreTrustPreset } from "./trust-preset-resolver.js";
 import { CONTROLLER_PROVISION_COPY_ONLY, workspaceRequiresCopyOnlyProvisioning } from "./workspace-host-provision.js";
 import { instanceSettingsService } from "./instance-settings.js";
 import { taskWorkspaceSelectableCondition } from "./task-workspace-selection.js";
-import { executionWorkspaceRepositoryService, lockExecutionWorkspaceRootProvenance, preserveExecutionWorkspaceRootProvenance, assertExecutionWorkspaceRootWriteAccess, assertExecutionWorkspaceRootReadAccess, assertIsolatedWorkspaceSourceReadAccess, retainIsolatedWorkspaceSourceAccess, canonicalRepositoryRoot, type IsolatedWorkspaceSourceAccess, type TaskWorkspaceCreationTrustContext } from "./execution-workspace-repositories.js";
+import { executionWorkspaceRepositoryService, lockExecutionWorkspaceRootProvenance, preserveExecutionWorkspaceRootProvenance, stageRepositoryRootResolutions, assertExecutionWorkspaceRootWriteAccess, assertExecutionWorkspaceRootReadAccess, assertIsolatedWorkspaceSourceReadAccess, retainIsolatedWorkspaceSourceAccess, canonicalRepositoryRoot, type IsolatedWorkspaceSourceAccess, type StagedRepositoryRootResolutions, type TaskWorkspaceCreationTrustContext } from "./execution-workspace-repositories.js";
 import { forbidden } from "../errors.js";
 import { retryIdempotentDatabaseOperation } from "../database-retry.js";
 import { taskWorkspaceSelectionSchema, type TaskWorkspaceSelection, type TaskWorkspaceIntent } from "@paperclipai/shared";
@@ -254,11 +254,12 @@ const workspaceSourceKeys = ["cwd", "projectId", "projectWorkspaceId", "sourceIs
 
 async function preserveWorkspaceOwnershipForPatch(
   tx: DbTransaction, current: typeof executionWorkspaces.$inferSelect, patch: Partial<typeof executionWorkspaces.$inferInsert>,
+  staged?: StagedRepositoryRootResolutions,
 ) {
   if (workspaceSourceKeys.some(key => patch[key] !== undefined && patch[key] !== current[key])) {
     await measureRunPhase("workspace.provenance", () => preserveExecutionWorkspaceRootProvenance(tx, {
       companyId: current.companyId, workspaceId: current.id, cwd: current.cwd,
-    }));
+    }, staged));
   }
   const nextPatch = { ...patch };
   const retainedSources = {
@@ -3633,13 +3634,14 @@ export function executionWorkspaceService(db: Db, opts: ExecutionWorkspaceServic
       const [identity] = await measureRunPhase("workspace.identity_read", () => db.select({ companyId: executionWorkspaces.companyId }).from(executionWorkspaces)
         .where(eq(executionWorkspaces.id, id)));
       if (!identity) return null;
+      const staged = workspaceSourceKeys.some(key => patch[key] !== undefined) ? await stageRepositoryRootResolutions(db, identity.companyId) : undefined;
       return measureRunTransaction(db, "workspace", async tx => {
         await lockExecutionWorkspaceRootProvenance(tx, identity.companyId);
         const [current] = await measureRunPhase("workspace.row_lock", () => tx.select().from(executionWorkspaces).where(and(
           eq(executionWorkspaces.id, id), eq(executionWorkspaces.companyId, identity.companyId),
         )).for("no key update"));
         if (!current) return null;
-        const nextPatch = await measureRunPhase("workspace.provenance", () => preserveWorkspaceOwnershipForPatch(tx, current, patch));
+        const nextPatch = await measureRunPhase("workspace.provenance", () => preserveWorkspaceOwnershipForPatch(tx, current, patch, staged));
         await measureRunPhase("workspace.notification", () => notifyTerminalWorkspaceWork(tx, `workspace:${id}`));
         const [row] = await measureRunPhase("workspace.write", () => tx.update(executionWorkspaces).set({ ...nextPatch, updatedAt: new Date() })
           .where(and(eq(executionWorkspaces.id, id), eq(executionWorkspaces.companyId, current.companyId))).returning());
@@ -4168,6 +4170,7 @@ export function executionWorkspaceService(db: Db, opts: ExecutionWorkspaceServic
       const [identity] = await db.select({ companyId: executionWorkspaces.companyId }).from(executionWorkspaces)
         .where(eq(executionWorkspaces.id, input.id));
       if (!identity) return null;
+      const staged = workspaceSourceKeys.some(key => input.patch[key] !== undefined) ? await stageRepositoryRootResolutions(db, identity.companyId) : undefined;
       return db.transaction(async (tx) => {
         await lockExecutionWorkspaceRootProvenance(tx, identity.companyId);
         await acquireExecutionWorkspaceLifecycleLock(tx, input.id);
@@ -4189,7 +4192,7 @@ export function executionWorkspaceService(db: Db, opts: ExecutionWorkspaceServic
           // rebuilt worktree. The route maps this to HTTP 409.
           return { outcome: "reopen_pending" };
         }
-        const nextPatch = await measureRunPhase("workspace.provenance", () => preserveWorkspaceOwnershipForPatch(tx, fresh, input.patch));
+        const nextPatch = await measureRunPhase("workspace.provenance", () => preserveWorkspaceOwnershipForPatch(tx, fresh, input.patch, staged));
         const baseMetadata =
           (nextPatch.metadata as Record<string, unknown> | null | undefined)
           ?? (fresh.metadata as Record<string, unknown> | null);
