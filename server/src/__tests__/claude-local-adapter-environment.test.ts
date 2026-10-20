@@ -307,6 +307,7 @@ describe("claude_local environment diagnostics", () => {
       config: {
         engine: "cli",
         command: "claude",
+        dangerouslySkipPermissions: true,
       },
       executionTarget: {
         kind: "remote",
