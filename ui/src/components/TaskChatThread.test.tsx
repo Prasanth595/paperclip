@@ -9,6 +9,7 @@ import { ThemeProvider } from "@/context/ThemeContext";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TaskChatThread } from "./TaskChatThread";
 import type {
+  Agent,
   IssueDocument,
   IssueQueuedCommentQueue,
   IssueThreadInteraction,
@@ -381,6 +382,21 @@ it.each([true, false])("keeps an upload attached when a conversation draft becom
   expect(onAdd).toHaveBeenCalledTimes(1);
   expect(onAdd.mock.calls[0]?.[0]).toBe(`[chat-notes.txt](/api/attachments/${id}/content)`);
   expect(onAdd.mock.calls[0]?.[3]).toEqual([id]);
+});
+
+it("does not claim the agent is working while a follow-up waits behind recovery", async () => {
+  const pending = { id: "optimistic-recovery", companyId: "company", issueId: "issue", authorType: "user" as const,
+    authorAgentId: null, authorUserId: "board", body: "Confirm the existing result.", presentation: null, metadata: null,
+    createdAt: new Date(), updatedAt: new Date(), clientStatus: "pending" as const };
+  const show = (executionBlocked: boolean) => render(<TaskChatThread issueId="issue" issueStatus="blocked" executionBlocked={executionBlocked} comments={[pending]}
+    onAdd={async () => {}} issueAssigneeAgentId="agent"
+    agentMap={new Map([["agent", { id: "agent", name: "Worker", adapterType: "paperclip_runner" } as Agent]])} />);
+  show(true);
+  expect(container.textContent).toContain("Confirm the existing result.");
+  expect(container.textContent).not.toContain("Thinking");
+  expect(container.textContent).not.toContain("Working");
+  show(false);
+  expect(container.textContent).toContain("Working");
 });
 
 it("prepares comment-link history and its composer before reveal", async () => {
@@ -4145,7 +4161,7 @@ describe("TaskChatThread live transcript", () => {
     expect(tail!.textContent).toContain("Syncing workspace to environment");
     expect(tail!.textContent).not.toContain("Waiting for transcript...");
 
-    // Without a runtime status, the generic wait message still shows.
+    // Without a runtime status, the working indicator remains the only visible activity.
     renderThread({
       comments: [],
       onAdd: async () => {},
@@ -4155,7 +4171,8 @@ describe("TaskChatThread live transcript", () => {
     const tail2 = container.querySelector(
       '[data-testid="task-chat-live-transcript"]',
     );
-    expect(tail2!.textContent).toContain("Waiting for transcript...");
+    expect(tail2!.textContent).toContain("Working");
+    expect(tail2!.textContent).not.toContain("Waiting for transcript...");
   });
 
   it("does not send a workspace bootstrap failure to connection settings", () => {
