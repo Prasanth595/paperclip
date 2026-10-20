@@ -352,5 +352,13 @@
     "migration": "0361_mighty_dracula.sql",
     "evalSuiteHashesUnchanged": true,
     "scope": "Preserve11 new master commits; resolve only migration metadata collision and expected shared eval hash conflict. The original campaign remains tied to frozen c261 app; final shipped canaries are required."
+  },
+  "postQualificationAuthorizationRepair": {
+    "finding": "Read-only configuration access could initiate a credential-bearing Copilot model probe.",
+    "fix": "Require agent_config:update before connection selection or credential resolution; default to saved agent environment. Authorized editors retain explicit environment selection. New-agent shared connection checks remain in place.",
+    "regression": "Both denied board-viewer and agent-reader cases fail against the original source;49 route tests pass with the fix. Denied probes never select connections, resolve credentials or call the runtime.",
+    "profileDigestUnchanged": true,
+    "liveRuntimeCampaignRepeated": false,
+    "finalShippedCanariesRequired": true
   }
 }

@@ -65,3 +65,8 @@ cause is unresolved. Its unchanged instrumented recheck passed after independent
 ordinary remote delivery and the other19 Product cases passed. No timeout or
 completion check was weakened. Qualification does not establish deployment: use
 the release record to verify the shipped package and canary.
+
+Discovering models for an existing agent requires permission to update that
+agent configuration. The probe uses the saved environment unless an authorized
+editor selects another environment. Read-only configuration access does not
+resolve the token or start a discovery probe.
