@@ -16,6 +16,7 @@ import {
 import { CONFIGURATION_INCOMPLETE_FAILURE_CODE } from "./run-preparation.js";
 import { WORKSPACE_VALIDATION_FAILURE_CODE } from "./workspaces.js";
 import { boundHeartbeatRunEventPayloadForStorage } from "./run-log.js";
+import { sanitizeRunPatchForPostgres } from "./run-status-unicode.js";
 import { preserveWorkspaceRestoreRecoveryMetadata } from "../workspace-restore-recovery-state.js";
 import { pendingNativeWorkspaceFinalizationCondition } from "../native-runtime/native-workspace-finalization-state.js";
 import { activeIssueInteractionCondition } from "../issue-question-context.js";
@@ -1003,6 +1004,7 @@ export function createHeartbeatLifecycle(db: Db, dependencies: HeartbeatLifecycl
     status: string,
     patch?: Partial<typeof heartbeatRuns.$inferInsert>,
   ) {
+    patch = sanitizeRunPatchForPostgres(patch);
     const previousStatus = await db
       .select()
       .from(heartbeatRuns)
@@ -1094,6 +1096,7 @@ export function createHeartbeatLifecycle(db: Db, dependencies: HeartbeatLifecycl
     failureReport?: RunFailureReportOptions,
     cancellationCondition?: ReturnType<typeof nativeRetryCancellationCommitCondition>,
   ) {
+    patch = sanitizeRunPatchForPostgres(patch);
     // fromStatuses can name a terminal status as its own source (for example,
     // an idempotent "still failed" patch), so the write below is not always a
     // genuine transition. Read the pre-write status to tell the two apart.
