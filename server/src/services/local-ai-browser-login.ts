@@ -1,10 +1,11 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import type { IPty } from "node-pty";
 import { open } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
 import { runSetupTokenLogin } from "@paperclipai/adapter-claude-local/server";
 import { runDeviceLogin } from "@paperclipai/adapter-codex-local/server";
-import { ensureCommandResolvable, resolveCommandForLogs } from "@paperclipai/adapter-utils/server-utils";
+import { ensureCommandResolvable, resolveCommandForLogs, resolveWindowsCmdShell } from "@paperclipai/adapter-utils/server-utils";
 import { resolveCodexCommand } from "../vendor/paperclip-runner/index.js";
 
 export type LocalBrowserLoginState = {
@@ -15,6 +16,26 @@ export type LocalBrowserLoginState = {
   submitCode?: (code: string) => void;
   abort: () => void;
 };
+
+const CONPTY_NON_HYPERLINK_OSC_RE = /\x1b\](?!8;)[^\x07\x1b]*(?:\x07|\x1b\\)/g;
+const CONPTY_HYPERLINK_OPEN_RE = /\x1b\]8;[^;\x07\x1b]*;[^\x07\x1b]+(?:\x07|\x1b\\)/g;
+const CONPTY_CURSOR_POSITION_RE = /\x1b\[[0-9;]*[Hf]/g;
+const CONPTY_INCOMPLETE_TAIL_RE = /\x1b(?:\][^\x07\x1b]*\x1b?|\[[0-9;?]*)?$/;
+const CONPTY_MAX_PENDING_CHARS = 4096;
+
+export function createConPtyTextNormalizer(): (chunk: string) => string {
+  let pending = "";
+  return (chunk) => {
+    let text = pending + chunk;
+    const tail = CONPTY_INCOMPLETE_TAIL_RE.exec(text);
+    pending = tail && tail[0].length <= CONPTY_MAX_PENDING_CHARS ? tail[0] : "";
+    if (pending) text = text.slice(0, text.length - pending.length);
+    return text
+      .replace(CONPTY_NON_HYPERLINK_OSC_RE, "")
+      .replace(CONPTY_HYPERLINK_OPEN_RE, "\r\n$&")
+      .replace(CONPTY_CURSOR_POSITION_RE, "\r\n");
+  };
+}
 
 // Node has no built-in PTY API. Python's standard-library pty module supplies
 // the terminal required by both CLIs. The Docker image already includes
@@ -52,6 +73,8 @@ export function startLocalBrowserLogin(provider: "anthropic" | "openai", home: s
   const state: LocalBrowserLoginState = { abort: () => controller.abort() };
   const args = provider === "anthropic" ? ["setup-token"] : ["login", "--device-auth"];
   let child: ChildProcessWithoutNullStreams | null = null;
+  let terminal: IPty | null = null;
+  const stopTerminal = () => { try { terminal?.kill(); } catch { terminal = null; } };
   const driver = {
     async start(_command: string, onData: (chunk: string) => void): Promise<{ exitCode: number | null }> {
       let executable = "claude";
@@ -80,6 +103,34 @@ export function startLocalBrowserLogin(provider: "anthropic" | "openai", home: s
         CODEX_HOME: provider === "openai" ? home : process.env.CODEX_HOME,
         BROWSER: "true",
       };
+      if (process.platform === "win32" && provider === "anthropic") {
+        let pty: typeof import("node-pty");
+        let command: string;
+        try {
+          pty = await import("node-pty");
+          await ensureCommandResolvable("claude", home, env);
+          command = await resolveCommandForLogs("claude", home, env);
+        } catch {
+          state.error = "Claude browser sign-in on Windows requires the Claude CLI on Paperclip's PATH and Paperclip's node-pty dependency. Install Claude Code on this host, run pnpm install, then start sign-in again.";
+          throw new Error("Browser login runtime unavailable");
+        }
+        if (controller.signal.aborted) throw new Error("Local sign-in cancelled before launch");
+        const [file, argv] = /\.(cmd|bat)$/i.test(command)
+          ? [resolveWindowsCmdShell(env), ["/d", "/s", "/c", command, ...args]]
+          : [command, args];
+        return new Promise((resolve, reject) => {
+          try {
+            terminal = pty.spawn(file, argv, { name: "xterm-256color", cols: 1000, rows: 50, cwd: process.cwd(), env });
+          } catch {
+            state.error = "Browser sign-in could not open a local terminal on this Windows host. Run pnpm install for Paperclip, then start sign-in again.";
+            reject(new Error("Browser login terminal unavailable"));
+            return;
+          }
+          const normalize = createConPtyTextNormalizer();
+          terminal.onData((chunk) => onData(normalize(chunk)));
+          terminal.onExit(({ exitCode }) => resolve({ exitCode }));
+        });
+      }
       return new Promise((resolve, reject) => {
         child = spawn("python3", ["-u", "-c", PYTHON_PTY_BRIDGE, executable, ...args], { env, stdio: ["pipe", "pipe", "pipe"] });
         child.stdout.on("data", (bytes: Buffer) => onData(bytes.toString("utf8")));
@@ -92,9 +143,9 @@ export function startLocalBrowserLogin(provider: "anthropic" | "openai", home: s
         child.once("close", (exitCode) => resolve({ exitCode }));
       });
     },
-    write(input: string) { child?.stdin.write(input); },
-    stop() { child?.kill("SIGTERM"); },
-    async dispose() { child?.kill("SIGTERM"); },
+    write(input: string) { if (terminal) terminal.write(input); else child?.stdin.write(input); },
+    stop() { stopTerminal(); child?.kill("SIGTERM"); },
+    async dispose() { stopTerminal(); child?.kill("SIGTERM"); },
     async readFile(file: string) { const { readLocalAiCredentialFile } = await import("./local-ai-credential-file.js"); return Buffer.from(await readLocalAiCredentialFile(file)); },
   };
   if (provider === "anthropic") {
