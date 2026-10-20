@@ -179,7 +179,7 @@ function loadAppModules() {
   ]);
 }
 
-async function createApp() {
+async function createApp(actor: Record<string, unknown> = {}) {
   const [{ agentRoutes }, { errorHandler }] = await loadAppModules();
   const app = express();
   app.use(express.json());
@@ -190,6 +190,7 @@ async function createApp() {
       companyIds: ["company-1"],
       source: "local_implicit",
       isInstanceAdmin: false,
+      ...actor,
     };
     next();
   });
@@ -311,21 +312,51 @@ describe("agent test-environment route", () => {
     } finally { vi.unstubAllEnvs(); }
   });
 
-  it("lets a company task author discover Copilot models without agent configuration permission", async () => {
-    mockAccessService.decide.mockResolvedValue({ allowed: false, explanation: "No configuration grant" });
-    mockAccessService.canUser.mockResolvedValue(false);
+  it("lets an authorized agent editor discover Copilot models", async () => {
     mockAgentService.getById.mockResolvedValue({ id: "agent-1", companyId: "company-1" });
     const response = await request(await createApp()).get("/api/companies/company-1/adapters/paperclip_runner/models")
       .query({ provider: "acpx", acpxAgent: "copilot", agentId: "agent-1" });
     expect(response.status).toBe(200);
     expect(response.body).toEqual([{ id: "gpt-5.6-luna", label: "GPT-5.6 Luna" }]);
     expect(response.headers["cache-control"]).toBe("no-store");
-    expect(mockAccessService.decide).not.toHaveBeenCalled();
+    expect(mockAccessService.decide).toHaveBeenCalledWith(expect.objectContaining({ action: "agent_config:update" }));
     expect(mockSelectAiConnection).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
       companyId: "company-1", userId: "local-board", agentId: "agent-1", runnerProvider: "acpx", acpxAgent: "copilot",
       binding: { provider: "github", method: "api_key", mode: "responsible_user" }, allowUninstalledShared: false,
     }));
     expect(mockCopilotModels).toHaveBeenCalledExactlyOnceWith(expect.anything(), "company-1", "synthetic-copilot-token", null, undefined, expect.anything());
+  });
+
+  it.each([
+    ["board viewer", { type: "board" }],
+    ["agent reader", { type: "agent", agentId: "reader-agent", companyId: "company-1", onBehalfOfUserId: "reader-user",
+      onBehalfOfMemberships: [{ companyId: "company-1", status: "active", membershipRole: "member" }] }],
+  ])("refuses a %s discovery probe before resolving a shared token", async (_label, actor) => {
+    mockAccessService.decide.mockImplementation(async ({ action }) => ({
+      allowed: action === "agent_config:read", explanation: "No configuration update grant",
+    }));
+    mockAccessService.canUser.mockResolvedValue(false);
+    mockAgentService.getById.mockResolvedValue({ id: "agent-1", companyId: "company-1" });
+    const binding = { provider: "github", method: "api_key", mode: "shared",
+      connectionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", grantId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" };
+    const response = await request(await createApp(actor)).get("/api/companies/company-1/adapters/paperclip_runner/models")
+      .query({ provider: "acpx", acpxAgent: "copilot", agentId: "agent-1",
+        environmentId: "33333333-3333-4333-8333-333333333333", aiConnection: JSON.stringify(binding) });
+    expect(response.status).toBe(403);
+    expect(mockAccessService.decide).toHaveBeenCalledWith(expect.objectContaining({ action: "agent_config:update" }));
+    expect(mockSelectAiConnection).not.toHaveBeenCalled();
+    expect(mockAiCredential).not.toHaveBeenCalled();
+    expect(mockCopilotModels).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, "33333333-3333-4333-8333-333333333333"])("uses the saved or editor-selected Copilot environment (%s)", async environmentId => {
+    const savedEnvironmentId = "22222222-2222-4222-8222-222222222222";
+    mockAgentService.getById.mockResolvedValue({ id: "agent-1", companyId: "company-1", defaultEnvironmentId: savedEnvironmentId });
+    const response = await request(await createApp()).get("/api/companies/company-1/adapters/paperclip_runner/models")
+      .query({ provider: "acpx", acpxAgent: "copilot", agentId: "agent-1", ...(environmentId ? { environmentId } : {}) });
+    expect(response.status).toBe(200);
+    expect(mockCopilotModels).toHaveBeenCalledExactlyOnceWith(expect.anything(), "company-1", "synthetic-copilot-token",
+      environmentId ?? savedEnvironmentId, undefined, expect.anything());
   });
 
   it("refuses model discovery for a foreign agent before selecting credentials", async () => {
