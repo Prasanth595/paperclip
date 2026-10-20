@@ -1330,7 +1330,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
             ? kimiThinkingEffortOptions
             : adapterType === "pi_local"
               ? [{ id: "", label: "Auto" }, ...["off", "minimal", "low", "medium", "high", "xhigh"].map(id => ({ id, label: id }))]
-              : harnessType === "claude_local" || adapterType === "grok_local"
+              : harnessType === "claude_local" || adapterType === "grok_local" || adapterType === "muse_code_local"
                 ? [{ id: "", label: "Auto" }, ...setupEfforts(harnessType, currentModelId).map((id) => ({
                     id,
                     label: id === "xhigh" ? "X-High" : id[0].toUpperCase() + id.slice(1),
@@ -1959,6 +1959,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                         codex_local: "codex",
                         gemini_local: "gemini",
                         kimi_local: "kimi",
+                        muse_code_local: "muse",
                         pi_local: "pi",
                         cursor: "agent",
                         opencode_local: "opencode",
