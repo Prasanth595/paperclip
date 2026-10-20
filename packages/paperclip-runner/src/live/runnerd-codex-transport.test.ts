@@ -5622,62 +5622,94 @@ it.each([
         expect(rotations).toHaveLength(1);
         expect(preparedStates.length).toBeGreaterThan(0);
         const retired = preparedStates[0]!;
-        if (observer === "after-activation") {
-          expect(rotations[0]!.identity.runId).toBe("run-warm-ack-next");
-          expect(
-            rotations[0]!.committedEvents.some(
-              (entry) => entry.sourceEventId === heldEvent!.sourceEventId,
-            ),
-          ).toBe(false);
-        }
-        let retiredRecord: typeof retired = retired;
-        await vi.waitFor(() => {
-          const prepared = preparedStates.find((state) =>
-            state.committedEvents.some(
-              (entry) => entry.sourceEventId === heldEvent!.sourceEventId,
-            ),
-          );
-          if (prepared) {
-            retiredRecord = prepared;
-            return;
-          }
-          const live = cores[cores.length - 1]!.store.state;
-          expect(
-            live.committedEvents.some(
-              (entry) => entry.sourceEventId === heldEvent!.sourceEventId,
-            ),
-          ).toBe(true);
-          retiredRecord = live;
-        }, { timeout: 10_000 });
-        const attachedIndex = retiredRecord.committedEvents.findIndex(
-          (entry) => entry.sourceEventId === heldEvent!.sourceEventId,
-        );
-        expect(attachedIndex).toBeGreaterThanOrEqual(3);
-        const attachedEvent = retiredRecord.committedEvents[attachedIndex]!;
-        expect(attachedEvent.logicalEffectCount).toBe(1);
-        expect(attachedEvent.envelope.runId).toBe(oldIdentity.runId);
-        if (retiredRecord === retired) {
-          expect(retired.ackedSourceSeq).toBeGreaterThanOrEqual(
-            attachedEvent.sourceSeq,
-          );
-        }
-        const attachedSequence = retiredRecord.committedEvents.slice(
-          attachedIndex - 3,
-          attachedIndex + 1,
-        );
-        expect(attachedSequence.map((entry) => entry.eventType)).toEqual([
+        const predecessorTypes = [
           "session.resumed",
           "session.capabilities.updated",
           "session.goal.snapshot",
-          "run.attached",
-        ]);
+        ];
+        const predecessorIndex = retired.committedEvents.findIndex(
+          (entry, index) =>
+            entry.eventType === predecessorTypes[0] &&
+            retired.committedEvents[index + 1]?.eventType ===
+              predecessorTypes[1] &&
+            retired.committedEvents[index + 2]?.eventType ===
+              predecessorTypes[2],
+        );
+        expect(predecessorIndex).toBeGreaterThanOrEqual(0);
+        const predecessorSequence = retired.committedEvents.slice(
+          predecessorIndex,
+          predecessorIndex + predecessorTypes.length,
+        );
+        expect(predecessorSequence.map((entry) => entry.eventType)).toEqual(
+          predecessorTypes,
+        );
         expect(
-          attachedSequence.every(
+          predecessorSequence.every(
             (entry) => entry.envelope.runId === oldIdentity.runId,
           ),
         ).toBe(true);
+        expect(predecessorSequence[2]!.sourceSeq).toBeLessThan(
+          heldEvent!.sourceSeq,
+        );
+
+        const containsAttachedEvent = (record: typeof retired) =>
+          record.committedEvents.some(
+            (entry) => entry.sourceEventId === heldEvent!.sourceEventId,
+          );
+        let attachedRecord: typeof retired;
+        if (observer === "after-activation") {
+          // Rotation has reset the active journal. The replayed attachment
+          // may now be durable only in the live successor, which must not be
+          // mistaken for the old record that owns the predecessor chain.
+          expect(rotations[0]!.identity.runId).toBe("run-warm-ack-next");
+          expect(containsAttachedEvent(rotations[0]!)).toBe(false);
+          expect(
+            rotations[0]!.committedEvents.some(
+              (entry) =>
+                predecessorTypes.includes(entry.eventType) &&
+                entry.envelope.runId === oldIdentity.runId,
+            ),
+          ).toBe(false);
+          await vi.waitFor(
+            () =>
+              expect(
+                containsAttachedEvent(cores[cores.length - 1]!.store.state),
+              ).toBe(true),
+            { timeout: 10_000 },
+          );
+          attachedRecord = cores[cores.length - 1]!.store.state;
+        } else {
+          // In the ordinary ordering, the old epoch durably commits the
+          // attachment before rotation; the successor must not duplicate it.
+          expect(rotations[0]!.identity.runId).toBe(oldIdentity.runId);
+          await vi.waitFor(
+            () => {
+              expect(
+                preparedStates.some(containsAttachedEvent),
+              ).toBe(true);
+              expect(
+                containsAttachedEvent(cores[cores.length - 1]!.store.state),
+              ).toBe(false);
+            },
+            { timeout: 10_000 },
+          );
+          attachedRecord = preparedStates.find(containsAttachedEvent)!;
+        }
+        const attachedIndex = attachedRecord.committedEvents.findIndex(
+          (entry) => entry.sourceEventId === heldEvent!.sourceEventId,
+        );
+        expect(attachedIndex).toBeGreaterThanOrEqual(0);
+        const attachedEvent = attachedRecord.committedEvents[attachedIndex]!;
+        expect(attachedEvent.logicalEffectCount).toBe(1);
+        expect(attachedEvent.envelope.runId).toBe(oldIdentity.runId);
+        if (attachedRecord.identity.runId === oldIdentity.runId) {
+          expect(attachedRecord.ackedSourceSeq).toBeGreaterThanOrEqual(
+            attachedEvent.sourceSeq,
+          );
+        }
+        expect(attachedEvent.eventType).toBe("run.attached");
         if (mode === "lost-ack") {
-          expect(retiredRecord.connectionCount).toBeGreaterThanOrEqual(2);
+          expect(attachedRecord.connectionCount).toBeGreaterThanOrEqual(2);
           expect(effects.get(heldEvent!.sourceEventId)?.deliveries).toBe(2);
         } else {
           expect(effects.get(heldEvent!.sourceEventId)?.deliveries).toBe(1);
