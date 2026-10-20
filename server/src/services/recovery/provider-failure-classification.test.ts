@@ -2,12 +2,77 @@ import { classifyRunLiveness } from "../run-liveness.js";
 import { isAiAuthenticationBlocked } from "../ai-auth-failure.js";
 import { describe, expect, it } from "vitest";
 import {
+  PROVIDER_QUOTA_MONITOR_MAX_ATTEMPTS,
   PROVIDER_QUOTA_RECOVERY_DEFAULT_BACKOFF_MS,
   classifyAdapterFailureForRecovery,
   classifyContinuationFailure,
+  providerQuotaMonitorBackoffMs,
+  quotaMonitorAttemptAccounting,
 } from "./service.js";
 import { legacyExecutionNeedsReconciliation } from "../legacy-execution-recovery.js";
 import { isConfigurationIncompleteFailedRun } from "../../modules/wake-queue/domain/values.js";
+
+describe("providerQuotaMonitorBackoffMs", () => {
+  it("grows from 15 minutes and stops at 6 hours", () => {
+    expect(PROVIDER_QUOTA_MONITOR_MAX_ATTEMPTS).toBe(5);
+    expect(providerQuotaMonitorBackoffMs(0)).toBe(15 * 60 * 1000);
+    expect(providerQuotaMonitorBackoffMs(1)).toBe(30 * 60 * 1000);
+    expect(providerQuotaMonitorBackoffMs(2)).toBe(60 * 60 * 1000);
+    expect(providerQuotaMonitorBackoffMs(3)).toBe(2 * 60 * 60 * 1000);
+    expect(providerQuotaMonitorBackoffMs(4)).toBe(4 * 60 * 60 * 1000);
+    expect(providerQuotaMonitorBackoffMs(5)).toBe(6 * 60 * 60 * 1000);
+    expect(providerQuotaMonitorBackoffMs(79)).toBe(6 * 60 * 60 * 1000);
+  });
+});
+
+describe("quotaMonitorAttemptAccounting", () => {
+  it("starts a new quota episode after unrelated monitor checks", () => {
+    expect(quotaMonitorAttemptAccounting({
+      monitorAttemptCount: 5,
+      serviceName: "deploy",
+      monitorStatus: "triggered",
+      maxAttempts: 3,
+      savedBaseline: null,
+    })).toEqual({ baseline: 5, quotaRetries: 0, dispatcherMaxAttempts: 10 });
+  });
+
+  it("counts only retries since the saved quota baseline", () => {
+    expect(quotaMonitorAttemptAccounting({
+      monitorAttemptCount: 7,
+      serviceName: "AI provider quota",
+      monitorStatus: "triggered",
+      maxAttempts: 10,
+      savedBaseline: null,
+    })).toEqual({ baseline: 5, quotaRetries: 2, dispatcherMaxAttempts: 10 });
+    expect(quotaMonitorAttemptAccounting({
+      monitorAttemptCount: 101,
+      serviceName: "AI provider quota",
+      monitorStatus: "triggered",
+      maxAttempts: null,
+      savedBaseline: 96,
+    })).toEqual({ baseline: 96, quotaRetries: 5, dispatcherMaxAttempts: null });
+  });
+
+  it("keeps a legacy unbounded quota loop on the raw attempt count", () => {
+    expect(quotaMonitorAttemptAccounting({
+      monitorAttemptCount: 79,
+      serviceName: "AI provider quota",
+      monitorStatus: "scheduled",
+      maxAttempts: null,
+      savedBaseline: null,
+    })).toEqual({ baseline: 0, quotaRetries: 79, dispatcherMaxAttempts: 5 });
+  });
+
+  it("does not continue a quota episode after the monitor is cleared", () => {
+    expect(quotaMonitorAttemptAccounting({
+      monitorAttemptCount: 10,
+      serviceName: "AI provider quota",
+      monitorStatus: "cleared",
+      maxAttempts: 10,
+      savedBaseline: 5,
+    })).toEqual({ baseline: 10, quotaRetries: 0, dispatcherMaxAttempts: 15 });
+  });
+});
 
 describe("classifyAdapterFailureForRecovery", () => {
   it("waits for model configuration changes instead of retrying a typed native model rejection", () => {
