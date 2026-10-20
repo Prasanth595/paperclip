@@ -4077,7 +4077,8 @@ export function recoveryService(
     });
 
     const shouldPostEscalationComment =
-      input.recoveryCause !== SUCCESSFUL_RUN_MISSING_STATE_REASON &&
+      (input.recoveryCause !== SUCCESSFUL_RUN_MISSING_STATE_REASON ||
+        !input.successfulRunHandoffEvidence) &&
       (recoveryAction.attemptCount === 1 ||
         input.recoveryCause === "workspace_validation_failed" ||
         input.recoveryCause === "configuration_incomplete");
