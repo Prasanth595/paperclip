@@ -1013,6 +1013,63 @@ describe("AgentConfigForm environment selector", () => {
     }
   });
 
+  it("discovers the OpenCode Go catalog for an OpenCode Go connection on opencode_local", async () => {
+    // OpenCode Go is the second provider behind `opencode_local`. Its catalog
+    // comes from the gateway's own endpoint, so the request must carry the bound
+    // provider instead of falling back to the host catalog.
+    const accountList = vi.spyOn(aiConnectionsApi, "list").mockResolvedValue({
+      currentUserId: "you",
+      canManageConnections: true,
+      connections: [{
+        id: "opencode-connection",
+        grantId: "opencode-grant",
+        companyId: "company-1",
+        provider: "opencode",
+        method: "api_key",
+        name: "OpenCode Go",
+        ownership: "personal",
+        ownerUserId: "you",
+        isDefault: true,
+        status: "connected",
+      }],
+    });
+    mockAgentsApi.adapterModels.mockResolvedValue([
+      { id: "opencode-go/deepseek-v4-pro", label: "opencode-go/deepseek-v4-pro" },
+      { id: "opencode-go/glm-5.1", label: "opencode-go/glm-5.1" },
+    ]);
+    try {
+      const result = await renderForm(
+        [makeEnvironment({ id: "local-1", name: "Local", driver: "local" })],
+        {
+          adapterType: "opencode_local",
+          adapterConfig: { model: "opencode-go/deepseek-v4-pro" },
+          runtimeConfig: { aiConnection: { mode: "responsible_user", provider: "opencode", method: "api_key" } },
+        },
+      );
+      roots.push(result.root);
+
+      await vi.waitFor(() => expect(mockAgentsApi.adapterModels).toHaveBeenCalledWith("company-1", "opencode_local", {
+        environmentId: null,
+        provider: "opencode",
+      }));
+
+      const modelButton = [...result.container.querySelectorAll("button")]
+        .find((button) => button.textContent?.trim() === "opencode-go/deepseek-v4-pro");
+      expect(modelButton).not.toBeUndefined();
+      await act(async () => {
+        modelButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      await flushReact();
+
+      // Grouped by provider, the dropdown shows the OpenCode Go namespace and
+      // the sibling model the connection publishes.
+      expect(document.body.textContent).toContain("opencode-go (2)");
+      expect(document.body.textContent).toContain("glm-5.1");
+    } finally {
+      accountList.mockRestore();
+    }
+  });
+
   it("saves Grok 4.7 reasoning effort using the runtime key", async () => {
     const result = await renderForm([], { adapterType: "grok_local", adapterConfig: { model: "grok-4.7", reasoningEffort: "high" } });
     roots.push(result.root);

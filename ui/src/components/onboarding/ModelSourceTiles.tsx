@@ -1,4 +1,4 @@
-import { useRef, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
 
 import { cn } from "../../lib/utils";
@@ -65,10 +65,28 @@ export function CredentialTag({ mode }: { mode: ModelConnectionMode }) {
   );
 }
 
+/**
+ * The tile's accessible name.
+ *
+ * Composed rather than read off the contents, and for two reasons. The name and
+ * its tag sit side by side with nothing between them, so as one run of text they
+ * arrive as "OpenCodeAPI key". And the tag swaps in place: through the swap the
+ * outgoing and incoming labels are both in the DOM, and a name read from there
+ * would name the credential the customer just abandoned.
+ *
+ * Written only here. `radio` is a role whose children are presentational, so
+ * the spans below are already out of the name — nothing has to be hidden to stop
+ * them being read.
+ */
+function accessibleName(source: ModelSource, mode: ModelConnectionMode | null): string {
+  return mode ? `${source.label} ${CREDENTIAL_TAG_LABEL[mode]}` : source.label;
+}
+
 function ModelSourceTile({
   source,
   mode,
   selected,
+  tabbable,
   onSelect,
   buttonRef,
   settling,
@@ -76,6 +94,8 @@ function ModelSourceTile({
   source: ModelSource;
   mode: ModelConnectionMode | null;
   selected: boolean;
+  /** Whether this tile is the row's one stop on the Tab path — see the caller. */
+  tabbable: boolean;
   onSelect: () => void;
   buttonRef: (node: HTMLButtonElement | null) => void;
   settling: boolean;
@@ -86,6 +106,11 @@ function ModelSourceTile({
       type="button"
       role="radio"
       aria-checked={selected}
+      aria-label={accessibleName(source, mode)}
+      // Roving tabindex: the group is one stop, and the arrows move inside it.
+      // Every tile tabbable would make the row three stops that the arrow keys
+      // also walk, which is two ways through the same question.
+      tabIndex={tabbable ? 0 : -1}
       onClick={onSelect}
       className={cn(
         "flex min-w-0 flex-1 cursor-pointer flex-col items-center gap-1.5 self-stretch rounded-md border p-3",
@@ -163,6 +188,20 @@ export function ModelSourceTiles({
   settling?: boolean;
 }) {
   const tiles = useRef(new Map<string, HTMLButtonElement>());
+  /**
+   * The frame waiting to move focus onto a tile the arrows have just picked.
+   *
+   * Held so it can be dropped on unmount, and so a held-down arrow key does not
+   * queue one focus per repeat behind the last.
+   */
+  const focusFrame = useRef<number | null>(null);
+
+  useEffect(
+    () => () => {
+      if (focusFrame.current !== null) cancelAnimationFrame(focusFrame.current);
+    },
+    [],
+  );
 
   /**
    * Arrow keys move the selection and the focus together, which is what a
@@ -179,10 +218,34 @@ export function ModelSourceTiles({
     const next = (from + delta + sources.length) % sources.length;
     const target = sources[next]!;
     onSelect(target.id);
-    tiles.current.get(target.id)?.focus();
+    // Focus lands on the next frame rather than here. `onSelect` re-renders
+    // this row, and the commit that follows is not a no-op for the node looked
+    // up above: the row moves under `AnimatePresence`'s `popLayout` mode, and
+    // answering from the second tier also takes the disclosure out from above
+    // the tiles. Focused here, the caret can end up on a node that commit has
+    // left behind — the tile then reads as chosen with nothing holding the
+    // keyboard, which is a keyboard user with nowhere to be.
+    //
+    // Nothing has been painted in between, so this costs a frame of the tile's
+    // travel rather than a frame of the caret sitting somewhere else, and it is
+    // the same line for both rows: the recommended row remounts a picked tile
+    // as the second tier does.
+    if (focusFrame.current !== null) cancelAnimationFrame(focusFrame.current);
+    focusFrame.current = requestAnimationFrame(() => {
+      focusFrame.current = null;
+      tiles.current.get(target.id)?.focus();
+    });
   };
 
   const shown = collapsed ? sources.filter((source) => source.id === selectedId) : sources;
+  /**
+   * Whether the row holds the picked tile. A row without it — the second tier
+   * before it is answered, or one the answer has moved out of — would otherwise
+   * leave every tile at `-1` and take the group off the Tab path entirely,
+   * which is a row nobody can reach. Its first tile carries the entry instead,
+   * and the arrows take it from there.
+   */
+  const rowHasSelection = shown.some((source) => source.id === selectedId);
 
   return (
     <div
@@ -211,7 +274,7 @@ export function ModelSourceTiles({
         with two in the row, so the kept tile travels without also growing.
       */}
       <AnimatePresence initial={false} mode="popLayout">
-        {shown.map((source) => (
+        {shown.map((source, index) => (
           <motion.div
             key={source.id}
             layout
@@ -226,6 +289,7 @@ export function ModelSourceTiles({
               source={source}
               mode={source.credentialMode === undefined ? mode : source.credentialMode}
               selected={source.id === selectedId}
+              tabbable={source.id === selectedId || (!rowHasSelection && index === 0)}
               onSelect={() => onSelect(source.id)}
               settling={settling}
               buttonRef={(node) => {

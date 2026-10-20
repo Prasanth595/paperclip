@@ -13,6 +13,11 @@ export async function validateAiApiKey(
     openrouter: "https://openrouter.ai/api/v1/key",
     xai: "https://api.x.ai/v1/models",
     google: "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1",
+    // The Go model list is a public inventory, so it cannot prove that a key is
+    // valid. The Console config endpoint requires the same bearer key and
+    // answers 401 for a missing, expired, or revoked one. An "Inference only"
+    // key can read it.
+    opencode: "https://opencode.ai/console/api/v2/config",
   };
   let response: Response;
   try {

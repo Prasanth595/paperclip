@@ -220,6 +220,13 @@ test.describe("Board send delivery refresh", () => {
       }) => {
         const selected = await seedCompanyAndAgent(request);
         const target = await seedCompanyAndAgent(request);
+        // Announcements can appear after navigation and cover the composer's
+        // Add to composer button. Dismiss through the same UI as a Board user.
+        await page.addLocatorHandler(
+          page.getByRole("complementary", { name: "Paperclip announcements", exact: true })
+            .getByRole("button", { name: "Dismiss announcement", exact: true }),
+          async (dismiss) => { await dismiss.click(); },
+        );
         const issue = await json<{ id: string; identifier: string }>(
           await request.post(`/api/companies/${target.companyId}/issues`, {
             data: { title: "Organization-bound task link", status: "backlog" },

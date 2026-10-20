@@ -85,6 +85,18 @@ it("leaves native model discovery alone", async () => {
   expect(agentsApi.adapterModels).not.toHaveBeenCalled();
 });
 
+it("leaves an OpenCode Go connection to the form's own catalog query", async () => {
+  // OpenCode Go publishes its catalog through the adapter-models endpoint with
+  // `provider: "opencode"`, so this hook returns undefined and does not fetch.
+  const opencode: AiManagedConnectionSummary = {
+    ...account, id: "opencode", grantId: "opencode-grant", provider: "opencode",
+    name: "OpenCode Go", routing: undefined,
+  };
+  await mount([opencode], "opencode_local", { provider: "opencode", method: "api_key", mode: "shared", connectionId: opencode.id, grantId: opencode.grantId });
+  expect(result).toBeUndefined();
+  expect(agentsApi.adapterModels).not.toHaveBeenCalled();
+});
+
 it("only uses the current person's default connection models", async () => {
   await mount([
     { ...account, ownership: "personal", ownerUserId: "someone-else", isDefault: true, routing: { ...account.routing!, models: [{ id: "other/private-model" }] } },

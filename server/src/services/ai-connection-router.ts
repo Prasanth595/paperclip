@@ -10,6 +10,7 @@ import { instanceSettingsService } from "./instance-settings.js";
 import { logActivity } from "./activity-log.js";
 import { forbidden, notFound, conflict, unprocessable } from "../errors.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
+import { isOpenCodeGoModelId } from "./opencode-go-models.js";
 import { resolvePaperclipRunnerProviderProfile, resolvePaperclipRunnerNativeProviderInput } from "./native-runtime/provider-profile.js";
 
 const usageCache = new Map<string, { expires: number; value: AiConnectionUsage }>();
@@ -33,9 +34,13 @@ export function poolMemberRuntimeConfig(member: AiConnectionPoolMember, adapterT
     : provider === "xai" ? profile.provider === "acpx" && profile.acpxAgent === "grok"
     : profile.provider === "opencode";
   if (!expected) throw unprocessable("Pool member harness does not match its account");
+  // OpenCode Go names its models `opencode-go/<id>`, and has no catalog to
+  // validate against, so it accepts only IDs under its own namespace.
   const supportsModel = (value: string) => provider === "openai" ? isCodexLocalKnownModel(value)
     : provider === "anthropic" ? claudeModels.some((m) => m.id === value)
-    : provider === "xai" ? grokModels.some((m) => m.id === value) : value.startsWith("openrouter/");
+    : provider === "xai" ? grokModels.some((m) => m.id === value)
+    : provider === "opencode" ? isOpenCodeGoModelId(value)
+    : value.startsWith("openrouter/");
   const config: Record<string, unknown> = { provider: profile.provider, ...(profile.acpxAgent ? { acpxAgent: profile.acpxAgent } : {}), model: profile.model };
   const validate = () => {
     if (!isAiConnectionCompatible(member.binding, adapterType, config.model, config.provider, config.acpxAgent)) throw unprocessable("Pool member is incompatible with this harness");

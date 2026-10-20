@@ -42,6 +42,12 @@ export type AdapterLoginChrome = "panel" | "onboarding";
  * — "Anthropic" is right in a settings panel listing credentials and wrong in a
  * sentence that reads "Sign in to Claude".
  *
+ * The drop to the type id below is for adapters nobody has named yet, and it
+ * reads as one: "Provide your opencode_local API key" is what the card said
+ * before OpenCode was listed here. Being the same word the registry uses is not
+ * a reason to leave an entry out — this map is what the connect step reads, and
+ * the two agreeing on a name is the point rather than a duplicate.
+ *
  * Three names for two adapters is a tension worth stating rather than hiding.
  * The concepts differ — vendor, tool, account — but if the product decides
  * otherwise, this is the one to delete.
@@ -49,7 +55,9 @@ export type AdapterLoginChrome = "panel" | "onboarding";
 export const CONNECT_SOURCE_NAMES: Record<string, string> = {
   claude_local: "Claude",
   codex_local: "OpenAI",
+  gemini_local: "Gemini",
   grok_local: "Grok",
+  opencode_local: "OpenCode",
 };
 
 /** The provider name for a source, falling back to the type when unlisted. */

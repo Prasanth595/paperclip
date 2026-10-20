@@ -14,6 +14,7 @@ const PROVIDER_AUTH_ENV_KEYS: Record<AiProvider, readonly string[]> = {
   anthropic: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"],
   openai: ["OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_HOME", "OPENAI_BASE_URL"],
   openrouter: ["OPENROUTER_API_KEY", "OPENCODE_AUTH_JSON", "OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "PAPERCLIP_OPENCODE_PROVIDERS"],
+  opencode: ["OPENCODE_API_KEY"],
   xai: ["XAI_API_KEY", "GROK_API_KEY", "GROK_HOME", "XAI_BASE_URL"],
 };
 
@@ -38,9 +39,14 @@ export function defaultAiConnectionForHire(
     // the new agent. Never silently replace an incompatible pool with local auth.
     // OpenCode also supports explicitly configured providers whose models are
     // outside the managed OpenRouter catalog. Their auth still takes precedence.
-    const childProvider = adapterType === "opencode_local"
+    //
+    // OpenCode Go is a second provider for the same harness. A child holding its
+    // own Go key must be recognised as authenticated, or it would inherit an
+    // OpenRouter pool it never asked for — so the harness checks the Go key
+    // first and falls back to OpenRouter only when that is what the child holds.
+    const childProvider: AiProvider | undefined = adapterType === "opencode_local"
       || (adapterType === "paperclip_runner" && config.provider === "opencode")
-      ? "openrouter"
+      ? hasChildAuth("opencode") ? "opencode" : "openrouter"
       : AI_PROVIDERS.find((provider) =>
         compatible({ provider, method: "api_key", mode: "responsible_user" }));
     return childProvider && hasChildAuth(childProvider) ? undefined : inherited.data;

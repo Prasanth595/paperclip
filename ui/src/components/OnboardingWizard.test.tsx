@@ -260,6 +260,7 @@ vi.mock("../adapters/use-adapter-capabilities", () => ({
 vi.mock("./AsciiArtAnimation", () => ({ AsciiArtAnimation: () => null }));
 vi.mock("./AgentCapsule", () => ({ AgentCapsule: () => null }));
 
+import { DEFAULT_OPENCODE_LOCAL_MODEL } from "@paperclipai/adapter-opencode-local";
 import { ApiError } from "../api/client";
 import { queryKeys } from "../lib/queryKeys";
 import { ADAPTER_AUTH_MISSING_CHECK_CODE, getEnvironmentCapabilities } from "@paperclipai/shared";
@@ -278,6 +279,23 @@ function setControlledValue(el: HTMLInputElement, value: string) {
   )!.set!;
   setter.call(el, value);
   el.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+/**
+ * The same trick for a `<select>`.
+ *
+ * React tracks `value` on select nodes too, so a plain assignment is swallowed
+ * as unchanged; the prototype setter is what makes the choice visible to the
+ * component's `onChange`. Used for the OpenCode card's provider and model
+ * selects, which are the two answers the connect step now waits on.
+ */
+function setControlledSelect(el: HTMLSelectElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(
+    window.HTMLSelectElement.prototype,
+    "value",
+  )!.set!;
+  setter.call(el, value);
+  el.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 async function flushReact() {
@@ -2219,34 +2237,483 @@ describe("OnboardingWizard restore-gate (stale localStorage across accounts)", (
       await act(async () => root.unmount());
     });
 
-    it("will not advance on a saved adapter the row does not show", async () => {
+    it("will not advance on a saved adapter the step does not offer anywhere", async () => {
       // The other shape of the same defect, and the one the snap cannot cover.
       //
-      // The tile row is `recommendedAdapters`; the snap's idea of "visible" is
-      // recommended *plus* the advanced list. An adapter in the second but not
-      // the first — a saved `opencode_local`, say — therefore satisfies the
-      // snap, which leaves it alone, while the row it is supposed to be chosen
-      // in never shows it. Nothing is highlighted, the canvas is shut, and with
-      // the gate on `sourcePicked` the CTA was live: one press hires against an
-      // adapter the customer has not seen on this screen.
-      mockAdapterRegistry.list = [setupAdapterInfo({ type: "claude_local" }), { type: "opencode_local" }];
-      const { root } = await openStep4({ adapterType: "opencode_local" });
+      // The step offers a shortlist — the recommended tiles, plus the curated
+      // second tier behind its disclosure — while the snap's idea of "visible"
+      // is every registered adapter (`moreAdapters`). An adapter in the second
+      // but in neither row — a saved `kimi_local`, which is neither
+      // recommended nor in `ONBOARDING_MORE_ADAPTER_TYPES` — therefore satisfies
+      // the snap, which leaves it alone, while the screen it is supposed to be
+      // chosen on never shows it. Nothing is highlighted, the canvas is shut,
+      // and with the gate on `sourcePicked` the CTA was live: one press hires
+      // against an adapter the customer has not seen on this screen.
+      //
+      // The untouchable half of this test is the snap: it must leave the saved
+      // `kimi_local` alone (that is what makes the case reachable at all), so
+      // the assertion below is about the gate agreeing with the screen.
+      mockAdapterRegistry.list = [setupAdapterInfo({ type: "claude_local" }), { type: "kimi_local" }];
+      const { root } = await openStep4({ adapterType: "kimi_local" });
 
       const tiles = [...document.body.querySelectorAll("button[aria-checked]")];
+      expect(tiles.length, "the row should still offer what it has").toBeGreaterThan(0);
       expect(
         tiles.some((t) => t.getAttribute("aria-checked") === "true"),
-        "the saved adapter is not in this row, so nothing should read as chosen",
+        "the saved adapter is in no row, so nothing should read as chosen",
       ).toBe(false);
+      // Neither tier offers it: `kimi_local` is outside the curated second
+      // tier, so there is not even a disclosure to open looking for it.
+      expect(document.body.textContent).not.toContain("More adapters");
 
       const cta = [...document.body.querySelectorAll("button")].find(
         (b) => isArcPrimary(b.textContent?.trim() ?? ""),
       );
       expect(
         cta!.hasAttribute("disabled"),
-        "Connect must not hire an adapter the row never offered",
+        "Connect must not hire an adapter the step never offered",
       ).toBe(true);
 
       await act(async () => root.unmount());
+    });
+
+    it("hires the OpenCode tile the More adapters disclosure offers", async () => {
+      // OpenCode is offered on this step, but not in the row: it is not one of
+      // the two recommended tiles, so the second tier is the only place it can
+      // be answered from — and an answer given there has to count exactly as one
+      // given above. The tile fills, the CTA opens, and the hire goes out naming
+      // `opencode_local` rather than the recommended adapter the draft arrived
+      // with.
+      mockAdapterRegistry.list = [
+        { type: "claude_local" },
+        { type: "codex_local" },
+        { type: "opencode_local" },
+      ];
+      // OpenCode joins in key mode: it has no sign-in to inherit, so the step
+      // waits for a key before it can advance. Saved credentials are the
+      // Claude/Codex shape; here the key is typed, which is the only way this
+      // source reaches a live CTA.
+      //
+      // The model is the second half of that answer, and it comes from
+      // discovery rather than a pinned default: the hire refuses a model the
+      // discovered list does not carry, and the step preselects nothing, so
+      // the test chooses one the way the customer does.
+      const models = mockAgentsApi.adapterModels.getMockImplementation();
+      mockAgentsApi.adapterModels.mockResolvedValue([
+        { id: "opencode-go/deepseek-v4-pro", label: "deepseek-v4-pro" },
+      ]);
+      try {
+        const { root } = await openStep4();
+
+        const cta = () =>
+          [...document.body.querySelectorAll("button")].find((b) =>
+            isArcPrimary(b.textContent?.trim() ?? ""),
+          )!;
+        expect(
+          cta().hasAttribute("disabled"),
+          "the question is unanswered on arrival, so nothing may advance",
+        ).toBe(true);
+
+        const disclosure = [...document.body.querySelectorAll("button")].find(
+          (b) => b.textContent?.trim() === "More adapters",
+        );
+        expect(
+          disclosure,
+          "OpenCode should be offered behind a disclosure rather than in the row",
+        ).toBeTruthy();
+        expect(disclosure!.getAttribute("aria-expanded")).toBe("false");
+
+        await act(async () => {
+          disclosure!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        });
+        for (let i = 0; i < 4; i++) await flushReact();
+        expect(disclosure!.getAttribute("aria-expanded")).toBe("true");
+
+        // Looked up by the tile's own name rather than its type: the row reads
+        // `CONNECT_SOURCE_NAMES`, so what is on screen is "OpenCode", and the
+        // accessible name is where the tile and its credential tag meet.
+        const tile = [...document.body.querySelectorAll('[role="radio"]')].find(
+          (t) => (t.getAttribute("aria-label") ?? "").startsWith("OpenCode"),
+        );
+        expect(tile, "the disclosure should reveal the OpenCode tile").toBeTruthy();
+        await act(async () => {
+          tile!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        });
+        for (let i = 0; i < 10; i++) await flushReact();
+
+        const chosen = [...document.body.querySelectorAll('[role="radio"]')].find(
+          (t) => t.getAttribute("aria-checked") === "true",
+        );
+        expect(
+          chosen?.getAttribute("aria-label") ?? "",
+          "the tile the answer came from should read as chosen",
+        ).toContain("OpenCode");
+
+        // The tile is the answer to the question; the key is the credential
+        // that answer needs. OpenCode takes one on the step rather than
+        // inheriting a saved sign-in, so the pair is what turns the CTA live.
+        const keyField = document.body.querySelector(
+          'input[type="password"]',
+        ) as HTMLInputElement | null;
+        expect(keyField, "OpenCode takes its key on the step").toBeTruthy();
+        await act(async () => {
+          setControlledValue(keyField!, "sk-or-typed-by-the-customer");
+        });
+        for (let i = 0; i < 4; i++) await flushReact();
+
+        // The key alone is not the answer. The model comes from discovery and
+        // the step preselects none of it, so the CTA stays shut until one is
+        // chosen from the list the provider can route.
+        expect(
+          cta().hasAttribute("disabled"),
+          "the model is the customer's to pick, so the key alone cannot advance",
+        ).toBe(true);
+
+        const modelSelect = document.body.querySelector(
+          'select[aria-label="Model"]',
+        ) as HTMLSelectElement | null;
+        expect(modelSelect, "OpenCode asks which model to run").toBeTruthy();
+        expect(
+          modelSelect!.value,
+          "nothing is preselected, so the field starts unanswered",
+        ).toBe("");
+        await act(async () => {
+          setControlledSelect(modelSelect!, "opencode-go/deepseek-v4-pro");
+        });
+        for (let i = 0; i < 4; i++) await flushReact();
+
+        expect(
+          cta().hasAttribute("disabled"),
+          "a source picked from the second tier advances the step just as the row does",
+        ).toBe(false);
+
+        await pressArcPrimary();
+        expect(mockAgentsApi.hire).toHaveBeenCalledWith(
+          "company-new",
+          expect.objectContaining({ adapterType: "opencode_local" }),
+        );
+
+        await act(async () => root.unmount());
+      } finally {
+        if (models) mockAgentsApi.adapterModels.mockImplementation(models);
+      }
+    });
+
+    it("connects Gemini with a key the customer types, never through a browser sign-in", async () => {
+      // Gemini is offered as a second-tier source, and its credential model is
+      // fixed: it takes an API key on this step. The panel it would otherwise
+      // share with the two recommended sources is a managed subscription flow,
+      // and running Gemini through it would start a login nothing can finish —
+      // the adapter brings its own key slot (`GEMINI_API_KEY`) instead. The
+      // negative half is the assertion that matters: registering the adapter
+      // must not put a sign-in card (or a started login) on this step.
+      mockAdapterRegistry.list = [
+        { type: "claude_local" },
+        { type: "codex_local" },
+        { type: "gemini_local" },
+      ];
+      const { root } = await openStep4();
+
+      const disclosure = [...document.body.querySelectorAll("button")].find(
+        (b) => b.textContent?.trim() === "More adapters",
+      );
+      expect(disclosure, "Gemini is offered behind the disclosure").toBeTruthy();
+      await act(async () => {
+        disclosure!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      for (let i = 0; i < 4; i++) await flushReact();
+
+      const tile = [...document.body.querySelectorAll('[role="radio"]')].find(
+        (t) => (t.getAttribute("aria-label") ?? "").startsWith("Gemini"),
+      );
+      expect(tile, "the disclosure should reveal the Gemini tile").toBeTruthy();
+      await act(async () => {
+        tile!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      for (let i = 0; i < 10; i++) await flushReact();
+
+      expect(
+        document.body.querySelector('input[type="password"]'),
+        "Gemini takes its key on the step",
+      ).toBeTruthy();
+      expect(document.body.textContent).toContain(
+        "Provide your Gemini API key to connect",
+      );
+      expect(document.body.textContent).not.toContain("Preparing browser sign-in");
+      expect(document.body.textContent).not.toContain("Sign in to");
+      expect(document.body.textContent).not.toContain("claude auth login");
+      expect(managedApi.startLocalLogin).not.toHaveBeenCalled();
+      expect(mockAgentsApi.startClaudeSetupTokenLogin).not.toHaveBeenCalled();
+
+      await act(async () => root.unmount());
+    });
+
+    it("offers Grok and Gemini behind the More adapters disclosure", async () => {
+      // The second tier is curated rather than registry-driven: an adapter is
+      // only reachable here once someone adds it to the list. The two new
+      // members have to show up as sources — named after the provider, not the
+      // adapter type — inside the same disclosure OpenCode uses.
+      mockAdapterRegistry.list = [
+        { type: "claude_local" },
+        { type: "codex_local" },
+        { type: "grok_local" },
+        { type: "gemini_local" },
+      ];
+      const { root } = await openStep4();
+
+      const disclosure = [...document.body.querySelectorAll("button")].find(
+        (b) => b.textContent?.trim() === "More adapters",
+      );
+      expect(disclosure, "Grok and Gemini are offered behind the disclosure").toBeTruthy();
+      expect(disclosure!.getAttribute("aria-expanded")).toBe("false");
+      await act(async () => {
+        disclosure!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      for (let i = 0; i < 4; i++) await flushReact();
+      expect(disclosure!.getAttribute("aria-expanded")).toBe("true");
+
+      const labels = [...document.body.querySelectorAll('[role="radio"]')].map(
+        (t) => t.getAttribute("aria-label") ?? "",
+      );
+      expect(labels.some((label) => label.startsWith("Grok"))).toBe(true);
+      expect(labels.some((label) => label.startsWith("Gemini"))).toBe(true);
+      // The negative half: the tile reads the customer's provider name, never
+      // the registry type id.
+      expect(labels.join(" ")).not.toContain("grok_local");
+      expect(labels.join(" ")).not.toContain("gemini_local");
+
+      await act(async () => root.unmount());
+    });
+
+    it("creates the OpenCode Go connection when the key card's provider is switched", async () => {
+      // The harness runs on one of two providers and OpenRouter is only the
+      // historical default, so the step has to ask. The answer is what the
+      // connection is created against — a Go key stored under OpenRouter would
+      // be routed to the provider it does not belong to — and it is also what
+      // the card's own sentence calls the key being asked for.
+      mockAdapterRegistry.list = [
+        { type: "claude_local" },
+        { type: "codex_local" },
+        { type: "opencode_local" },
+      ];
+      const models = mockAgentsApi.adapterModels.getMockImplementation();
+      mockAgentsApi.adapterModels.mockResolvedValue([
+        { id: "opencode-go/deepseek-v4-pro", label: "deepseek-v4-pro" },
+      ]);
+      try {
+        const { root } = await openStep4();
+
+        const disclosure = [...document.body.querySelectorAll("button")].find(
+          (b) => b.textContent?.trim() === "More adapters",
+        );
+        expect(disclosure, "OpenCode is offered behind the disclosure").toBeTruthy();
+        await act(async () => {
+          disclosure!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        });
+        for (let i = 0; i < 4; i++) await flushReact();
+
+        const tile = [...document.body.querySelectorAll('[role="radio"]')].find(
+          (t) => (t.getAttribute("aria-label") ?? "").startsWith("OpenCode"),
+        );
+        expect(tile).toBeTruthy();
+        await act(async () => {
+          tile!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        });
+        for (let i = 0; i < 10; i++) await flushReact();
+
+        // The card asks which provider the key is for, and arrives on the
+        // default the harness has always run.
+        const providerSelect = document.body.querySelector(
+          'select[aria-label="Provider"]',
+        ) as HTMLSelectElement | null;
+        expect(
+          providerSelect,
+          "OpenCode should ask which provider the key belongs to",
+        ).toBeTruthy();
+        expect([...providerSelect!.options].map((option) => option.value)).toEqual([
+          "openrouter",
+          "opencode",
+        ]);
+        expect(providerSelect!.value).toBe("openrouter");
+        expect(document.body.textContent).toContain(
+          "Provide your OpenRouter API key to connect",
+        );
+
+        await act(async () => {
+          Object.getOwnPropertyDescriptor(
+            window.HTMLSelectElement.prototype,
+            "value",
+          )!.set!.call(providerSelect!, "opencode");
+          providerSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+        for (let i = 0; i < 4; i++) await flushReact();
+
+        expect(providerSelect!.value).toBe("opencode");
+        expect(
+          document.body.textContent,
+          "the key is the chosen provider's, not the harness's default provider's",
+        ).toContain("Provide your OpenCode API key to connect");
+
+        const keyField = document.body.querySelector(
+          'input[type="password"]',
+        ) as HTMLInputElement;
+        await act(async () => {
+          setControlledValue(keyField, "sk-go-typed-by-the-customer");
+        });
+        for (let i = 0; i < 4; i++) await flushReact();
+
+        // The Go catalog is discovery-driven and nothing is preselected on it,
+        // so the model is asked for here too — the hire refuses one the list
+        // does not carry, and the switch above cleared whatever was chosen.
+        const modelSelect = document.body.querySelector(
+          'select[aria-label="Model"]',
+        ) as HTMLSelectElement | null;
+        expect(modelSelect, "the card asks which model the key runs").toBeTruthy();
+        expect(modelSelect!.value).toBe("");
+        await act(async () => {
+          setControlledSelect(modelSelect!, "opencode-go/deepseek-v4-pro");
+        });
+        for (let i = 0; i < 4; i++) await flushReact();
+
+        await pressArcPrimary();
+
+        expect(managedApi.create).toHaveBeenCalledWith(
+          "company-new",
+          expect.objectContaining({
+            provider: "opencode",
+            method: "api_key",
+            ownership: "personal",
+            apiKey: "sk-go-typed-by-the-customer",
+          }),
+        );
+        const hireBody = (mockAgentsApi.hire.mock.calls.at(-1) as unknown[])[1] as {
+          runtimeConfig: { aiConnection: unknown };
+        };
+        expect(hireBody.runtimeConfig.aiConnection).toEqual({
+          provider: "opencode",
+          method: "api_key",
+          mode: "responsible_user",
+        });
+
+        await act(async () => root.unmount());
+      } finally {
+        if (models) mockAgentsApi.adapterModels.mockImplementation(models);
+      }
+    });
+
+    it("asks for the model on the OpenCode Go key card and hires with the chosen one", async () => {
+      // The model is a question on this step now, and the customer's to answer.
+      //
+      // OpenCode used to arrive with a pinned default filled in, which the hire
+      // then sent — a model nobody on this screen chose, and frequently one the
+      // provider picked above cannot route. The card asks instead, from the
+      // host's own discovery narrowed to the Go namespace, and the CTA waits
+      // for that answer the way it waits for the key.
+      mockAdapterRegistry.list = [
+        { type: "claude_local" },
+        { type: "codex_local" },
+        { type: "opencode_local" },
+      ];
+      const models = mockAgentsApi.adapterModels.getMockImplementation();
+      mockAgentsApi.adapterModels.mockResolvedValue([
+        { id: "opencode-go/deepseek-v4-pro", label: "deepseek-v4-pro" },
+        { id: "opencode-go/kimi-k2-turbo", label: "kimi-k2-turbo" },
+      ]);
+      try {
+        const { root } = await openStep4();
+
+        const disclosure = [...document.body.querySelectorAll("button")].find(
+          (b) => b.textContent?.trim() === "More adapters",
+        );
+        expect(disclosure, "OpenCode is offered behind the disclosure").toBeTruthy();
+        await act(async () => {
+          disclosure!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        });
+        for (let i = 0; i < 4; i++) await flushReact();
+
+        const tile = [...document.body.querySelectorAll('[role="radio"]')].find(
+          (t) => (t.getAttribute("aria-label") ?? "").startsWith("OpenCode"),
+        );
+        expect(tile).toBeTruthy();
+        await act(async () => {
+          tile!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        });
+        for (let i = 0; i < 10; i++) await flushReact();
+
+        const providerSelect = document.body.querySelector(
+          'select[aria-label="Provider"]',
+        ) as HTMLSelectElement | null;
+        expect(providerSelect, "the card asks which provider the key is for").toBeTruthy();
+        await act(async () => {
+          setControlledSelect(providerSelect!, "opencode");
+        });
+        for (let i = 0; i < 4; i++) await flushReact();
+
+        const cta = () =>
+          [...document.body.querySelectorAll("button")].find((b) =>
+            isArcPrimary(b.textContent?.trim() ?? ""),
+          )!;
+
+        const modelSelect = document.body.querySelector(
+          'select[aria-label="Model"]',
+        ) as HTMLSelectElement | null;
+        expect(modelSelect, "the Go card asks which model to run").toBeTruthy();
+        // The list is the host's, so the field arrives unanswered rather than
+        // carrying a pinned default: the placeholder names the empty answer.
+        expect(modelSelect!.value, "no model is preselected").toBe("");
+        expect([...modelSelect!.options].map((option) => option.value)).toEqual([
+          "",
+          "opencode-go/deepseek-v4-pro",
+          "opencode-go/kimi-k2-turbo",
+        ]);
+        expect(
+          [...modelSelect!.options].map((option) => option.value),
+          "the harness's own default is not one this provider can route",
+        ).not.toContain(DEFAULT_OPENCODE_LOCAL_MODEL);
+
+        // The key answers the credential question, and the CTA is still shut:
+        // the model is the other half, and nothing has answered it.
+        const keyField = document.body.querySelector(
+          'input[type="password"]',
+        ) as HTMLInputElement;
+        expect(
+          keyField.compareDocumentPosition(modelSelect!) & Node.DOCUMENT_POSITION_FOLLOWING,
+          "the key is asked for first and the model second, in that order on the card",
+        ).toBeTruthy();
+        await act(async () => {
+          setControlledValue(keyField, "sk-go-typed-by-the-customer");
+        });
+        for (let i = 0; i < 4; i++) await flushReact();
+        expect(
+          cta().hasAttribute("disabled"),
+          "the step cannot advance on a key alone",
+        ).toBe(true);
+
+        await act(async () => {
+          setControlledSelect(modelSelect!, "opencode-go/deepseek-v4-pro");
+        });
+        for (let i = 0; i < 4; i++) await flushReact();
+        expect(
+          cta().hasAttribute("disabled"),
+          "choosing a model is the answer that opens the step",
+        ).toBe(false);
+
+        await pressArcPrimary();
+
+        expect(mockAgentsApi.hire).toHaveBeenCalledWith(
+          "company-new",
+          expect.objectContaining({ adapterType: "opencode_local" }),
+        );
+        // And the answer travels with the hire, rather than being left behind
+        // on the card.
+        expect(mockAdapterBuild.buildAdapterConfig).toHaveBeenCalledWith(
+          expect.objectContaining({ model: "opencode-go/deepseek-v4-pro" }),
+        );
+
+        await act(async () => root.unmount());
+      } finally {
+        if (models) mockAgentsApi.adapterModels.mockImplementation(models);
+      }
     });
 
     it("will not hire from the keyboard on a source nobody selected", async () => {

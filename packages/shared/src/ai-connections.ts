@@ -33,6 +33,7 @@ export const AI_PROVIDERS = [
   "openrouter",
   "xai",
   "google",
+  "opencode",
 ] as const;
 export const aiProviderSchema = z.enum(AI_PROVIDERS);
 export const aiAuthMethodSchema = z.enum(["subscription", "api_key"]);
@@ -103,6 +104,15 @@ export const AI_CONNECTION_CAPABILITIES: Record<
       api_key: { adapters: ["opencode_local"], envKey: "OPENROUTER_API_KEY" },
     },
   },
+  opencode: {
+    name: "OpenCode",
+    methods: {
+      api_key: {
+        adapters: ["opencode_local"],
+        envKey: "OPENCODE_API_KEY",
+      },
+    },
+  },
   xai: {
     name: "Grok",
     methods: {
@@ -111,10 +121,14 @@ export const AI_CONNECTION_CAPABILITIES: Record<
     },
   },
 };
-export function isAiConnectionCompatible(
+/**
+ * Whether a connection can run this harness at all, ignoring the current model.
+ * Pickers use this so a saved account stays selectable while the model belongs
+ * to another provider; the model check then runs on the binding that is saved.
+ */
+export function isAiConnectionCompatibleAdapter(
   requirement: AiConnectionMetadata | AiConnectionBinding,
   adapterType: string,
-  model?: unknown,
   runnerProvider?: unknown,
   acpxAgent?: unknown,
 ): boolean {
@@ -128,11 +142,30 @@ export function isAiConnectionCompatible(
   const candidates = "mode" in requirement && requirement.mode === "responsible_user"
     ? Object.values(methods)
     : requirement.method ? [methods[requirement.method]] : [];
-  return (
-    candidates.some((method) => method?.adapters.includes(adapterType)) &&
-    (requirement.provider !== "openrouter" ||
-      (typeof model === "string" && model.startsWith("openrouter/")))
-  );
+  return candidates.some((method) => method?.adapters.includes(adapterType));
+}
+
+export function isAiConnectionCompatible(
+  requirement: AiConnectionMetadata | AiConnectionBinding,
+  adapterType: string,
+  model?: unknown,
+  runnerProvider?: unknown,
+  acpxAgent?: unknown,
+): boolean {
+  // Routed accounts and fixed bindings carry identity only. The service checks
+  // the routed target and the grant separately, so the model namespace check
+  // must not reject a valid raw model id such as `anthropic/claude-sonnet-4`.
+  if ("routing" in requirement && requirement.routing)
+    return isAiConnectionCompatibleAdapter(requirement, adapterType, runnerProvider, acpxAgent);
+  if ("mode" in requirement && requirement.mode !== "responsible_user" && requirement.method === "api_key")
+    return isAiConnectionCompatibleAdapter(requirement, adapterType, runnerProvider, acpxAgent);
+  if (!isAiConnectionCompatibleAdapter(requirement, adapterType, runnerProvider, acpxAgent)) return false;
+  // OpenRouter and OpenCode Go each publish their own catalog, so a native
+  // binding is only valid when the model is namespaced under that provider.
+  // The other BYO harnesses accept any model id.
+  if (requirement.provider === "openrouter") return typeof model === "string" && model.startsWith("openrouter/");
+  if (requirement.provider === "opencode") return typeof model === "string" && model.startsWith("opencode-go/");
+  return true;
 }
 export type AiConnectionUnavailableReason =
   | "responsible_user_missing"

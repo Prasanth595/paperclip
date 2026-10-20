@@ -160,6 +160,7 @@ async function unregisterTestAdapter(type: string) {
 describe("adapter model refresh route", () => {
   beforeEach(async () => {
     vi.resetModules();
+    vi.unstubAllGlobals();
     vi.doUnmock("../routes/agents.js");
     vi.doUnmock("../routes/authz.js");
     vi.doUnmock("../middleware/index.js");
@@ -180,6 +181,7 @@ describe("adapter model refresh route", () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllGlobals();
     await unregisterTestAdapter(refreshableAdapterType);
   });
 
@@ -248,5 +250,66 @@ describe("adapter model refresh route", () => {
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(res.body).toEqual([{ id: "dynamic-opencode-model", label: "dynamic-opencode-model" }]);
     expect(mockListOpenCodeModels).toHaveBeenCalledTimes(1);
+  });
+
+  it("discovers the OpenCode Go catalog from the gateway's public endpoint", async () => {
+    // The Go catalog is not the host's `opencode models` output — that names
+    // models under other namespaces and never carries an `opencode-go/…`
+    // entry, which is why the picker used to come up empty. It is the
+    // gateway's own catalog, read without credentials, and every id it reports
+    // arrives unprefixed, so discovery adds the namespace the rest of the
+    // stack routes by.
+    const goModelsFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        object: "list",
+        data: [
+          { id: "deepseek-v4-pro", object: "model", created: 1, owned_by: "opencode" },
+          { id: "glm-5.1", object: "model", created: 1, owned_by: "opencode" },
+          { id: 42 },
+          { id: "   " },
+        ],
+      }),
+    });
+    vi.stubGlobal("fetch", goModelsFetch);
+    // An SSH environment answers the same catalog: the endpoint is public, so
+    // discovery no longer asks where the harness runs.
+    mockEnvironmentService.getById.mockResolvedValue({
+      id: "env-1",
+      companyId: "company-1",
+      name: "Remote SSH",
+      driver: "ssh",
+      config: {},
+    });
+
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl).get(
+        "/api/companies/company-1/adapters/opencode_local/models?environmentId=env-1&provider=opencode",
+      ),
+    );
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body).toEqual([
+      { id: "opencode-go/deepseek-v4-pro", label: "opencode-go/deepseek-v4-pro" },
+      { id: "opencode-go/glm-5.1", label: "opencode-go/glm-5.1" },
+    ]);
+    expect(goModelsFetch).toHaveBeenCalledWith(
+      "https://opencode.ai/inference/go/v1/models",
+      { signal: expect.any(AbortSignal) },
+    );
+  });
+
+  it("surfaces a retryable error when the OpenCode Go catalog cannot be read", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false }));
+
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl).get(
+        "/api/companies/company-1/adapters/opencode_local/models?provider=opencode",
+      ),
+    );
+
+    expect(res.status).toBe(500);
   });
 });

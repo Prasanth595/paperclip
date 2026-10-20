@@ -140,7 +140,7 @@ async function mount(
 }
 function click(text: string) {
   const button = [...host.querySelectorAll("button")].find((b) =>
-    b.getAttribute("aria-label") ? b.getAttribute("aria-label") === text : b.textContent?.includes(text),
+    b.getAttribute("aria-label") === text || Boolean(b.textContent?.includes(text)),
   )!;
   expect(button).toBeTruthy();
   flushSync(() => button.click());

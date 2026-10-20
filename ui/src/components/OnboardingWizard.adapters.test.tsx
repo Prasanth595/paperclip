@@ -200,6 +200,35 @@ describe("OnboardingWizard adapter selection", () => {
     });
   });
 
+  it("keeps a saved opencode_local, which the step offers behind its disclosure", async () => {
+    // The snap's idea of "visible" is every registered adapter, not the tiles on
+    // screen — and this suite's display registry marks none of them
+    // `recommended`. OpenCode is offered from the connect step's second tier
+    // rather than beside the recommended pair, so both of those facts are
+    // reasons the snap must leave it alone: a saved `opencode_local` names a
+    // source the step does offer, and replacing it with the first adapter in the
+    // list would be the defect rather than the fix.
+    mockAdapterRegistry.list = [
+      { type: "claude_local" },
+      { type: "opencode_local" },
+    ];
+    window.localStorage.setItem(
+      ONBOARDING_STORAGE_KEY,
+      JSON.stringify({ step: 0, adapterType: "opencode_local" }),
+    );
+
+    const { root } = await mount();
+
+    const saved = JSON.parse(
+      window.localStorage.getItem(ONBOARDING_STORAGE_KEY) ?? "{}",
+    );
+    expect(saved.adapterType).toBe("opencode_local");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
   it("recovers a saved Codex runner draft without changing its model or runner", async () => {
     mockAdapterRegistry.list = [
       { type: "paperclip_runner" },

@@ -923,9 +923,16 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
       ? "Paperclip Computer"
       : "Local";
 
-  const modelProvider = adapterType === "opencode_local" && aiConnectionBindingSchema.safeParse(
+  // `opencode_local` runs behind one of two connections: OpenRouter or OpenCode
+  // Go. Each one publishes a different model catalog, so the query below must
+  // carry the bound provider; otherwise it falls back to the host catalog and the
+  // `opencode-go/…` models never appear.
+  const bindingProvider = aiConnectionBindingSchema.safeParse(
     (overlay.runtime.runtimeConfig as Record<string, unknown> | undefined)?.aiConnection ?? runtimeConfig.aiConnection,
-  ).data?.provider === "openrouter" ? "openrouter" : runnerProvider;
+  ).data?.provider;
+  const modelProvider = adapterType === "opencode_local" && (bindingProvider === "openrouter" || bindingProvider === "opencode")
+    ? bindingProvider
+    : bindingProvider === "openrouter" ? "openrouter" : runnerProvider;
   const connectionModels = useConnectionModels(isExternalRunner ? null : selectedCompanyId, isCreate ? undefined : aiConnectionBindingSchema.safeParse((overlay.runtime.runtimeConfig as Record<string, unknown> | undefined)?.aiConnection ?? runtimeConfig.aiConnection).data, aiRoutingHarness(adapterType, runnerProvider, eff("adapterConfig", "acpxAgent", config.acpxAgent)));
   // Fetch adapter models for the effective provider, including unsaved changes.
   const modelAdapterType = isRunnerHarness ? harnessType : adapterType;

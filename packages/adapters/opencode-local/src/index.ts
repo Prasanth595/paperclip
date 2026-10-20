@@ -44,6 +44,39 @@ export const SANDBOX_INSTALL_COMMAND =
 
 export const DEFAULT_OPENCODE_LOCAL_MODEL = "openai/gpt-5.2-codex";
 
+/**
+ * OpenCode Go's provider namespace.
+ *
+ * OpenCode Go is one of the two providers the `opencode_local` harness can run
+ * (the other is OpenRouter). Its gateway serves a catalog of its own and names
+ * every model in it `opencode-go/<id>`; a model from any other namespace is not
+ * routable through it, which is what makes a non-Go model fail at the provider
+ * call rather than in the picker.
+ */
+export const OPENCODE_GO_PROVIDER = "opencode-go";
+
+/**
+ * Whether a model id names a model the OpenCode Go gateway serves.
+ *
+ * A namespace test rather than a membership test. The Go catalog is discovered
+ * from the host (`opencode models`) and moves under us, so the `opencode-go/`
+ * prefix is what makes an id routable; nothing here pins a model, because the
+ * model is the customer's to pick from what discovery reports.
+ */
+export function isOpenCodeGoModelId(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  return (
+    trimmed.startsWith(`${OPENCODE_GO_PROVIDER}/`) &&
+    trimmed.length > OPENCODE_GO_PROVIDER.length + 1
+  );
+}
+
+/** Narrow a reported catalog to the models the OpenCode Go gateway can route. */
+export function filterOpenCodeGoModels<T extends { id: string }>(models: T[]): T[] {
+  return models.filter((model) => isOpenCodeGoModelId(model.id));
+}
+
 export function isValidOpenCodeModelId(value: unknown): value is string {
   if (typeof value !== "string") return false;
   const trimmed = value.trim();

@@ -12,6 +12,7 @@ import {
   buildPersistentSkillSnapshot,
   buildRuntimeMountedSkillSnapshot,
   buildInvocationEnvForLogs,
+  redactEnvForLogs,
   buildPaperclipEnv,
   buildRuntimeToolsEnv,
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
@@ -213,6 +214,24 @@ describe("buildInvocationEnvForLogs", () => {
     expect(loggedEnv.PAPERCLIP_RESOLVED_COMMAND).toBe(
       "env OPENAI_API_KEY=***REDACTED*** PAPERCLIP_API_KEY='***REDACTED***' custom-acp --paperclip-api-key=***REDACTED*** --token ***REDACTED***",
     );
+  });
+});
+
+describe("redactEnvForLogs", () => {
+  it("redacts env values that carry serialized provider credentials", () => {
+    const loggedEnv = redactEnvForLogs({
+      OPENCODE_CONFIG_CONTENT: '{"apiKey":"sk-live-example"}',
+      OPENCODE_CONFIG: "/home/agent/.config/opencode/opencode.json",
+      OPENCODE_AUTH_JSON: '{"opencode-go":{"apiKey":"sk-live-example"}}',
+      OPENCODE_API_KEY: "sk-live-example",
+      SAFE_VALUE: "visible",
+    });
+
+    expect(loggedEnv.OPENCODE_CONFIG_CONTENT).toBe("***REDACTED***");
+    expect(loggedEnv.OPENCODE_CONFIG).toBe("***REDACTED***");
+    expect(loggedEnv.OPENCODE_AUTH_JSON).toBe("***REDACTED***");
+    expect(loggedEnv.OPENCODE_API_KEY).toBe("***REDACTED***");
+    expect(loggedEnv.SAFE_VALUE).toBe("visible");
   });
 });
 

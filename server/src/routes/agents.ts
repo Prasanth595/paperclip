@@ -17,6 +17,7 @@ import { agentFileStore, agentFileTokenFromHash } from "../services/agent-file-s
 import { pipeline } from "node:stream/promises";
 import { resolveAgentAppearance, agentAvatarUrl } from "@paperclipai/shared";
 import { listOpenRouterModels } from "../services/openrouter-models.js";
+import { listOpenCodeGoModels } from "../services/opencode-go-models.js";
 import { withManagedAiProbe, stripAiAuthBindings } from "../services/ai-connection-runtime.js";
 import {
   ADAPTER_AUTH_MISSING_CHECK_CODE,
@@ -2600,8 +2601,12 @@ export function agentRoutes(
     kimi_local: ["KIMI_MODEL_API_KEY"],
     opencode_local: ["PAPERCLIP_OPENCODE_PROVIDERS", "OPENCODE_AUTH_JSON"],
   };
+  // A provider credential the child brings itself, which outranks the pool it
+  // would otherwise inherit. `OPENCODE_API_KEY` is OpenCode Go's, the second
+  // provider behind `opencode_local` — the harness equivalence of the OpenRouter
+  // entries beside it, so an OpenCode Go teammate can be hired with its own key.
   const POOL_AUTH_OVERRIDE_ENV_KEYS = [
-    "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "PAPERCLIP_OPENCODE_PROVIDERS", "OPENCODE_AUTH_JSON",
+    "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENCODE_API_KEY", "PAPERCLIP_OPENCODE_PROVIDERS", "OPENCODE_AUTH_JSON",
   ] as const;
 
   async function callerUsesAiConnectionPool(req: Request, companyId: string): Promise<boolean> {
@@ -3013,6 +3018,13 @@ export function agentRoutes(
     const provider = asNonEmptyString(req.query.provider);
     if (type === "opencode_local" && provider === "openrouter") {
       res.json(await listOpenRouterModels(refresh));
+      return;
+    }
+    if (type === "opencode_local" && provider === "opencode") {
+      // OpenCode Go's catalog is read from the gateway's own public endpoint,
+      // not from the host, so the answer does not depend on which environment
+      // the harness runs in.
+      res.json(await listOpenCodeGoModels(refresh));
       return;
     }
     if (type === "paperclip_runner" && provider && !isPaperclipRunnerProvider(provider)) {

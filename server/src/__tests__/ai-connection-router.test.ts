@@ -210,6 +210,21 @@ describe("durable, authorized connection routing", () => {
     expect(native).toMatchObject({ provider: "codex", model: "gpt-5.6-sol", codexReasoningEffort: "high" });
     expect(overrides).toMatchObject({ cwd: "/fixture" }); expect(overrides).not.toHaveProperty("effort");
   });
+  it("refuses an unnamespaced OpenCode Go model override and accepts a namespaced id", () => {
+    const opencode: AiConnectionPoolMember = {
+      id: randomUUID(),
+      binding: { provider: "opencode", method: "api_key", mode: "delegated", connectionId: randomUUID(), grantId: randomUUID() },
+      profile: { provider: "opencode", model: "opencode-go/default-model" },
+    };
+    // OpenCode Go names its models `opencode-go/<id>` or `provider/model`; a bare
+    // id has no namespace to resolve, so the override must be refused.
+    const refused = poolMemberRuntimeConfig(opencode, "opencode_local", { model: "gpt-5.6-sol" });
+    expect(refused.config.model).toBe("opencode-go/default-model");
+    expect(refused.notes).toEqual(["Model override is unavailable for this member; using its default."]);
+    const accepted = poolMemberRuntimeConfig(opencode, "opencode_local", { model: "opencode-go/kimi-k2" });
+    expect(accepted.config.model).toBe("opencode-go/kimi-k2");
+    expect(accepted.notes).toEqual([]);
+  });
   it("retries a changed config proposal without advancing the abandoned selection", async () => {
     const pool = await makePool();
     proposal.mockImplementationOnce(async () => {

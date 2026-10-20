@@ -39,6 +39,11 @@ const providers = [
   { id: "google", name: "Google", description: "Gemini API key" },
   { id: "xai", name: "xAI", description: "Grok subscription or API key" },
   {
+    id: "opencode",
+    name: "OpenCode",
+    description: "OpenCode Go gateway API key",
+  },
+  {
     id: "openrouter",
     name: "OpenRouter",
     description: "Models through one API key",
@@ -132,7 +137,10 @@ export function AiProviderSetup({
     queryFn: () => agentsApi.list(companyId),
   });
   const label = providerLabel ?? providers.find((p) => p.id === provider)?.name ?? "provider";
-  const advanced = reconnect ? Boolean(reconnect.routing) : ["openrouter", "bedrock", "gateway", "local"].includes(provider ?? "");
+  // Routing-backed providers build a routing document; native providers
+  // (OpenAI, Anthropic, Google, xAI, OpenCode Go) bind an API key directly.
+  const routedProvider = ["openrouter", "bedrock", "gateway", "local"].includes(provider ?? "");
+  const advanced = reconnect ? Boolean(reconnect.routing) : routedProvider;
   const nativeProvider: AiProvider =
     provider === "bedrock"
       ? "anthropic"
@@ -170,23 +178,27 @@ export function AiProviderSetup({
   };
   const save = useMutation({
     mutationFn: () => {
+      // OpenCode Go is a native API-key provider: its credential binds directly,
+      // like Google or OpenAI, and carries no routing document.
       const routing =
         reconnect?.routing ??
-        aiProviderRoutingSchema.parse({
-          kind: provider,
-          protocol: provider === "bedrock" ? "bedrock" : protocol,
-          auth: provider === "openrouter" ? "bearer" : auth,
-          ...(provider === "bedrock"
-            ? { region }
-            : provider === "gateway" || provider === "local"
-              ? { baseUrl }
-              : {}),
-          models: models
-            .split(",")
-            .map((id) => id.trim())
-            .filter(Boolean)
-            .map((id) => ({ id })),
-        });
+        (routedProvider
+          ? aiProviderRoutingSchema.parse({
+              kind: provider,
+              protocol: provider === "bedrock" ? "bedrock" : protocol,
+              auth: provider === "openrouter" ? "bearer" : auth,
+              ...(provider === "bedrock"
+                ? { region }
+                : provider === "gateway" || provider === "local"
+                  ? { baseUrl }
+                  : {}),
+              models: models
+                .split(",")
+                .map((id) => id.trim())
+                .filter(Boolean)
+                .map((id) => ({ id })),
+            })
+          : undefined);
       return aiConnectionsApi.create(
         companyId,
         createAiConnectionSchema.parse({

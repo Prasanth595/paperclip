@@ -179,6 +179,28 @@ describe("agent-created hires use managed AI connections", () => {
     expect(await db.select().from(toolConnectionInstalls).where(eq(toolConnectionInstalls.targetId, agent.id))).toEqual([]);
   });
 
+  it("hires an OpenCode Go teammate on its own key instead of the manager's OpenRouter pool", async () => {
+    // OpenCode Go is the second provider behind `opencode_local`, so a child
+    // holding its own Go key is already authenticated: it must inherit nothing,
+    // not the manager's pool. The mirror case one line above covers the child
+    // that holds OpenRouter's harness config, where the pool is inherited.
+    //
+    // Without the Go key being read as child auth the child kept the router
+    // binding, and its runs would have been routed to OpenRouter while the
+    // credential the hire carried was a Go one.
+    const f = await fixture("openai");
+    const p = await poolFixture(f);
+    await db.update(agents).set({ runtimeConfig: { aiConnection: p.binding } }).where(eq(agents.id, f.agentId));
+    const agent = hired(await request(f.app).post(`/api/companies/${f.companyId}/agent-hires`).send({
+      name: "OpenCode Go teammate", role: "engineer", adapterType: "opencode_local",
+      adapterConfig: { env: { OPENCODE_API_KEY: "fixture-opencode-go-key" } },
+    }));
+    expect(agent.runtimeConfig.aiConnection).toBeUndefined();
+    expect(agent.adapterConfig.env?.OPENCODE_API_KEY).toEqual({ type: "plain", value: "fixture-opencode-go-key" });
+    // No pool member is installed for a child that does not use the pool.
+    expect(await db.select().from(toolConnectionInstalls).where(eq(toolConnectionInstalls.targetId, agent.id))).toEqual([]);
+  });
+
   it.each(["agent-hires", "agents"])("%s installs authorized pool members atomically with the new agent", async (endpoint) => {
     const f = await fixture("openai");
     const p = await poolFixture(f);

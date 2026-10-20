@@ -2,7 +2,7 @@ import { useId } from "react";
 import { Plus, UserRound } from "lucide-react";
 import {
   aiConnectionCatalogSlug,
-  isAiConnectionCompatible,
+  isAiConnectionCompatibleAdapter,
   type AiConnectionBinding,
 } from "@paperclipai/shared";
 import {
@@ -54,11 +54,7 @@ export function AiConnectionSelect({
     .filter(
       (c) =>
         c.companyId === requirement.companyId &&
-        isAiConnectionCompatible(
-          c,
-          adapterType,
-          c.provider === "openrouter" ? "openrouter/" : undefined,
-        ),
+        isAiConnectionCompatibleAdapter(c, adapterType),
     )
     .sort(
       (a, b) =>
@@ -73,14 +69,13 @@ export function AiConnectionSelect({
       !loading &&
       !error,
   );
-  const canUseDefault = isAiConnectionCompatible(
+  const canUseDefault = isAiConnectionCompatibleAdapter(
     {
       provider: requirement.provider,
       method: "api_key",
       mode: "responsible_user",
     },
     adapterType,
-    requirement.provider === "openrouter" ? "openrouter/" : undefined,
   );
   const incompatible =
     selected && !compatible.some((c) => c.id === selected.id);
