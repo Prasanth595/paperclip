@@ -3974,9 +3974,10 @@ export function recoveryService(
 
   /**
    * Detects a stale post-done workspace-validation race: a prior succeeded run
-   * already finished the issue, and the failing wake's comments all predate that
-   * completion (or the prior run's liveness says the issue is done). Callers
-   * reclaim to `done` with `false_positive` instead of board-parking the leaf.
+   * already finished the issue (`livenessReason` says Issue is done), and the
+   * failing wake is not a reopen / status-change that superseded that
+   * completion. Callers reclaim to `done` with `false_positive` instead of
+   * board-parking the leaf.
    */
   async function findPriorSuccessfulDoneEvidence(
     issue: typeof issues.$inferSelect,
@@ -4006,8 +4007,54 @@ export function recoveryService(
       .orderBy(desc(heartbeatRuns.finishedAt))
       .limit(1);
     if (!prior?.finishedAt) return null;
+    // A bare succeeded run is not completion evidence — only an explicit done
+    // liveness reason proves the leaf finished (avoids marking unfinished work
+    // complete when an in_progress run happened to succeed).
+    if (!/issue is done/i.test(prior.livenessReason ?? "")) return null;
 
     const context = parseObject(failedRun.contextSnapshot);
+    const failedWakeReason = readNonEmptyString(context.wakeReason) ?? "";
+    // Reopen / status-change wakes supersede the prior completion. Do not
+    // treat their workspace_validation failures as post-done races.
+    if (
+      failedWakeReason === "issue_reopened_via_comment" ||
+      failedWakeReason === "issue_status_changed" ||
+      failedWakeReason === "issue_reopened"
+    ) {
+      return null;
+    }
+
+    // Any intervening run for this issue that itself reopened / status-changed
+    // after the prior done finish also supersedes that completion.
+    const intervening = await db
+      .select({
+        id: heartbeatRuns.id,
+        contextSnapshot: heartbeatRuns.contextSnapshot,
+      })
+      .from(heartbeatRuns)
+      .where(
+        and(
+          eq(heartbeatRuns.companyId, issue.companyId),
+          ne(heartbeatRuns.id, failedRun.id),
+          ne(heartbeatRuns.id, prior.id),
+          isNotNull(heartbeatRuns.startedAt),
+          gt(heartbeatRuns.startedAt, prior.finishedAt),
+          lte(heartbeatRuns.startedAt, failedStartedAt),
+          sql`coalesce(${heartbeatRuns.contextSnapshot}->>'issueId', ${heartbeatRuns.contextSnapshot}->>'taskId') = ${issue.id}`,
+        ),
+      );
+    for (const row of intervening) {
+      const wakeReason =
+        readNonEmptyString(parseObject(row.contextSnapshot).wakeReason) ?? "";
+      if (
+        wakeReason === "issue_reopened_via_comment" ||
+        wakeReason === "issue_status_changed" ||
+        wakeReason === "issue_reopened"
+      ) {
+        return null;
+      }
+    }
+
     const commentIds = new Set<string>();
     const wakeCommentIds = context.wakeCommentIds;
     if (Array.isArray(wakeCommentIds)) {
@@ -4043,15 +4090,11 @@ export function recoveryService(
       return null;
     }
 
-    const reason = prior.livenessReason ?? "";
-    if (/issue is done/i.test(reason)) {
-      return {
-        id: prior.id,
-        finishedAt: prior.finishedAt,
-        livenessReason: prior.livenessReason ?? null,
-      };
-    }
-    return null;
+    return {
+      id: prior.id,
+      finishedAt: prior.finishedAt,
+      livenessReason: prior.livenessReason ?? null,
+    };
   }
 
   async function reclaimPostTerminalWorkspaceValidationRace(input: {
