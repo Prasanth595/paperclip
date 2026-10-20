@@ -324,7 +324,7 @@ describeEmbeddedPostgres("heartbeat runtime MCP servers", () => {
     const initialized = await call("initialize").expect(200);
     expect(initialized.body.result.protocolVersion).toBeTruthy();
     const listed = await call("tools/list").expect(200);
-    const readTool = listed.body.result.tools.find((tool: { name: string }) => tool.name.includes("read_fixture"));
+    const readTool = listed.body.result.tools.find((tool: { title?: string }) => tool.title === "read_fixture");
     expect(readTool).toBeDefined();
     const called = await call("tools/call", { name: readTool.name, arguments: {} }).expect(200);
     expect(called.body.result.isError).toBe(false);
