@@ -8729,6 +8729,31 @@ export function issueService(db: Db) {
       );
       const since = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000);
 
+      const observedAt = new Date().toISOString();
+      const pendingRows = await db
+        .select({ status: agentWakeupRequests.status, count: sql<number>`count(*)`.mapWith(Number) })
+        .from(agentWakeupRequests)
+        .where(and(
+          eq(agentWakeupRequests.companyId, issue.companyId),
+          inArray(agentWakeupRequests.status, ["queued", "claimed", "deferred_issue_execution"]),
+          wakeRequestTargetsIssue(issue.id),
+        ))
+        .groupBy(agentWakeupRequests.status);
+      const counts = { queued: 0, claimed: 0, deferred_issue_execution: 0 };
+      for (const row of pendingRows) {
+        counts[row.status as keyof typeof counts] = row.count;
+      }
+      const total = counts.queued + counts.claimed + counts.deferred_issue_execution;
+      const pendingWakeSummary = {
+        version: 1 as const,
+        complete: true as const,
+        scope: "all_age" as const,
+        observedAt,
+        counts,
+        total,
+        hasPending: total > 0,
+      };
+
       const wakeRows = await db
         .select({
           agentId: agentWakeupRequests.agentId,
@@ -8781,6 +8806,7 @@ export function issueService(db: Db) {
         .limit(maxActivityRecords + 1);
 
       return {
+        pendingWakeSummary,
         wakeRequests: wakeRows.slice(
           0,
           maxWakeRequests,

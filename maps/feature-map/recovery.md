@@ -37,6 +37,12 @@ Agent access: [companion](../agent-access-map/recovery.md).
 - `reconnect`: browser stream recovery refreshes persisted state without claiming
   the agent itself restarted or that a failed run succeeded.
 
+Wake diagnostics separate bounded history from complete all-age outstanding wake
+counts (`pendingWakeSummary` v1). A quiet or untruncated history is not proof of an
+empty queue. The summary covers queued, claimed and deferred issue execution
+requests at observation time; it does not authorize a wake or claim live recovery.
+See the [agent diagnosis contract](../agent-access-map/recovery.md#diagnosis).
+
 ## How to get to it (user POV)
 
 ### `source-task`

@@ -95,7 +95,7 @@ export const runnerApiReference: Record<string, { section: string; description?:
   },
   "GET /api/issues/{}/diagnostics/wakes": {
     "section": "Issues (Tasks)",
-    "description": "Read-only wake-history diagnostic with `diagnosis`, bounded events, and Case-B inference"
+    "description": "Read-only wake diagnostic with complete all-age `pendingWakeSummary` v1 (queued, claimed, deferred_issue_execution counts), plus independent bounded history and Case-B inference"
   },
   "GET /api/issues/{}/diagnostics/subtree": {
     "section": "Issues (Tasks)",

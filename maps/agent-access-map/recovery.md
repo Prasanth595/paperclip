@@ -18,6 +18,7 @@ Review: `baseline`.
 API: `present` — representative operation IDs:
 
 - `GET /api/issues/{id}/diagnostics/blockers`.
+- `GET /api/issues/{id}/diagnostics/wakes`.
 - `GET /api/issues/{id}/recovery-actions`.
 
 Agent access: `available` — REST / native call_api; CLI issue diagnostics.
@@ -63,6 +64,15 @@ Verification: `not-run` — exercise a listed permitted operation with actual ag
 credentials/run context; inspect its result and applicable persistence/attribution.
 Assert the relevant denied actor, owner, company or mode from Policy. Review the
 remaining operations before qualifying the whole capability.
+
+Wake diagnostics add `pendingWakeSummary` v1: complete all-age counts for
+`queued`, `claimed`, and `deferred_issue_execution`, scoped to the readable issue
+and its company. History remains capped at 50 rows per section / 14 days.
+The summary is a point-in-time observation, not a reservation against new wakes;
+missing metadata on older runtimes means unknown, never zero. Existing issue-read
+and low-trust boundaries remain. PostgreSQL route regressions cover old wakes,
+terminal-history overflow, empty queues and cross-company denial; deployed agent
+qualification remains `not-run`.
 
 Gaps: Diagnostics expose recorded cause and boundaries; source-backed reading does not
 prove successful recovery.

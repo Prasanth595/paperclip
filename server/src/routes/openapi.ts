@@ -10681,6 +10681,21 @@ registerCurrentRoute({
   path: "/api/issues/{id}/diagnostics/wakes",
   tags: ["issues"],
   summary: "Get wake diagnostics for an issue",
+  responses: { 200: r.ok(z.object({
+    pendingWakeSummary: z.object({
+      version: z.literal(1),
+      complete: z.literal(true),
+      scope: z.literal("all_age"),
+      observedAt: z.string().datetime(),
+      counts: z.object({
+        queued: z.number().int().nonnegative(),
+        claimed: z.number().int().nonnegative(),
+        deferred_issue_execution: z.number().int().nonnegative(),
+      }),
+      total: z.number().int().nonnegative(),
+      hasPending: z.boolean(),
+    }).describe("Complete company-scoped outstanding wake counts, without an age or row cap. A point-in-time observation, not a lease. Missing on older servers means unknown. Independent of bounded history and its truncation."),
+  }).passthrough()) },
 });
 
 registerCurrentRoute({

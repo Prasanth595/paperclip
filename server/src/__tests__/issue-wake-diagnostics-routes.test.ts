@@ -248,6 +248,10 @@ describeEmbeddedPostgres("issue wake diagnostics route", () => {
       truncated: false,
       caps: { maxWakeRequests: 50, maxActivityRecords: 50, lookbackDays: 14 },
     });
+    expect(res.body.pendingWakeSummary).toMatchObject({
+      version: 1, complete: true, scope: "all_age", total: 0, hasPending: false,
+      counts: { queued: 0, claimed: 0, deferred_issue_execution: 0 },
+    });
     expect(res.body.events).toHaveLength(1);
     expect(res.body.events[0]).toMatchObject({
       kind: "wake_request",
@@ -280,6 +284,56 @@ describeEmbeddedPostgres("issue wake diagnostics route", () => {
     expect(JSON.stringify(res.body)).not.toContain("PRIVATE_DELIVERY_ID");
   });
 
+  it.each(["queued", "claimed", "deferred_issue_execution"])(
+    "counts all-age %s requests independently of capped terminal history",
+    async (status) => {
+      const company = await seedCompany(db);
+      const agent = await seedAgent(db, company.id);
+      const issue = await seedIssue(db, { companyId: company.id, title: "Old pending wake" });
+      const otherCompany = await seedCompany(db, "Other");
+      const otherAgent = await seedAgent(db, otherCompany.id);
+      const old = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const payloads = [
+        { issueId: issue.id }, { taskId: issue.id },
+        { _paperclipWakeContext: { issueId: issue.id } },
+        { _paperclipWakeContext: { taskId: issue.id } },
+      ];
+      await db.insert(agentWakeupRequests).values(payloads.map(payload => ({
+        companyId: company.id, agentId: agent.id, source: "automation", status,
+        requestedAt: old, payload: { ...payload, secret: "DO_NOT_EXPOSE" },
+      })));
+      await db.insert(agentWakeupRequests).values({
+        companyId: otherCompany.id, agentId: otherAgent.id, source: "automation",
+        status, payload: { issueId: issue.id },
+      });
+      await db.insert(agentWakeupRequests).values({
+        companyId: company.id, agentId: agent.id, source: "automation",
+        status, payload: { issueId: randomUUID() },
+      });
+      await db.insert(agentWakeupRequests).values(Array.from({ length: 55 }, () => ({
+        companyId: company.id, agentId: agent.id, source: "automation",
+        status: "completed", payload: { issueId: issue.id },
+      })));
+      const res = await request(createApp(db, boardActor(company)))
+        .get(`/api/issues/${issue.id}/diagnostics/wakes`);
+      expect(res.status).toBe(200);
+      expect(res.body.pendingWakeSummary).toEqual({
+        version: 1, complete: true, scope: "all_age", observedAt: expect.any(String),
+        counts: { queued: 0, claimed: 0, deferred_issue_execution: 0, [status]: 4 },
+        total: 4, hasPending: true,
+      });
+      expect(Number.isFinite(Date.parse(res.body.pendingWakeSummary.observedAt))).toBe(true);
+      expect(res.body.wakeRequestCount).toBe(50);
+      expect(res.body.truncatedSections.wakeRequests).toBe(true);
+      expect(res.body.events.every((event: { status: string }) => event.status === "completed")).toBe(true);
+      expect(JSON.stringify(res.body)).not.toContain("DO_NOT_EXPOSE");
+      const denied = await request(createApp(db, agentActor(otherCompany, otherAgent, randomUUID())))
+        .get(`/api/issues/${issue.id}/diagnostics/wakes`);
+      expect([403, 404]).toContain(denied.status);
+      expect(denied.body.pendingWakeSummary).toBeUndefined();
+    },
+  );
+
   it("returns null diagnosis for an unblocked issue with no wake history", async () => {
     const company = await seedCompany(db);
     const project = await seedProject(db, company.id, "Core");
@@ -293,6 +347,10 @@ describeEmbeddedPostgres("issue wake diagnostics route", () => {
     const res = await request(createApp(db, boardActor(company)))
       .get(`/api/issues/${issue.id}/diagnostics/wakes`);
 
+    expect(res.body.pendingWakeSummary).toMatchObject({
+      version: 1, complete: true, scope: "all_age", total: 0, hasPending: false,
+      counts: { queued: 0, claimed: 0, deferred_issue_execution: 0 },
+    });
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(res.body.diagnosis).toBeNull();
     expect(res.body.likelyReason).toBeNull();
