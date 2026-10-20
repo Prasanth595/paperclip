@@ -278,12 +278,18 @@ describeEmbeddedPostgres("heartbeat runtime MCP servers", () => {
   it("keeps the run gateway usable at minute 80, then rejects a completed run and expiry", async () => {
     const [owner] = await seedAssignedAgents(1);
     const [connection] = await db.select().from(toolConnections);
+    await db.update(toolConnections).set({ healthStatus: "ok", credentialPolicy: "shared" })
+      .where(eq(toolConnections.id, connection!.id));
     await db.insert(toolCatalogEntries).values({
       companyId: owner!.agent.companyId,
       applicationId: connection!.applicationId,
       connectionId: connection!.id,
       name: "read_fixture",
       toolName: "read_fixture",
+      entryKind: "tool",
+      riskLevel: "read",
+      isReadOnly: true,
+      isWrite: false,
       versionHash: "fixture",
       status: "active",
     });
