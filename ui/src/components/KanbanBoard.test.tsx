@@ -168,15 +168,15 @@ describe("KanbanBoard", () => {
     }
   });
 
-  it("hides labels on request and responds to changed task data", () => {
+  it.each([false, true])("hides labels and refreshes task data (overflow fades: %s)", (showOverflowFades) => {
     const issue = createIssue(1, "todo");
     issue.labels = [{ id: "label-1", companyId: issue.companyId, name: "Original", color: READABLE_TEXT_DARK,
       createdAt: issue.createdAt, updatedAt: issue.updatedAt }];
-    const { container, render } = renderBoard({ issues: [issue], showLabels: false });
+    const { container, render } = renderBoard({ issues: [issue], showLabels: false, showOverflowFades });
     expect(container.querySelector('[aria-label="Task labels"]')).toBeNull();
-    render({ issues: [issue], showLabels: true });
+    render({ issues: [issue], showLabels: true, showOverflowFades });
     expect(container.textContent).toContain("Original");
-    render({ issues: [{ ...issue, labels: [{ ...issue.labels[0], name: "Atualizada" }] }] });
+    render({ issues: [{ ...issue, labels: [{ ...issue.labels[0], name: "Atualizada" }] }], showOverflowFades });
     expect(container.textContent).toContain("Atualizada");
     expect(container.textContent).not.toContain("Original");
   });
