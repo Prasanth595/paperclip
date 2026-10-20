@@ -82,4 +82,38 @@ describe("sanitizeRunScopeForPostgres", () => {
     cyclic.self = cyclic;
     expect(() => sanitizeRunScopeForPostgres(cyclic)).not.toThrow();
   });
+
+  it("sanitizes property names", () => {
+    const sanitized = sanitizeRunScopeForPostgres({
+      ["bad\u0000key"]: "value",
+      ["lone\uD800key"]: "value",
+    });
+    expect(sanitized).toEqual({
+      badkey: "value",
+      "lone\uFFFDkey": "value",
+    });
+  });
+
+  it("keeps the last value when two property names sanitize to the same key", () => {
+    const sanitized = sanitizeRunScopeForPostgres({ ["a\u0000"]: 1, a: 2 });
+    expect(sanitized).toEqual({ a: 2 });
+  });
+
+  it("sanitizes strings at any depth", () => {
+    let deep: Record<string, unknown> = { note: "bottom\u0000" };
+    for (let index = 0; index < 20; index += 1) deep = { nested: deep };
+    const sanitized = sanitizeRunScopeForPostgres(deep);
+    let cursor = sanitized as Record<string, unknown>;
+    for (let index = 0; index < 20; index += 1) cursor = cursor.nested as Record<string, unknown>;
+    expect(cursor.note).toBe("bottom");
+  });
+
+  it("sanitizes a shared object at every reference", () => {
+    const shared = { note: "nul\u0000" };
+    const sanitized = sanitizeRunScopeForPostgres({ left: shared, right: shared });
+    expect(sanitized).toEqual({
+      left: { note: "nul" },
+      right: { note: "nul" },
+    });
+  });
 });

@@ -1,4 +1,3 @@
-const MAX_SANITIZE_DEPTH = 12;
 const REPLACEMENT_CHARACTER = "\uFFFD";
 
 export function sanitizeRunStringForPostgres(value: string): string {
@@ -35,29 +34,43 @@ export function sanitizeRunStringForPostgres(value: string): string {
   return changed ? output : value;
 }
 
-export function sanitizeRunScopeForPostgres<T>(value: T, depth = 0): T {
-  if (value === null || value === undefined || depth > MAX_SANITIZE_DEPTH) return value;
+export function sanitizeRunScopeForPostgres<T>(value: T, seen: WeakSet<object> = new WeakSet()): T {
+  if (value === null || value === undefined) return value;
   if (typeof value === "string") return sanitizeRunStringForPostgres(value) as T;
   if (value instanceof Date || value instanceof Uint8Array) return value;
   if (Array.isArray(value)) {
-    let changed = false;
-    const output = value.map((item) => {
-      const fixed = sanitizeRunScopeForPostgres(item, depth + 1);
-      if (fixed !== item) changed = true;
-      return fixed;
-    });
-    return (changed ? output : value) as T;
+    if (seen.has(value)) return value;
+    seen.add(value);
+    try {
+      let changed = false;
+      const output = value.map((item) => {
+        const fixed = sanitizeRunScopeForPostgres(item, seen);
+        if (fixed !== item) changed = true;
+        return fixed;
+      });
+      return (changed ? output : value) as T;
+    } finally {
+      seen.delete(value);
+    }
   }
   if (typeof value === "object") {
-    let changed = false;
-    const output: Record<string, unknown> = {};
-    for (const key of Object.keys(value as Record<string, unknown>)) {
-      const current = (value as Record<string, unknown>)[key];
-      const fixed = sanitizeRunScopeForPostgres(current, depth + 1);
-      if (fixed !== current) changed = true;
-      output[key] = fixed;
+    const source = value as Record<string, unknown>;
+    if (seen.has(source)) return value;
+    seen.add(source);
+    try {
+      let changed = false;
+      const output: Record<string, unknown> = {};
+      for (const key of Object.keys(source)) {
+        const fixedKey = sanitizeRunStringForPostgres(key);
+        if (fixedKey !== key) changed = true;
+        const fixedValue = sanitizeRunScopeForPostgres(source[key], seen);
+        if (fixedValue !== source[key]) changed = true;
+        output[fixedKey] = fixedValue;
+      }
+      return (changed ? output : value) as T;
+    } finally {
+      seen.delete(source);
     }
-    return (changed ? output : value) as T;
   }
   return value;
 }
