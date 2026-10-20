@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Db } from "@paperclipai/db";
-import { agents, agentWakeupRequests, companies, createDb, EMBEDDED_POSTGRES_TEST_TIMEOUT_MS, environmentLeases, heartbeatRuns, issues, nativeRunFinalizations, projects } from "@paperclipai/db";
+import { agents, agentWakeupRequests, caseHandoffs, cases, companies, createDb, EMBEDDED_POSTGRES_TEST_TIMEOUT_MS, environmentLeases, heartbeatRuns, issues, nativeRunFinalizations, projects } from "@paperclipai/db";
 import { eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "../../__tests__/helpers/embedded-postgres.js";
@@ -21,6 +21,8 @@ import { createHeartbeatLifecycle, type HeartbeatLifecycleDependencies } from ".
 import { createHeartbeatRunControl, type HeartbeatRunControlDependencies } from "./run-control.js";
 import { preserveCancelledNativeWorkspaces } from "../native-runtime/native-failed-workspace-recovery.js";
 import { createPostgresRunDispatchAdapter } from "../../modules/run-dispatch/adapters/postgres.js";
+import { caseHandoffService } from "../case-handoffs.js";
+import { instanceSettingsService } from "../instance-settings.js";
 
 vi.mock("../live-events.js", () => ({ publishLiveEvent: vi.fn() }));
 vi.mock("../adapter-execution-control.js", async (importOriginal) => {
@@ -278,6 +280,40 @@ describe.skipIf(!support.supported)("heartbeat run-control database wiring", () 
       await cancellation;
     }
     expect(await deps.getRun(run.id)).toMatchObject({ status: "cancelled" });
+  });
+
+  it.each(["agent", "done"] as const)("fences a concurrent %s handoff before waiting for Stop execution", async destination => {
+    const { company, agent } = await fixture();
+    await db.update(agents).set({ role: "ceo" }).where(eq(agents.id, agent.id));
+    const [recipient] = await db.insert(agents).values({ companyId: company.id, name: "Recipient", role: "engineer", reportsTo: agent.id }).returning();
+    const run = await liveRun(company.id, agent.id);
+    const [issue] = await db.insert(issues).values({ companyId: company.id, title: "Concurrent handoff", status: "in_progress",
+      assigneeAgentId: agent.id, executionRunId: run.id, checkoutRunId: run.id }).returning();
+    await db.update(heartbeatRuns).set({ issueId: issue.id, contextSnapshot: { issueId: issue.id } }).where(eq(heartbeatRuns.id, run.id));
+    const [caseRow] = await db.insert(cases).values({ companyId: company.id, caseNumber: 1, identifier: `CASE-${randomUUID()}`,
+      caseType: "work", title: "Concurrent handoff", workIssueId: issue.id }).returning();
+    await instanceSettingsService(db).updateExperimental({ enableCases: true });
+    const deps = callbacks(db), state = createHeartbeatRunState(db);
+    let enter!: () => void, release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const released = new Promise<void>(resolve => { release = resolve; });
+    // Stop has committed its durable task/run fence, but provider/process
+    // cancellation has not started. This was the old acceptance race window.
+    deps.getAgent.mockImplementationOnce(async id => { enter(); await released; return state.getAgent(id); });
+    const stopping = createHeartbeatRunControl(db, deps).cancelRunInternal(run.id, "Operator Stop", {
+      resultJson: { cancelledByActorType: "user", cancelledByUserId: "operator" },
+    });
+    try {
+      await entered;
+      expect((await state.getRun(run.id))?.status).toBe("running");
+      const routing = { idempotencyKey: `after-stop-${destination}`, case: { id: caseRow.id }, instructions: "Attempt a late handoff",
+        expectedHandoffVersion: 0, expectedIssueStatusVersion: 0 };
+      await expect(caseHandoffService(db).handoff(company.id, { type: "agent", companyId: company.id, agentId: agent.id, runId: run.id },
+        destination === "done" ? { ...routing, to: "done" } : { ...routing, toAgentId: recipient.id, phase: "verification" }))
+        .rejects.toMatchObject({ status: 403, details: { code: "agent_run_cancelled" } });
+      expect(await db.select().from(caseHandoffs).where(eq(caseHandoffs.caseId, caseRow.id))).toHaveLength(0);
+    } finally { release(); await stopping; }
+    expect((await state.getRun(run.id))?.status).toBe("cancelled");
   });
 
   it.each(["ephemeral", "reuse_by_environment"] as const)("keeps %s cancellation eligible for retention when teardown loses the task lock", async leasePolicy => {

@@ -78,6 +78,16 @@ describe("personal Muse control plane",()=>{
     const [binding]=await db.select().from(bindings).where(eq(bindings.id,f.binding.id));
     return {...f,binding,ticket,oauth,client,verifier,input,authorizationUrl,tokenInput,tokens,subject};
   }
+  it("permits a paused handoff recipient authority read while retaining connection revocation checks", async () => {
+    const f = await oauthFixture(true);
+    const ref = { companyId: f.company.id, agentId: f.agent.id, bindingId: f.binding.id, bindingGeneration: f.binding.generation };
+    await expect(f.broker.authorizingUserIdForBinding(ref)).resolves.toBe(f.operatorId);
+    await db.update(agents).set({ status: "paused" }).where(eq(agents.id, f.agent.id));
+    await expect(f.broker.authorizingUserIdForBinding(ref)).rejects.toMatchObject({ status: 403 });
+    await expect(f.broker.authorizingUserIdForBinding(ref, { allowPaused: true })).resolves.toBe(f.operatorId);
+    await db.update(bindings).set({ revokedAt: new Date() }).where(eq(bindings.id, f.binding.id));
+    await expect(f.broker.authorizingUserIdForBinding(ref, { allowPaused: true })).rejects.toMatchObject({ status: 403 });
+  });
   async function active(provided?:Awaited<ReturnType<typeof fixture>>,afterSettle?: (command:ExternalProviderOperation)=>Promise<void>) {
     const f=provided??await fixture(),runId=randomUUID(),session=randomUUID(),turnId="turn_"+randomUUID();
     const [issue]=await db.insert(issues).values({companyId:f.company.id,title:"Muse task",status:"in_progress",assigneeAgentId:f.agent.id,responsibleUserId:f.operatorId}).returning();

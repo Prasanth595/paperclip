@@ -1,4 +1,5 @@
 import { measureRunPhase } from "../execution-preparation-timing.js";
+import { pendingCaseHandoffForRun } from "./case-handoff-lifecycle.js";
 import { NON_RETRYABLE_PREFLIGHT_FAILURE_CODES, isHeartbeatRunTerminalStatus } from "./run-lifecycle.js";
 import { ChatControlRecoveryUnresolvedError } from "./queue.js";
 import { readTransientRecoveryContractFromRun, readHeartbeatRunErrorFamily, isTransientWorkspaceGitScanCode } from "./retries.js";
@@ -460,6 +461,42 @@ export function createHeartbeatRunCompletion(db: Db, dependencies: HeartbeatRunC
               "adapter_failed")
             : null;
 
+    async function persistSessionState(finalizedRun: Run) {
+      await updateRuntimeState(
+        agent,
+        finalizedRun,
+        adapterResult,
+        { legacySessionId: nextSessionState.legacySessionId },
+        normalizedUsage,
+      );
+      if (!taskKey) return;
+      if (
+        adapterResult.clearSession ||
+        (!nextSessionState.params && !nextSessionState.displayId)
+      ) {
+        await clearTaskSessions(agent.companyId, agent.id, {
+          taskKey,
+          adapterType: agent.adapterType,
+          expectedRunId: finalizedRun.id,
+        });
+      } else {
+        await upsertTaskSession({
+          companyId: agent.companyId,
+          agentId: agent.id,
+          adapterType: agent.adapterType,
+          taskKey,
+          sessionParamsJson: attachPaperclipSessionMetadataToSessionParams(
+            nextSessionState.params,
+            configuredModel,
+            sessionConfigMetadata,
+          ),
+          sessionDisplayId: nextSessionState.displayId,
+          lastRunId: finalizedRun.id,
+          lastError: runErrorMessage,
+        });
+      }
+    }
+
     let logSummary: {
       bytes: number | null;
       sha256?: string | null;
@@ -714,6 +751,14 @@ export function createHeartbeatRunCompletion(db: Db, dependencies: HeartbeatRunC
       }
       const livenessRun = finalizedRun;
       await measureRunPhase("completion.summary", () => refreshContinuationSummaryForRun(livenessRun, agent));
+      if (await pendingCaseHandoffForRun(db, livenessRun.id, livenessRun.companyId)) {
+        // The returning agent must resume its own settled session with the
+        // configuration metadata used for this run. Persist before release,
+        // which can make a same-agent successor eligible immediately.
+        await persistSessionState(livenessRun);
+        await releaseIssueExecutionAndPromote(livenessRun, { suppressImmediateRecovery: true });
+        return;
+      }
       const skipRunIssueComment =
         parseObject(livenessRun.contextSnapshot).skipIssueComment === true;
       let resolvedPresentationDecision: RunPresentationDecision | null =
@@ -983,43 +1028,7 @@ export function createHeartbeatRunCompletion(db: Db, dependencies: HeartbeatRunC
     }
 
     if (finalizedRun) {
-      await updateRuntimeState(
-        agent,
-        finalizedRun,
-        adapterResult,
-        {
-          legacySessionId: nextSessionState.legacySessionId,
-        },
-        normalizedUsage,
-      );
-      if (taskKey) {
-        if (
-          adapterResult.clearSession ||
-          (!nextSessionState.params && !nextSessionState.displayId)
-        ) {
-          await clearTaskSessions(agent.companyId, agent.id, {
-            taskKey,
-            adapterType: agent.adapterType,
-            expectedRunId: finalizedRun.id,
-          });
-        } else {
-          await upsertTaskSession({
-            companyId: agent.companyId,
-            agentId: agent.id,
-            adapterType: agent.adapterType,
-            taskKey,
-            sessionParamsJson:
-              attachPaperclipSessionMetadataToSessionParams(
-                nextSessionState.params,
-                configuredModel,
-                sessionConfigMetadata,
-              ),
-            sessionDisplayId: nextSessionState.displayId,
-            lastRunId: finalizedRun.id,
-            lastError: runErrorMessage,
-          });
-        }
-      }
+      await persistSessionState(finalizedRun);
     }
     await finalizeAgentStatus(agent.id, outcome, runErrorMessage, {
       keepIdleOnFailure:
@@ -1192,6 +1201,10 @@ export function createHeartbeatRunCompletion(db: Db, dependencies: HeartbeatRunC
         );
       }
       await measureRunPhase("completion.summary", () => refreshContinuationSummaryForRun(livenessRun, agent));
+      if (await pendingCaseHandoffForRun(db, livenessRun.id, livenessRun.companyId)) {
+        await releaseIssueExecutionAndPromote(livenessRun, { suppressImmediateRecovery: true });
+        return;
+      }
       if (
         !isWorkspaceValidationFailedRun(livenessRun) &&
         !isConfigurationIncompleteFailedRun(livenessRun)

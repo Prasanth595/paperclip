@@ -1,4 +1,8 @@
 import { DELIVERY_QUEUES, notifyDeliveryWork } from "../delivery-work-notifications.js";
+import { caseHandoffService } from "../case-handoffs.js";
+import { caseIdForApiCapture, createNativeCaseSchema, executeNativeCaseTool, NATIVE_CASE_OPERATIONS } from "./native-case-tools.js";
+import { assertNoCaseHandoffMutation } from "../heartbeat/case-handoff-lifecycle.js";
+import { handoffCaseSchema } from "@paperclipai/shared";
 import { skillAccessService } from "../skill-access.js";
 import { withExternalExecutionAdmission, type ExternalAdmissionTransaction } from "../../modules/external-agents/index.js";
 import { callTaskWorkspaceTool } from "../task-workspace-tools.js";
@@ -118,7 +122,7 @@ const IMPLEMENTED_OPERATIONS = new Set([
   "read_agent_instructions", "update_agent_instructions", "get_agent_instruction_history", "restore_agent_instructions",
   "search_api", "call_api", "hire_agent",
   "get_task_context", "get_task_history", "search_tasks", "report_progress", "set_task_title", "set_task_monitor",
-  "request_human_input",
+  "request_human_input", "handoff_case", ...NATIVE_CASE_OPERATIONS,
   "get_workspace", "list_workspaces", "select_workspace", "prepare_repository", "create_skill", "update_skill", "create_task", "reassign_task", "set_dependencies", "create_project", "list_project_repositories", "list_projects", "register_deliverable",
   "list_documents", "read_document", "list_document_revisions", "write_document",
   "list_agents", "get_agent", "list_approvals", "get_approval", "get_approval_context",
@@ -128,7 +132,7 @@ const IMPLEMENTED_OPERATIONS = new Set([
 export const MUSE_NATIVE_OPERATIONS = new Set([
   "get_identity", "list_people",
   "submit_complaint", "submit_suggestion", "get_task_context", "get_task_history", "search_tasks", "report_progress", "set_task_title", "set_task_monitor",
-  "create_task", "reassign_task", "set_dependencies", "create_project", "list_projects", "list_documents", "read_document", "list_document_revisions", "write_document",
+  "create_task", "handoff_case", ...NATIVE_CASE_OPERATIONS, "reassign_task", "set_dependencies", "create_project", "list_projects", "list_documents", "read_document", "list_document_revisions", "write_document",
   "list_agents", "get_agent", "list_approvals", "get_approval", "get_approval_context", "read_current_wake_comments", "resolve_review",
 ]);
 
@@ -157,6 +161,7 @@ type Binding = {
   assignedMcpTools?: Awaited<ReturnType<typeof createAssignedMcpTools>>;
   apiToolsEnabled?: boolean;
   workMode?: "standard" | "planning" | "ask";
+  casesEnabled?: boolean;
   workspaceRoot?: string;
   workspaceBridge?: boolean;
   /** Pinned provider identity; configuration edits cannot remove API file guards. */
@@ -260,6 +265,7 @@ export class PaperclipRunnerToolAuthority {
       CAPABILITY_SEMANTIC_TOOL_CATALOG.filter(
         (descriptor) =>
           IMPLEMENTED_OPERATIONS.has(descriptor.operationId) &&
+          (!(descriptor.operationId === "handoff_case" || NATIVE_CASE_OPERATIONS.has(descriptor.operationId)) || this.binding.casesEnabled === true) &&
           (!this.binding.firstPartyOnly || !EXTERNAL_WORKSPACE_OPERATIONS.has(descriptor.operationId)) &&
           (runnerApiToolsEnabled(
             this.binding.companyId,
@@ -323,6 +329,31 @@ export class PaperclipRunnerToolAuthority {
     callId: string;
     arguments: unknown;
   }): Promise<unknown> {
+    if ((call.tool === "handoff_case" || call.tool === "create_case") && !this.binding.nativeReview) {
+      if (this.binding.workMode && this.binding.workMode !== "standard") throw forbidden("Case tools require standard work mode");
+      const create = call.tool === "create_case" ? createNativeCaseSchema.parse(call.arguments) : null;
+      if (this.binding.casesEnabled !== true) throw forbidden("Cases are disabled");
+      if (this.binding.museRuntime) await this.binding.assertBridgeAuthority?.();
+      // Both operations use the principal-scoped handoff ledger. A committed
+      // receipt stays replayable after ownership moved; fresh work reauthorizes.
+      const [run] = await this.db.select().from(heartbeatRuns).where(and(eq(heartbeatRuns.id, this.binding.runId),
+        eq(heartbeatRuns.companyId, this.binding.companyId), eq(heartbeatRuns.agentId, this.binding.agentId)));
+      if (!run) throw forbidden("Run binding unavailable");
+      const request = create ? {
+        idempotencyKey: create.idempotencyKey,
+        case: { create: { caseType: create.caseType, title: create.title,
+          ...(create.summary !== undefined ? { summary: create.summary } : {}),
+          ...(create.fields !== undefined ? { fields: create.fields } : {}),
+          ...(create.projectId !== undefined ? { projectId: create.projectId } : {}),
+        } },
+        ...create.kickoff,
+        workflow_document_text: create.workflow_document_text,
+        ...(create.initialDocuments !== undefined ? { initialDocuments: create.initialDocuments } : {}),
+      } : call.arguments;
+      return caseHandoffService(this.db).handoff(this.binding.companyId, this.#privacyActor(run), handoffCaseSchema.parse(request), {
+        beforeAccept: async tx => { await this.#lockAuthorizedMutationContext(tx); },
+      });
+    }
     if (this.binding.museRuntime) {
       await this.binding.assertBridgeAuthority?.();
       if (!MUSE_NATIVE_OPERATIONS.has(call.tool)) throw forbidden("This operation is outside the Muse first-party runtime profile");
@@ -523,6 +554,13 @@ export class PaperclipRunnerToolAuthority {
       throw new Error("paperclip_runner_tool_mode_denied");
     }
     switch (call.tool) {
+      case "read_case":
+      case "update_case":
+        if (context.issue.workMode !== "standard") throw forbidden("Case tools require standard work mode");
+        return executeNativeCaseTool({ db: this.db, binding: this.binding, actor: this.#privacyActor(context.run),
+          tool: call.tool, arguments: call.arguments,
+          callApi: (receiptKey, request) => this.#callApi(receiptKey, request, { dedicatedCaseTool: call.tool, caseId: request.pathParams?.id }),
+        });
       case "submit_complaint":
       case "submit_suggestion": {
         const parsed = agentCommentaryToolInputSchema.safeParse(call.arguments);
@@ -797,10 +835,24 @@ export class PaperclipRunnerToolAuthority {
       this.binding.runId, context.run.responsibleUserId, this.#apiScope(context), this.binding.externalAuthorizingUserId);
   }
 
-  async #callApi(callId: string, value: unknown): Promise<unknown> {
+  async #callApi(callId: string, value: unknown, options?: { dedicatedCaseTool: string; caseId?: string }): Promise<unknown> {
     const bound = await this.#boundContext();
     const context = { ...this.binding, issueIdentifier: bound.issue.identifier, workMode: bound.issue.workMode };
     const { input, operation } = validateRunnerApiCall(value, context);
+    // Only the strict dedicated case adapter may use its exact mapped route when
+    // generic API discovery/calls are disabled. All route/run guards still apply.
+    const dedicatedCaseRoute = options && ["read_case", "update_case"].includes(options.dedicatedCaseTool)
+      && operation.dedicatedTools.includes(options.dedicatedCaseTool)
+      && input.pathParams?.id === options.caseId
+      && this.binding.casesEnabled === true && bound.issue.workMode === "standard";
+    const assertAvailable = (workMode: string) => {
+      if (options && workMode !== "standard") throw forbidden("Case tools require standard work mode");
+      if (!dedicatedCaseRoute && !runnerApiToolsEnabled(this.binding.companyId, this.binding.apiToolsEnabled)) {
+        throw new Error("paperclip_runner_tool_not_advertised");
+      }
+    };
+    const caseCaptureId = dedicatedCaseRoute ? options!.caseId
+      : await caseIdForApiCapture(this.db, this.binding.companyId, operation.path, input.pathParams);
     if (this.binding.firstPartyOnly && /\/(?:workspaces|workspace-runtime|repositories|tool-gateway|tool-connections|tool-profiles|tools|connection-intents|connections|plugins)(?:\/|$)/.test(operation.path)) throw forbidden("Third-party tools through Paperclip are unavailable for this Grok Bot connection.");
     const sensitiveResponse = runnerApiSensitiveResponse(operation.method, operation.path);
     await this.#assertDotApiFileAccess(operation.path, input);
@@ -812,12 +864,12 @@ export class PaperclipRunnerToolAuthority {
       let reservationId: string | undefined;
       let storageAttempted = false;
       const current = await this.#boundContext();
-      if (!runnerApiToolsEnabled(this.binding.companyId, this.binding.apiToolsEnabled)) throw new Error("paperclip_runner_tool_not_advertised");
+      assertAvailable(current.issue.workMode);
       const result = await executeRunnerApi(input, { ...context, workMode: current.issue.workMode }, {
         apiUrl, token,
         beforeDispatch: async () => {
           const fresh = await this.#boundContext();
-          if (!runnerApiToolsEnabled(this.binding.companyId, this.binding.apiToolsEnabled)) throw new Error("paperclip_runner_tool_not_advertised");
+          assertAvailable(fresh.issue.workMode);
           validateRunnerApiCall(input, { ...context, workMode: fresh.issue.workMode });
           await this.#assertDotApiFileAccess(operation.path, input);
         },
@@ -831,7 +883,7 @@ export class PaperclipRunnerToolAuthority {
           if (!reservationId) throw new Error("API response storage reservation is missing");
           const storage = this.binding.storage ?? getStorageService();
           storageAttempted = true;
-          const saved = await storage.putFile({ companyId: this.binding.companyId, namespace: "runner-api", originalFilename: contentType.includes("json") ? "response.json" : "response.bin", contentType, ...(Buffer.isBuffer(bytes) ? { body: bytes } : { body: createReadStream(bytes.path), byteSize: bytes.byteSize, sha256: bytes.sha256 }) });
+          const saved = await storage.putFile({ companyId: this.binding.companyId, namespace: caseCaptureId ? `cases/${caseCaptureId}/runner-api` : "runner-api", originalFilename: contentType.includes("json") ? "response.json" : "response.bin", contentType, ...(Buffer.isBuffer(bytes) ? { body: bytes } : { body: createReadStream(bytes.path), byteSize: bytes.byteSize, sha256: bytes.sha256 }) });
           const asset = await this.db.transaction(async tx => {
             await this.#lockApiCaptureCompany(tx as unknown as Db);
             const asset = await assetService(tx as unknown as Db).create(this.binding.companyId, { ...saved, createdByAgentId: this.binding.agentId });
@@ -932,7 +984,9 @@ export class PaperclipRunnerToolAuthority {
         const [usage] = await tx.select({ bytes: sql<string>`
           coalesce((select sum(${assets.byteSize}) from ${assets}
             where ${assets.companyId} = ${this.binding.companyId}
-              and ${assets.objectKey} like ${`${this.binding.companyId}/runner-api/%`}), 0)
+              and (${assets.objectKey} like ${`${this.binding.companyId}/runner-api/%`}
+                or exists (select 1 from ${runnerApiResponseReservations} capture
+                  where capture.asset_id = ${assets.id} and capture.company_id = ${this.binding.companyId}))), 0)
           + coalesce((select sum(${runnerApiResponseReservations.reservedBytes}) from ${runnerApiResponseReservations}
             where ${runnerApiResponseReservations.companyId} = ${this.binding.companyId}
               and ${runnerApiResponseReservations.assetId} is null), 0)` }).from(heartbeatRuns).where(eq(heartbeatRuns.id, this.binding.runId));
@@ -2389,6 +2443,7 @@ export class PaperclipRunnerToolAuthority {
       if (!decision.allowed) throw forbidden(decision.explanation);
       await this.binding.assertBridgeAuthority?.(tx);
     }
+    await assertNoCaseHandoffMutation(tx, this.binding.runId, this.binding.issueId);
     return context;
   }
 
