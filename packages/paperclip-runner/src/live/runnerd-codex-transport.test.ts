@@ -5670,14 +5670,34 @@ it.each([
                 entry.envelope.runId === oldIdentity.runId,
             ),
           ).toBe(false);
+          let preparedAttachment: typeof retired | undefined;
+          let liveSuccessor: typeof retired | undefined;
           await vi.waitFor(
-            () =>
-              expect(
-                containsAttachedEvent(cores[cores.length - 1]!.store.state),
-              ).toBe(true),
+            () => {
+              preparedAttachment = [...preparedStates]
+                .reverse()
+                .find(containsAttachedEvent);
+              liveSuccessor = cores[cores.length - 1]!.store.state;
+              const attachedInSuccessor =
+                containsAttachedEvent(liveSuccessor);
+              // Activation may happen before attachRun observes the command,
+              // while its durable event can still be committed by the old
+              // prepared epoch. Accept either durable owner, never a guess
+              // based on which observer happened to wake first.
+              expect(Boolean(preparedAttachment) || attachedInSuccessor).toBe(
+                true,
+              );
+              expect(Boolean(preparedAttachment)).not.toBe(attachedInSuccessor);
+            },
             { timeout: 10_000 },
           );
-          attachedRecord = cores[cores.length - 1]!.store.state;
+          if (preparedAttachment) {
+            expect(preparedAttachment.identity.runId).toBe(oldIdentity.runId);
+            attachedRecord = preparedAttachment;
+          } else {
+            expect(liveSuccessor!.identity.runId).toBe("run-warm-ack-next");
+            attachedRecord = liveSuccessor!;
+          }
         } else {
           // In the ordinary ordering, the old epoch durably commits the
           // attachment before rotation; the successor must not duplicate it.
