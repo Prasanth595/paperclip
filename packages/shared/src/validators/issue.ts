@@ -581,6 +581,12 @@ export const retryWorkspaceExportSchema = z.object({
   repairNote: z.string().trim().min(20).max(12000),
 }).strict();
 
+export const recoverWorkspaceSchema = z.object({
+  actionId: z.string().guid(),
+  runId: z.string().guid(),
+  idempotencyKey: z.string().guid(),
+}).strict();
+
 export const reconstructWorkspaceSchema = z.object({
   actionId: z.string().guid(),
   runId: z.string().guid(),

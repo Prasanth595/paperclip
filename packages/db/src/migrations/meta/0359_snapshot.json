@@ -1,6 +1,6 @@
 {
-  "id": "cdc3c40b-07fc-4ccf-896d-4ece518c4826",
-  "prevId": "ab82fb6d-abee-4334-9723-8d9684319aaf",
+  "id": "3b540468-0848-4a5d-a539-022ec5d0eb94",
+  "prevId": "87e839fc-31a1-460b-84d0-e2e7b9d9e546",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -15067,6 +15067,110 @@
           ],
           "onUpdate": "no action",
           "onDelete": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.company_observability": {
+      "name": "company_observability",
+      "schema": "",
+      "columns": {
+        "company_id": {
+          "name": "company_id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "revision": {
+          "name": "revision",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "enabled": {
+          "name": "enabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "destination": {
+          "name": "destination",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "capture": {
+          "name": "capture",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "credentials_secret_id": {
+          "name": "credentials_secret_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "header_names": {
+          "name": "header_names",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "last_test": {
+          "name": "last_test",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "company_observability_company_id_companies_id_fk": {
+          "name": "company_observability_company_id_companies_id_fk",
+          "tableFrom": "company_observability",
+          "columnsFrom": [
+            "company_id"
+          ],
+          "tableTo": "companies",
+          "columnsTo": [
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "cascade"
+        },
+        "company_observability_credentials_secret_id_company_secrets_id_fk": {
+          "name": "company_observability_credentials_secret_id_company_secrets_id_fk",
+          "tableFrom": "company_observability",
+          "columnsFrom": [
+            "credentials_secret_id"
+          ],
+          "tableTo": "company_secrets",
+          "columnsTo": [
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "set null"
         }
       },
       "compositePrimaryKeys": {},

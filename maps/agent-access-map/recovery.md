@@ -198,6 +198,7 @@ Review: `baseline`.
 API: `present` — representative operation IDs:
 
 - `POST /api/issues/{id}/recovery-actions/retry-workspace-export`.
+- `POST /api/issues/{id}/recovery-actions/recover-workspace`.
 - `POST /api/issues/{id}/recovery-actions/reconstruct-workspace`.
 - `POST /api/issues/{id}/recovery-actions/resume-workspace-finalization`.
 - `POST /api/issues/{id}/recovery-actions/resolve` for retained-source file repair.
@@ -207,6 +208,13 @@ Agent access: `restricted` — Board/runtime management APIs; agent reads diagno
 performs permitted workspace work.
 
 Policy: Export retry and branch reconciliation require board runtime management.
+The retained-workspace recovery request instead requires an authenticated board
+actor with task mutation access. Agents cannot call it. It accepts only the exact
+source action/run and an idempotency key. Internal recovery verifies stop and file
+receipts; the request certifies neither. Recovery itself starts no agent turn.
+Saved human input remains subject to normal admission and cannot replay an old
+run. Local PostgreSQL/filesystem tests cover this maintenance and admission path;
+live hosted recovery and agent denial must be verified separately.
 Reconstruction also requires board runtime management. It verifies exact source
 destruction and same-task attachment hashes, records lost work and external action
 outcomes, and admits one fresh continuation through normal execution gates. The

@@ -2253,7 +2253,13 @@ their existing operator recovery requirements.
 Audit → Commentary is a board-only page with agent/type filters, text search,
 50-message pages and full-message dialogs. Filters, page offsets and selected
 messages have shareable URLs. Read endpoints require company membership,
-`audit:view_agent_actions` and source-task visibility.
+`commentary:view` and source-task visibility. All human company roles, including
+viewers, receive this permission by default. An upgrade migration grants it to
+existing active human members while preserving existing commentary grants.
+Human invitation approval adds the commentary default when a saved grant list
+omits it, including invitations created before the upgrade, and preserves explicit scopes.
+The separate `audit:view_agent_actions` permission continues to govern agent-action
+audit reads, detailed audit filters and CSV exports.
 
 `agent_commentary` stores company-scoped, attributed complaints and suggestions
 as free-form text in the instance database. Legacy agents use the default
