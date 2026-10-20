@@ -17,13 +17,6 @@ export type RecoveryEpisodeWakeUsage = {
   exhausted: boolean;
 };
 
-/**
- * One shared, durable budget for the three automatic recovery lanes. The lane
- * counters can reset when a source-state fingerprint changes or a new source
- * run mints a new wake, so the admission decision reads the persisted wake
- * rows for the issue instead. The rolling window keeps an old episode from
- * starving an issue that legitimately re-enters recovery much later.
- */
 export async function readRecoveryEpisodeWakeUsage(
   db: Db,
   input: { companyId: string; issueId: string },
