@@ -13,22 +13,21 @@ if (!support.supported) console.warn(`Workspace source lock tests require Postgr
 describePostgres("workspace source ownership during preparation", () => {
   let database: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>>;
   let db: ReturnType<typeof createDb>;
-  let role: string;
 
   beforeAll(async () => {
     database = await startEmbeddedPostgresTestDatabase("workspace-source-lock-");
     db = createDb(database.connectionString, { maxConnections: 1 });
     const rows = await db.execute(sql`select current_user as name`);
-    role = String(rows[0].name);
+    const role = String(rows[0].name);
     await db.execute(sql`alter role ${sql.identifier(role)} set idle_in_transaction_session_timeout = '1s'`);
   });
 
   afterAll(async () => {
-    if (db) {
-      await db.execute(sql`alter role ${sql.identifier(role)} reset idle_in_transaction_session_timeout`);
-      await db.$client.end({ timeout: 1 });
+    try {
+      await db?.$client.end({ timeout: 1 });
+    } finally {
+      await database?.cleanup();
     }
-    await database?.cleanup();
   });
 
   it("keeps preparation exclusive beyond the idle timeout while the ordinary pool stays usable", async () => {
