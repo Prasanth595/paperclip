@@ -161,6 +161,33 @@ describe.skipIf(!support.supported)("heartbeat lifecycle database wiring", () =>
     expect(persisted.usageJson).toEqual({ accountingReceiptReady: false, usageSource: "per_run", inputTokens: 8, outputTokens: 3 });
   });
 
+  it("sanitizes invalid Postgres text in terminal run status writes", async () => {
+    const { run } = await fixture();
+    let deep: Record<string, unknown> = { note: "bottom\u0000" };
+    for (let index = 0; index < 14; index += 1) deep = { nested: deep };
+    const stored = await createHeartbeatLifecycle(db, callbacks(db)).setRunStatus(run.id, "succeeded", {
+      resultJson: {
+        summary: "ok\u0000done",
+        transcript: "bad\uD800text\uDC00",
+        emoji: "rocket \u{1F680}",
+        nested: { note: "nul\u0000" },
+        ["bad\u0000key"]: "value",
+        deep,
+      },
+    });
+    expect(stored?.resultJson).toEqual({
+      summary: "okdone",
+      transcript: "bad\uFFFDtext\uFFFD",
+      emoji: "rocket \u{1F680}",
+      nested: { note: "nul" },
+      badkey: "value",
+      deep: expect.any(Object),
+    });
+    let cursor = (stored?.resultJson as Record<string, unknown>).deep as Record<string, unknown>;
+    for (let index = 0; index < 14; index += 1) cursor = cursor.nested as Record<string, unknown>;
+    expect(cursor.note).toBe("bottom");
+  });
+
   it.each(["claimed", "cancelled"] as const)("settles a %s wake without reviving a revoked request", async (status) => {
     const { wake } = await fixture();
     await db.update(agentWakeupRequests).set({ status }).where(eq(agentWakeupRequests.id, wake.id));
