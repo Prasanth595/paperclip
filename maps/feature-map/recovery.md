@@ -23,6 +23,13 @@ Agent access: [companion](../agent-access-map/recovery.md).
   permitted operator action; it does not claim an automatic path is still live.
 - `workspace`: workspace divergence/export failures show the applicable repair,
   reconcile, or isolated reissue action with evidence and authority checks.
+  Retained-file recovery runs in the harness with observed task progress and a
+  Retry recovery action only after transient failures. It preserves newer files,
+  keeps uncertain sources held, and delivers saved human input through ordinary
+  admission. The task does not expose infrastructure-certification forms or a
+  workspace link when the destination is disabled. Local PostgreSQL and real
+  filesystem regressions cover native and legacy recovery and one-time delivery;
+  hosted provider recovery remains separate acceptance.
 - `unknown-outcome`: uncertain external side effects require inspection and
   an explicit decision, not automatic replay.
 - `user-continuation`: saved user messages after a stop are reconsidered once

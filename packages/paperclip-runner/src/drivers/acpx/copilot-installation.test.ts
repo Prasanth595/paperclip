@@ -85,6 +85,11 @@ async function withCopilotTestPlatform<T>(arch: "x64" | "arm64", run: () => Prom
 vi.mock("./installation-integrity.js", () => ({ verifyNativeAcpxInstallation: vi.fn() }));
 
 describe("Copilot build-owned installation", () => {
+  it("admits the qualified profile without a pending qualification marker", () => {
+    expect(QUALIFIED_ACPX_PROFILES.copilot.agentProfileVersion).toBe(47);
+    expect(QUALIFIED_ACPX_PROFILES.copilot.qualificationStatus).toBeUndefined();
+  });
+
   it("preserves v12 history and changes only the version and four shared source bindings", () => {
     const prior = JSON.parse(readFileSync(new URL("../../../test/fixtures/copilot-profile-v12-identity.json", import.meta.url), "utf8"));
     const current = JSON.parse(readFileSync(new URL("../../../test/fixtures/copilot-profile-v13-identity.json", import.meta.url), "utf8"));
@@ -96,21 +101,18 @@ describe("Copilot build-owned installation", () => {
     const sortedPrior = Object.fromEntries(Object.entries(prior.declaration).sort(([a], [b]) => a.localeCompare(b)));
     expect(`sha256:${createHash("sha256").update(JSON.stringify(sortedPrior)).digest("hex")}`).toBe(prior.commandDigest);
     expect(current.commandDigest).not.toBe(prior.commandDigest);
-    expect(QUALIFIED_ACPX_PROFILES.copilot.qualificationStatus).toBe("pending");
   });
 
   it("preserves v13 history while binding the shared live request snapshot", () => {
     const prior = JSON.parse(readFileSync(new URL("../../../test/fixtures/copilot-profile-v13-identity.json", import.meta.url), "utf8"));
     const current = JSON.parse(readFileSync(new URL("../../../test/fixtures/copilot-profile-v14-identity.json", import.meta.url), "utf8"));
     expect(Object.keys(current.declaration).filter(key => current.declaration[key] !== prior.declaration[key]).sort()).toEqual(["agentProfileVersion", "semanticSidecarSourceSha256"]);
-    expect(QUALIFIED_ACPX_PROFILES.copilot.qualificationStatus).toBe("pending");
   });
 
   it("preserves v14 history while binding the corrected outbound ACPX delivery", () => {
     const prior = JSON.parse(readFileSync(new URL("../../../test/fixtures/copilot-profile-v14-identity.json", import.meta.url), "utf8"));
     const current = JSON.parse(readFileSync(new URL("../../../test/fixtures/copilot-profile-v15-identity.json", import.meta.url), "utf8"));
     expect(Object.keys(current.declaration).filter(key => current.declaration[key] !== prior.declaration[key]).sort()).toEqual(["acpxPatchSha256", "agentProfileVersion"]);
-    expect(QUALIFIED_ACPX_PROFILES.copilot.qualificationStatus).toBe("pending");
   });
 
   it("preserves v17 history while binding the shared Grok descriptor schema", () => {
@@ -119,7 +121,6 @@ describe("Copilot build-owned installation", () => {
     expect(Object.keys(current.declaration).filter(key => current.declaration[key] !== prior.declaration[key]).sort()).toEqual(["agentProfileVersion", "semanticSchemaBundleSourceSha256"]);
     expect(Object.keys(current.declaration).sort()).toEqual(Object.keys(prior.declaration).sort());
     expect(current.commandDigest).not.toBe(prior.commandDigest);
-    expect(QUALIFIED_ACPX_PROFILES.copilot.qualificationStatus).toBe("pending");
   });
 
   it("preserves the historical Muse v18 declaration without granting current launch", async () => {
@@ -133,7 +134,6 @@ describe("Copilot build-owned installation", () => {
     const sortedPrior = Object.fromEntries(Object.entries(prior.declaration).sort(([a], [b]) => a.localeCompare(b)));
     expect(`sha256:${createHash("sha256").update(JSON.stringify(sortedPrior)).digest("hex")}`).toBe(prior.commandDigest);
     expect(current.commandDigest).not.toBe(prior.commandDigest);
-    expect(QUALIFIED_ACPX_PROFILES.copilot.qualificationStatus).toBe("pending");
     vi.mocked(verifyNativeAcpxInstallation).mockClear();
     for (const override of [
       { commandDigest: prior.commandDigest },
@@ -176,7 +176,6 @@ describe("Copilot build-owned installation", () => {
       .toEqual(["agentProfileVersion", "semanticSchemaBundleSourceSha256", "semanticValidationSourceSha256", "semanticValidatorsSourceSha256"]);
     expect(Object.keys(current.declaration).sort()).toEqual(Object.keys(prior.declaration).sort());
     expect(current.commandDigest).not.toBe(prior.commandDigest);
-    expect(QUALIFIED_ACPX_PROFILES.copilot.qualificationStatus).toBe("pending");
   });
   it("binds both immutable v19 histories in a new combined v20 declaration", async () => {
     const current = JSON.parse(readFileSync(new URL("../../../test/fixtures/copilot-profile-v20-identity.json", import.meta.url), "utf8"));
@@ -202,7 +201,6 @@ describe("Copilot build-owned installation", () => {
       }
     }
     expect(verifyNativeAcpxInstallation).not.toHaveBeenCalled();
-    expect(QUALIFIED_ACPX_PROFILES.copilot.qualificationStatus).toBe("pending");
   });
 
   it("preserves v20 history while binding the controller-owned monitor continuation", async () => {
@@ -218,7 +216,6 @@ describe("Copilot build-owned installation", () => {
     expect(`sha256:${createHash("sha256").update(JSON.stringify(sorted)).digest("hex")}`).toBe(prior.commandDigest);
     await expect(verifyCopilotInstallation({ ...QUALIFIED_ACPX_PROFILES.copilot,
       agentProfileVersion: 20, commandDigest: prior.commandDigest })).rejects.toThrow("exact pinned");
-    expect(QUALIFIED_ACPX_PROFILES.copilot.qualificationStatus).toBe("pending");
   });
 
   it("preserves v22 history while binding the Claude-only preload metadata branch", async () => {
@@ -232,7 +229,6 @@ describe("Copilot build-owned installation", () => {
     expect(`sha256:${createHash("sha256").update(JSON.stringify(sorted)).digest("hex")}`).toBe(prior.commandDigest);
     await expect(verifyCopilotInstallation({ ...QUALIFIED_ACPX_PROFILES.copilot,
       agentProfileVersion: 22, commandDigest: prior.commandDigest })).rejects.toThrow("exact pinned");
-    expect(QUALIFIED_ACPX_PROFILES.copilot.qualificationStatus).toBe("pending");
   });
 
   it("preserves v23 history while binding shared observability diagnostic redaction", () => {

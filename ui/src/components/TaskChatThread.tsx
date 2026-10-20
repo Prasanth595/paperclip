@@ -1,3 +1,4 @@
+import { TaskChatShimmerScope } from "@/components/task-chat/TaskChatShimmer";
 import {
   ISSUE_DETAIL_CONTENT_PAINT_MARK,
   ISSUE_DETAIL_CONTENT_MEASURE,
@@ -2636,6 +2637,7 @@ export function TaskChatThread(props: TaskChatThreadProps) {
   );
   const optimisticRunnerStartup =
     assigneeUsesPaperclipRunner &&
+    !props.executionBlocked &&
     !tailRunId &&
     (runnerSubmissionPending ||
       commentItems.some(
@@ -3125,7 +3127,7 @@ export function TaskChatThread(props: TaskChatThreadProps) {
                                       }
                                     />
                                   ) : (
-                                    <>
+                                    <TaskChatShimmerScope items={tailItems}>
                                       <TaskChatLiveRunPill
                                         status={tailStatus}
                                         execution={
@@ -3152,7 +3154,7 @@ export function TaskChatThread(props: TaskChatThreadProps) {
                                                 : "Waiting for transcript...")
                                         }
                                       />
-                                    </>
+                                    </TaskChatShimmerScope>
                                   )}
                                 </div>
                               ) : null}
