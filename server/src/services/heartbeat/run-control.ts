@@ -915,8 +915,14 @@ export function createHeartbeatRunControl(db: Db, dependencies: HeartbeatRunCont
     let cancellationClaimed = false;
     if (handoffIssueId && supersedesCaseHandoff && options.resultJson?.caseHandoffYieldStop !== true) {
       const publications: ActivityPublication[] = [];
-      await db.transaction(async tx => {
+      const supersessionApplied = await db.transaction(async tx => {
         await tx.select({ id: issues.id }).from(issues).where(and(eq(issues.companyId, run!.companyId), eq(issues.id, handoffIssueId))).for("update");
+        if (options.expectedStatus) {
+          const [current] = await tx.select().from(heartbeatRuns).where(and(eq(heartbeatRuns.id, runId),
+            eq(heartbeatRuns.companyId, run!.companyId))).for("update");
+          if (!current || current.status !== options.expectedStatus) return false;
+          run = current;
+        }
         if (options.cancellationRequestId) {
           run = await claimCancellationRequest(tx as unknown as Db, runId, run!.companyId, options.cancellationRequestId,
             options.cancellationRequestedByUserId ?? null);
@@ -926,16 +932,29 @@ export function createHeartbeatRunControl(db: Db, dependencies: HeartbeatRunCont
         // authority in the same commit that cancels its outstanding intents,
         // before waiting for process/native Stop. Otherwise a handoff can be
         // accepted in the gap after this cancellation sweep.
+        const currentRun = run!;
+        const requestedAt = new Date().toISOString();
+        const guardedCancellation = options.expectedStatus ? {
+          cancellation: (currentRun.resultJson?.startupCancellation ? readRunCancellation(currentRun.resultJson) : null)
+            ?? requestedRunCancellation(options.resultJson ?? {}, reason),
+          // Promotion must remain fenced after this transaction releases the
+          // run lock, before the ordinary Stop path performs its settlement.
+          startupCancellation: { requestedAt, beforeNativeSelection: currentRun.runtimeMode === "legacy" && !currentRun.runtimeModeResolvedAt
+            && currentRun.executionStage === "preparing" && parseObject(currentRun.runnerProfileJson?.adapterDispatch).adapterType === "paperclip_runner" },
+        } : {};
         const [fenced] = await tx.update(heartbeatRuns).set({
           resultJson: sql`coalesce(${heartbeatRuns.resultJson}, '{}'::jsonb) || ${JSON.stringify({
-            executionCancellation: { state: "requested", requestedAt: new Date().toISOString() },
+            executionCancellation: { state: "requested", requestedAt }, ...guardedCancellation,
           })}::jsonb`,
         }).where(and(eq(heartbeatRuns.id, runId), eq(heartbeatRuns.companyId, run!.companyId),
-          inArray(heartbeatRuns.status, [...CANCELLABLE_HEARTBEAT_RUN_STATUSES]))).returning();
+          inArray(heartbeatRuns.status, options.expectedStatus ? [options.expectedStatus] : [...CANCELLABLE_HEARTBEAT_RUN_STATUSES]))).returning();
+        if (options.expectedStatus && !fenced) return false;
         if (fenced) run = fenced;
         await cancelCaseHandoffsForIssue(tx as unknown as Db, { companyId: run!.companyId, issueId: handoffIssueId, reason, publications });
+        return true;
       });
       publications.forEach(publishActivity);
+      if (!supersessionApplied) return null;
     }
     if (options.cancellationRequestId && !cancellationClaimed) {
       run = await claimCancellationRequest(db, runId, run.companyId, options.cancellationRequestId, options.cancellationRequestedByUserId ?? null);

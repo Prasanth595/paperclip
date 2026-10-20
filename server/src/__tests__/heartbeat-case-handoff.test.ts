@@ -3,17 +3,21 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { agents, agentWakeupRequests, authUsers, caseEvents, caseHandoffs, cases, companies, companyMemberships,
   createDb, heartbeatRuns, issueComments, issues } from "@paperclipai/db";
+import { issueRecoveryActions, issueRelations } from "@paperclipai/db";
 import { startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 import { heartbeatService } from "../services/heartbeat.js";
 import { runningProcesses } from "../adapters/index.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
-import { isCaseHandoffSourceReleased } from "../services/heartbeat/case-handoff-lifecycle.js";
+import { assertNoCaseHandoffMutation, isCaseHandoffSourceReleased, recordCaseHandoffExecutionReleased } from "../services/heartbeat/case-handoff-lifecycle.js";
+import { caseHandoffDeliveryService } from "../services/case-handoff-delivery.js";
+import { conflict } from "../errors.js";
 
 describe("durable case handoff queue admission", () => {
   let temporary: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>>;
   let db: ReturnType<typeof createDb>;
   const heldRuns = new Set<string>();
-  beforeAll(async () => { temporary = await startEmbeddedPostgresTestDatabase("case-handoff-queue-"); db = createDb(temporary.connectionString); });
+  beforeAll(async () => { temporary = await startEmbeddedPostgresTestDatabase("case-handoff-queue-"); db = createDb(temporary.connectionString);
+    await instanceSettingsService(db).updateExperimental({ enableCases: true }); });
   afterAll(async () => { for (const id of heldRuns) runningProcesses.delete(id); await temporary?.cleanup(); });
   async function fixture() {
     const companyId = randomUUID(), agentId = randomUUID(), issueId = randomUUID(), caseId = randomUUID(), handoffId = randomUUID(),
@@ -62,6 +66,77 @@ describe("durable case handoff queue admission", () => {
     await expect(heartbeatService(db).wakeup(f.agentId, { ...f.options,
       durableCaseHandoffRequest: { ...f.options.durableCaseHandoffRequest, expectedIssueStatusVersion: 42 } })).rejects.toThrow("assignment");
     expect(await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.id, f.wakeupRequestId))).toHaveLength(0);
+  });
+  it.each(["dependencies", "workspace", "recovery", "daily_cap"] as const)(
+    "retains the same unspent receipt across a %s hold and a delivery worker restart", async hold => {
+      const f = await fixture();
+      let clear!: () => Promise<void>;
+      if (hold === "dependencies") {
+        const [blocker] = await db.insert(issues).values({ companyId: f.companyId, title: "Late blocker", status: "todo" }).returning();
+        await db.insert(issueRelations).values({ companyId: f.companyId, issueId: blocker.id, relatedIssueId: f.issueId, type: "blocks" });
+        clear = async () => { await db.update(issues).set({ status: "done" }).where(eq(issues.id, blocker.id)); };
+      } else if (hold === "workspace") {
+        await instanceSettingsService(db).updateExperimental({ enableIsolatedWorkspaces: true });
+        await db.update(issues).set({ executionWorkspaceSettings: { mode: "isolated_workspace", workspaceStrategy: { type: "git_worktree" } } })
+          .where(eq(issues.id, f.issueId));
+        clear = async () => { await db.update(issues).set({ executionWorkspaceSettings: null }).where(eq(issues.id, f.issueId)); };
+      } else if (hold === "recovery") {
+        const [action] = await db.insert(issueRecoveryActions).values({ companyId: f.companyId, sourceIssueId: f.issueId,
+          kind: "execution_reconciliation", cause: "uncertain_provider_action", fingerprint: randomUUID(), nextAction: "Confirm provider settlement", status: "active" }).returning();
+        clear = async () => { await db.update(issueRecoveryActions).set({ status: "resolved", resolvedAt: new Date() }).where(eq(issueRecoveryActions.id, action.id)); };
+      } else {
+        await db.update(agents).set({ runtimeConfig: { heartbeat: { maxConcurrentRuns: 1, wakeOnDemand: true, maxDailyRuns: 0 } } })
+          .where(eq(agents.id, f.agentId));
+        clear = async () => { await db.update(agents).set({ runtimeConfig: { heartbeat: { maxConcurrentRuns: 1, wakeOnDemand: true } } }).where(eq(agents.id, f.agentId)); };
+      }
+      const at = new Date(Date.now() + 60_000);
+      await caseHandoffDeliveryService(db, { heartbeat: heartbeatService(db), now: () => at }).sweepPending();
+      expect((await db.select().from(caseHandoffs).where(eq(caseHandoffs.id, f.handoffId)))[0])
+        .toMatchObject({ state: "pending_dispatch", wakeupRequestId: f.wakeupRequestId, leaseExpiresAt: null });
+      expect((await db.select().from(issues).where(eq(issues.id, f.issueId)))[0])
+        .toMatchObject({ status: "todo", assigneeAgentId: f.agentId });
+      expect(await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.id, f.wakeupRequestId))).toHaveLength(0);
+      expect(await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.wakeupRequestId, f.wakeupRequestId))).toHaveLength(0);
+      await clear();
+      const restarted = heartbeatService(db);
+      await caseHandoffDeliveryService(db, { heartbeat: restarted, now: () => new Date(at.getTime() + 61_000) }).sweepPending();
+      const [accepted] = await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.id, f.wakeupRequestId));
+      expect(accepted).toMatchObject({ status: "queued", payload: { issueId: f.issueId } });
+      expect((await db.select().from(caseHandoffs).where(eq(caseHandoffs.id, f.handoffId)))[0]?.state).toBe("delivered");
+      expect(await heartbeatService(db).wakeup(f.agentId, f.options)).toMatchObject({ id: accepted.runId, wakeupRequestId: f.wakeupRequestId });
+      expect(await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.id, f.wakeupRequestId))).toHaveLength(1);
+      expect(await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.wakeupRequestId, f.wakeupRequestId))).toHaveLength(1);
+    },
+  );
+  it("retains a handoff and its mutation fence after an unconfirmed Stop, then delivers after settlement", async () => {
+    const f = await fixture(), sourceRunId = randomUUID();
+    await db.insert(heartbeatRuns).values({ id: sourceRunId, companyId: f.companyId, agentId: f.agentId,
+      status: "running", runtimeMode: "legacy", contextSnapshot: { issueId: f.issueId }, responsibleUserId: f.userId });
+    await db.update(issues).set({ executionRunId: sourceRunId }).where(eq(issues.id, f.issueId));
+    await db.update(caseHandoffs).set({ state: "awaiting_release", sourceRunId, fromAgentId: f.agentId,
+      createdAt: new Date(Date.now() - 31_000) }).where(eq(caseHandoffs.id, f.handoffId));
+    const at = new Date(Date.now() + 60_000), heartbeat = heartbeatService(db);
+    await caseHandoffDeliveryService(db, { now: () => at, heartbeat: { wakeup: heartbeat.wakeup,
+      requestCaseHandoffYield: async () => { throw conflict("Adapter cleanup is still settling", { code: "adapter_stop_pending" }); },
+    } }).sweepPending();
+    expect((await db.select().from(caseHandoffs).where(eq(caseHandoffs.id, f.handoffId)))[0])
+      .toMatchObject({ state: "awaiting_release", cancelledAt: null, leaseExpiresAt: null });
+    await expect(assertNoCaseHandoffMutation(db, sourceRunId, f.issueId)).rejects.toThrow("handed off");
+    expect(await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.id, f.wakeupRequestId))).toHaveLength(0);
+    await db.update(heartbeatRuns).set({ status: "succeeded", finishedAt: new Date() }).where(eq(heartbeatRuns.id, sourceRunId));
+    await recordCaseHandoffExecutionReleased(db, sourceRunId, f.issueId);
+    const restarted = heartbeatService(db);
+    await caseHandoffDeliveryService(db, { now: () => new Date(at.getTime() + 61_000), heartbeat: {
+      wakeup: async (agentId, options) => {
+        await restarted.wakeup(agentId, options);
+        throw new Error("Controller acknowledgement lost after queue commit");
+      },
+    } }).sweepPending();
+    expect((await db.select().from(caseHandoffs).where(eq(caseHandoffs.id, f.handoffId)))[0]?.state).toBe("pending_dispatch");
+    expect(await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.wakeupRequestId, f.wakeupRequestId))).toHaveLength(1);
+    await caseHandoffDeliveryService(db, { heartbeat: heartbeatService(db), now: () => new Date(at.getTime() + 122_000) }).sweepPending();
+    expect((await db.select().from(caseHandoffs).where(eq(caseHandoffs.id, f.handoffId)))[0]?.state).toBe("delivered");
+    expect(await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.wakeupRequestId, f.wakeupRequestId))).toHaveLength(1);
   });
   it("admits an authenticated new phase after two case-only runs without treating its agent comment as an idle re-wake", async () => {
     const f = await fixture();

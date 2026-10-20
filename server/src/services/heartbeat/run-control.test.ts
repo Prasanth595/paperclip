@@ -243,6 +243,32 @@ describe.skipIf(!support.supported)("heartbeat run-control database wiring", () 
     )).toMatchObject({ status: "cancelled" });
   });
 
+  it.each(["queued", "running"] as const)("preserves case intent when a guarded Stop loses to %s promotion", async status => {
+    const { company, agent } = await fixture();
+    const [issue] = await db.insert(issues).values({ companyId: company.id, title: "Promoted case work", status: "todo", assigneeAgentId: agent.id }).returning();
+    const [run] = await db.insert(heartbeatRuns).values({ companyId: company.id, agentId: agent.id, issueId: issue.id,
+      status: "scheduled_retry", runtimeMode: "legacy", runtimeModeResolvedAt: new Date(), contextSnapshot: { issueId: issue.id } }).returning();
+    const [caseRow] = await db.insert(cases).values({ companyId: company.id, caseNumber: 1, identifier: `CASE-${randomUUID()}`,
+      caseType: "work", title: "Promoted case work", workIssueId: issue.id, handoffVersion: 1 }).returning();
+    const [handoff] = await db.insert(caseHandoffs).values({ companyId: company.id, caseId: caseRow.id, issueId: issue.id, version: 1,
+      sourceRunId: run.id, fromAgentId: agent.id, toAgentId: agent.id, phase: "verification", instructions: "Verify",
+      actorType: "user", actorId: "operator", state: "awaiting_release", wakeupRequestId: randomUUID(),
+      idempotencyKey: randomUUID(), inputFingerprint: "fixture" }).returning();
+    const deps = callbacks(db), originalGetRun = deps.getRun.getMockImplementation()!;
+    deps.getRun.mockImplementationOnce(async id => {
+      const snapshot = await originalGetRun(id);
+      await db.update(heartbeatRuns).set({ status, startedAt: new Date() }).where(eq(heartbeatRuns.id, id));
+      return snapshot;
+    });
+    expect(await createHeartbeatRunControl(db, deps).cancelRunInternal(run.id, "Recover previous Stop", {
+      expectedStatus: "scheduled_retry", resultJson: { cancelledByActorType: "user", cancelledByUserId: "operator" },
+    })).toBeNull();
+    expect(await originalGetRun(run.id)).toMatchObject({ status, resultJson: null });
+    expect((await db.select().from(caseHandoffs).where(eq(caseHandoffs.id, handoff.id)))[0])
+      .toMatchObject({ state: "awaiting_release", cancelledAt: null });
+    expect(deps.appendRunEvent).not.toHaveBeenCalled();
+  });
+
   it("blocks promotion after guarded cancellation wins but before it settles", async () => {
     const { company, agent } = await fixture();
     await db.update(companies).set({ defaultResponsibleUserId: "operator" }).where(eq(companies.id, company.id));

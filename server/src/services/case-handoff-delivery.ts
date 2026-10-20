@@ -18,6 +18,19 @@ export function caseHandoffDeliveryService(db: Db, options: { heartbeat: Heartbe
   const leaseMs = options.leaseMs ?? 60_000;
   const handoffs = caseHandoffService(db);
 
+  async function requestSourceYield(row: CaseHandoffRow): Promise<string | null> {
+    if (!row.sourceRunId) return null;
+    try {
+      await options.heartbeat.requestCaseHandoffYield?.({ runId: row.sourceRunId, issueId: row.issueId, handoffId: row.id });
+      return null;
+    } catch (error) {
+      // An unconfirmed Stop (including adapter_stop_pending) is not an
+      // operator supersession. Keep the accepted intent fenced until the
+      // executor's durable release proof or an explicit cancellation wins.
+      return error instanceof Error ? error.message : String(error);
+    }
+  }
+
   async function settle(row: CaseHandoffRow, state: "delivered" | "cancelled", message?: string) {
     const publications: ActivityPublication[] = [];
     await db.transaction(async transaction => {
@@ -82,8 +95,8 @@ export function caseHandoffDeliveryService(db: Db, options: { heartbeat: Heartbe
         await settle(row, "cancelled"); return;
       }
       if (!(await isCaseHandoffSourceReleased(db, { runId: row.sourceRunId, issueId: row.issueId }))) {
-        await options.heartbeat.requestCaseHandoffYield?.({ runId: row.sourceRunId, issueId: row.issueId, handoffId: row.id });
-        await retry(row, "awaiting_source_release", "Waiting for the outgoing execution and workspace to settle"); return;
+        const yieldError = await requestSourceYield(row);
+        await retry(row, "awaiting_source_release", yieldError ?? "Waiting for the outgoing execution and workspace to settle"); return;
       }
       const applied = await handoffs.applyPending(row.id);
       if (!applied || applied.state !== "pending_dispatch") return;
@@ -132,13 +145,17 @@ export function caseHandoffDeliveryService(db: Db, options: { heartbeat: Heartbe
             // A flag change pauses successor work, but cannot leave an accepted
             // outgoing process running indefinitely. Its usual yield/stop and
             // workspace cleanup retain their existing authority.
-            if (claimed.sourceRunId) await options.heartbeat.requestCaseHandoffYield?.({ runId: claimed.sourceRunId, issueId: claimed.issueId, handoffId: claimed.id });
-            await retry(claimed, "cases_disabled", "Case handoffs are paused in Experimental settings");
+            const yieldError = await requestSourceYield(claimed);
+            await retry(claimed, "cases_disabled", yieldError ?? "Case handoffs are paused in Experimental settings");
           } else await deliver(claimed);
         }
         catch (error) {
           const status = typeof error === "object" && error && "status" in error ? Number(error.status) : null;
-          if (status === 409 || status === 404) await settle(claimed, "cancelled", error instanceof Error ? error.message : "Superseded");
+          const details = typeof error === "object" && error && "details" in error && error.details && typeof error.details === "object"
+            ? error.details as { code?: unknown; reason?: unknown } : null;
+          if (details?.code === "case_handoff_admission_wait") await retry(claimed,
+            typeof details.reason === "string" ? details.reason : "wake_not_admitted", error instanceof Error ? error.message : "Waiting for normal admission");
+          else if (status === 409 || status === 404) await settle(claimed, "cancelled", error instanceof Error ? error.message : "Superseded");
           else await retry(claimed, status === 403 ? "access_or_admission_blocked" : "delivery_failed", error instanceof Error ? error.message : String(error));
         }
       }
