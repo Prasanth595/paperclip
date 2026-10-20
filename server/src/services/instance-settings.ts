@@ -441,8 +441,6 @@ export function instanceSettingsService(db: Db, options: InstanceSettingsService
   const enforcedManagedConfig = staging && managedConfig
     ? {
       ...managedConfig,
-      // Cloud-enabled features remain mandatory on every stack. Staging may
-      // override only disabled experimental defaults, never an enabled flag.
       features: Object.fromEntries(Object.entries(managedConfig.features)
         .filter(([key, enabled]) => enabled || !isCloudStagingExperimentalSetting(key))),
     }

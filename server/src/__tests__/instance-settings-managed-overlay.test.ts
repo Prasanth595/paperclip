@@ -104,7 +104,6 @@ describe("instanceSettingsService managed overlay", () => {
       expect((await service.get()).experimental).toMatchObject(features);
       expect((await service.getExperimental()).managedKeys).toMatchObject(
         Object.fromEntries(Object.keys(features)
-          // These compatibility flags are always on and have no controls.
           .filter((key) => key !== "enableApps" && key !== "enableMcpAggregators")
           .map((key) => [key, { managed: true, managedBy: "paperclip-cloud" }])),
       );
@@ -179,7 +178,6 @@ describe("instanceSettingsService managed overlay", () => {
       expect(row.experimental).not.toHaveProperty("managedKeys");
       expect(row.experimental).not.toHaveProperty("enableStatusCards");
     }
-    // Full settings forms may echo an enforced true value.
     expect((await service.updateExperimental({ enableNativeRunner: true })).experimental.enableNativeRunner).toBe(true);
 
     const changedDefaults = instanceSettingsService(db, { runtimeEnv: {
