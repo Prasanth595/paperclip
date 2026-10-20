@@ -3,7 +3,7 @@ import express from "express";
 import request from "supertest";
 import { mcpGatewayProtocolRoutes } from "../routes/tool-gateway.js";
 import { eq, sql } from "drizzle-orm";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   agents,
   activityLog,
@@ -46,6 +46,7 @@ describeEmbeddedPostgres("heartbeat runtime MCP servers", () => {
   }, 20_000);
 
   afterEach(async () => {
+    vi.useRealTimers();
     if (originalApiUrl === undefined) delete process.env.PAPERCLIP_API_URL;
     else process.env.PAPERCLIP_API_URL = originalApiUrl;
     await db.delete(toolMcpGatewayTokens);
@@ -166,8 +167,8 @@ describeEmbeddedPostgres("heartbeat runtime MCP servers", () => {
     for (const token of tokens) {
       expect(token.subjectType).toBe("heartbeat_run");
       expect(token.subjectId).toMatch(/^[0-9a-f-]{36}$/);
-      expect(token.expiresAt!.getTime()).toBeGreaterThanOrEqual(before + 59 * 60 * 1000);
-      expect(token.expiresAt!.getTime()).toBeLessThanOrEqual(Date.now() + 61 * 60 * 1000);
+      expect(token.expiresAt!.getTime()).toBeGreaterThanOrEqual(before + 4 * 60 * 60 * 1000);
+      expect(token.expiresAt!.getTime()).toBeLessThanOrEqual(Date.now() + 4 * 60 * 60 * 1000);
     }
     expect(JSON.stringify(tokens)).not.toContain(first[0]!.token);
 
@@ -273,6 +274,30 @@ describeEmbeddedPostgres("heartbeat runtime MCP servers", () => {
     }
     return seeded;
   }
+
+  it("keeps the run gateway usable at minute 80, then rejects a completed run and expiry", async () => {
+    const [owner] = await seedAssignedAgents(1);
+    const [server] = await buildPaperclipRuntimeMcpServers({ db, agent: owner!.agent, runId: owner!.run.id });
+    const [gateway] = await db.select().from(toolMcpGateways);
+    // Keep protocol discovery local; the fixture's remote MCP URL is intentionally unreachable.
+    await db.update(toolConnections).set({ enabled: false });
+    const app = express().use(express.json()).use(mcpGatewayProtocolRoutes(createToolGatewayService(db)));
+    const call = (method: string, params?: Record<string, unknown>) =>
+      request(app).post(`/mcp/gateways/${gateway!.gatewayPublicId}`)
+        .set("Authorization", `Bearer ${server!.token}`)
+        .send({ jsonrpc: "2.0", id: 1, method, params });
+    const mintedAt = Date.now();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(mintedAt + 80 * 60 * 1_000);
+    await call("initialize").expect(200);
+    await call("tools/list").expect(200);
+    await call("tools/call", { name: "paperclip_list_resources", arguments: {} }).expect(200);
+    await db.update(heartbeatRuns).set({ status: "succeeded" }).where(eq(heartbeatRuns.id, owner!.run.id));
+    await call("initialize").expect(401);
+    await db.update(heartbeatRuns).set({ status: "running" }).where(eq(heartbeatRuns.id, owner!.run.id));
+    vi.setSystemTime(mintedAt + 4 * 60 * 60 * 1_000 + 1_000);
+    await call("initialize").expect(401);
+  });
 
   it("rejects another agent's run token on a run-scoped gateway", async () => {
     const [owner, other] = await seedAssignedAgents(2);
