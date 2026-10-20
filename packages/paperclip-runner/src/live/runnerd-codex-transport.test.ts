@@ -5520,17 +5520,28 @@ it.each([
       providerPid = bundle.evidence().codexPid;
       const rotations: (typeof core.store.state)[] = [];
       const preparedStates: (typeof core.store.state)[] = [];
-      const commit = core.store.commit.bind(core.store);
-      vi.spyOn(core.store, "commit").mockImplementation((candidate) => {
-        commit(candidate);
-        // Capture the durable old epoch at publication. The authenticated
-        // successor may activate before attachRun observes the completed command.
+      const capturePreparedState = () => {
         if (
-          candidate.identity.runId === oldIdentity.runId &&
-          candidate.warmTransition?.phase === "prepared"
+          core.store.state.identity.runId === oldIdentity.runId &&
+          core.store.state.warmTransition?.phase === "prepared"
         ) {
           preparedStates.push(structuredClone(core.store.state));
         }
+      };
+      const commit = core.store.commit.bind(core.store);
+      vi.spyOn(core.store, "commit").mockImplementation((candidate) => {
+        commit(candidate);
+        // Capture complete-state publications in the old epoch. The
+        // authenticated successor may activate before attachRun observes the
+        // completed command.
+        capturePreparedState();
+      });
+      const save = core.store.save.bind(core.store);
+      vi.spyOn(core.store, "save").mockImplementation(() => {
+        save();
+        // Event ACKs mutate the current journal and persist with save(), not
+        // commit(candidate). Capture those durable old-epoch snapshots too.
+        capturePreparedState();
       });
       if (observer === "after-activation") {
         const getCommand = core.getCommand.bind(core);
@@ -5658,9 +5669,9 @@ it.each([
           );
         let attachedRecord: typeof retired;
         if (observer === "after-activation") {
-          // Rotation has reset the active journal. The replayed attachment
-          // may now be durable only in the live successor, which must not be
-          // mistaken for the old record that owns the predecessor chain.
+          // The attach-result observer can wake after activation. The event
+          // still belongs to the old run identity; the successor journal must
+          // not be mistaken for the preserved record that owns its predecessors.
           expect(rotations[0]!.identity.runId).toBe("run-warm-ack-next");
           expect(containsAttachedEvent(rotations[0]!)).toBe(false);
           expect(
@@ -5696,6 +5707,13 @@ it.each([
             attachedRecord = preparedAttachment;
           } else {
             expect(liveSuccessor!.identity.runId).toBe("run-warm-ack-next");
+            expect(
+              liveSuccessor!.committedEvents.some(
+                (entry) =>
+                  predecessorTypes.includes(entry.eventType) &&
+                  entry.envelope.runId === oldIdentity.runId,
+              ),
+            ).toBe(false);
             attachedRecord = liveSuccessor!;
           }
         } else {
@@ -5723,9 +5741,15 @@ it.each([
         expect(attachedEvent.logicalEffectCount).toBe(1);
         expect(attachedEvent.envelope.runId).toBe(oldIdentity.runId);
         if (attachedRecord.identity.runId === oldIdentity.runId) {
+          // Every selected old-epoch snapshot, including a later prepared
+          // snapshot, must retain the durable ACK for this source event.
           expect(attachedRecord.ackedSourceSeq).toBeGreaterThanOrEqual(
             attachedEvent.sourceSeq,
           );
+        } else {
+          // The new epoch has a fresh cursor; the old source sequence does not
+          // apply there, so verify the selected destination is the successor.
+          expect(attachedRecord.identity.runId).toBe("run-warm-ack-next");
         }
         expect(attachedEvent.eventType).toBe("run.attached");
         if (mode === "lost-ack") {
