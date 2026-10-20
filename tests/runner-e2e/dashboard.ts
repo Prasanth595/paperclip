@@ -1,4 +1,5 @@
 import { isIncompleteFirstTaskResult, renderCaseOutcome } from "./case-outcome.js";
+import { latencyIntervalLabel } from "./latency-timing.js";
 import { renderFirstTaskDetails } from "./first-task-report.js";
 import {
   discoverReportCatalog,
@@ -250,6 +251,11 @@ function renderCase(
       </tr>`,
     )
     .join("");
+  const latencyRows = (entry?.result.latencyProbes ?? []).map(probe => `<tr>
+    <td>${html(probe.event)}</td><td>${html(probe.verdict)}</td>
+    <td>${html(latencyIntervalLabel(probe))}</td><td>${html(`${probe.target.operator} ${probe.target.ms} ms`)}</td>
+    <td>${html(probe.resolutionMs === null ? "unknown" : `${probe.resolutionMs} ms`)}</td>
+    </tr>`).join("");
   const gallery = screenshots.length
     ? `<div class="gallery" aria-label="Screenshots for ${html(execution.id)}">${screenshots
         .map(
@@ -327,7 +333,8 @@ function renderCase(
         : ""
     }
     <p class="detail">${html(detail)}</p>
-    ${turnTimingRows ? `<div class="matcher-wrap"><table class="matchers"><thead><tr><th>Turn</th><th>Run</th><th>Lease</th><th>Scheduler</th><th>Run duration</th><th>Response</th></tr></thead><tbody>${turnTimingRows}</tbody></table></div>` : ""}
+    ${turnTimingRows ? `<div class="matcher-wrap"><table class="matchers"><thead><tr><th>Turn</th><th>Run</th><th>Lease</th><th>Scheduler</th><th>Run duration</th><th>Final settlement (legacy response field)</th></tr></thead><tbody>${turnTimingRows}</tbody></table></div>` : ""}
+    ${latencyRows ? `<div class="matcher-wrap"><table class="matchers"><thead><tr><th>Event</th><th>Timing verdict</th><th>Possible latency</th><th>Target</th><th>Resolution</th></tr></thead><tbody>${latencyRows}</tbody></table></div>` : ""}
     ${matcherRows ? `<div class="matcher-wrap"><table class="matchers"><thead><tr><th>Result</th><th>Matcher</th><th>Expectation</th><th>Detail</th></tr></thead><tbody>${matcherRows}</tbody></table></div>` : `<p class="detail">No matcher result was recorded.</p>`}
     ${entry ? `<details class="usage"><summary>Usage and billing metadata</summary><pre>${html(JSON.stringify({ billing, rawUsage: entry.result.usage ?? null }, null, 2))}</pre></details>` : ""}
     </details>

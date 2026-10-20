@@ -1129,7 +1129,8 @@ export const runnerSuites: readonly RunnerSuiteFixture[] = [
     tasks: runnerTasks.filter(task => task.id === "message-marker")
       .map(task => ({ ...task, automaticRetryPolicy: "single_attempt" as const })),
     expectedMatrixSize: 1,
-    definitionMetadata: { diagnostic: true, modelSource: "observed-staging-run", providerAuth: "api_key", stagingAuth: "subscription", companyData: "fresh-fixture", slackDelivery: false, maximumAutomaticRetries: 0 },
+    definitionMetadata: { diagnostic: true, modelSource: "observed-staging-run", providerAuth: "api_key", stagingAuth: "subscription", companyData: "fresh-fixture", slackDelivery: false, maximumAutomaticRetries: 0,
+      timing: { version: 1, clock: "monotonic", responseTargetMs: 30_000, event: "first_visible_response", settlementSeparate: true } },
   },
   {
     id: TASK_WORKSPACES_SUITE, label: "Task workspaces without projects", manualOnly: true,

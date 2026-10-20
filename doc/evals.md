@@ -240,6 +240,11 @@ analytical label.
 
 ## Evidence, provenance, and history
 
+Polling latency is an interval rather than an exact first-detection time. The
+[Product E2E timing contract](../tests/runner-e2e/README.md#latency-observation-bounds)
+keeps last-absent/first-present bounds, resolution, strict or inclusive targets,
+and pass/fail/inconclusive timing verdicts alongside the unchanged workflow grade.
+
 Retained result snapshots and dated measurement reports belong in
 `paperclip-evals`; application tests, Product E2E fixtures/graders, and executable
 scenario inventories remain in this repository. Keep a compact results index

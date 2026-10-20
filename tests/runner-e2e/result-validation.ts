@@ -56,6 +56,26 @@ const date: Rule = (value, at) => {
   string(value, at);
   if (!Number.isFinite(Date.parse(value as string))) invalid(at);
 };
+const finite: Rule = (value, at) => {
+  if (typeof value !== "number" || !Number.isFinite(value)) invalid(at);
+};
+// Finite invalid bounds remain inspectable evidence with an inconclusive verdict.
+const timingBound = nullable(shape({ ms: finite, inclusive: boolean }));
+const latencyProbe: Rule = (value, at) => {
+  shape({
+    event: oneOf("acknowledgement", "first_visible_response", "message_creation", "final_settlement"),
+    interval: shape({ lower: timingBound, upper: timingBound }),
+    lastAbsentMs: nullable(finite), firstPresentMs: nullable(finite), resolutionMs: nullable(finite),
+    invalid: optional(boolean),
+    observationFailures: optional(integer),
+    observationTimeouts: optional(integer),
+    messageTimestamps: optional(shape({ createdAt: optional(string), editedAt: optional(string) })),
+    target: shape({ operator: oneOf("<", "<="), ms: finite }),
+    verdict: oneOf("pass", "fail", "inconclusive"),
+    recordedVerdict: optional(oneOf("pass", "fail", "inconclusive")),
+    reason: oneOf("within_target", "outside_target", "threshold_overlap", "missing_observations", "invalid_evidence", "unknown_resolution"),
+  })(value, at);
+};
 const url: Rule = (value, at) => {
   string(value, at);
   try {
@@ -194,6 +214,7 @@ const fields = {
   issueId: optional(string),
   issueIdentifier: optional(nullable(string)),
   runIds: optional(array(string)),
+  latencyProbes: optional(array(latencyProbe)),
   turnTimings: optional(
     array(
       shape({

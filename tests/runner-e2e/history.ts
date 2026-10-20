@@ -1,4 +1,5 @@
 import { isIncompleteFirstTaskResult } from "./case-outcome.js";
+import { classifyLatency } from "./latency-timing.js";
 import { validateRetainedRunnerResult } from "./result-validation.js";
 import {
   discoverReportCatalog,
@@ -28,6 +29,11 @@ export function canonicalExecutionId(id: string) {
 
 export function upgradeRunnerResult(result: RunnerE2EResult): RunnerE2EResult {
   validateRetainedRunnerResult(result);
+  if (result.latencyProbes) result = { ...result, latencyProbes: result.latencyProbes.map(probe => {
+    const corrected = classifyLatency(probe, probe.target);
+    return probe.verdict === corrected.verdict ? corrected
+      : { ...corrected, recordedVerdict: probe.recordedVerdict ?? probe.verdict };
+  }) };
   const executionId = canonicalExecutionId(result.executionId);
   const execution = runnerMatrix.find(
     (candidate) => candidate.id === executionId,
