@@ -1566,6 +1566,7 @@ export type {
   PluginManagedSkillDeclaration,
   PluginManagedSkillFileDeclaration,
   PluginLocalFolderDeclaration,
+  PluginPrivateNetworkHostDeclaration,
   PluginManagedAgentResolution,
   PluginManagedProjectResolution,
   PluginManagedRoutineResolution,
