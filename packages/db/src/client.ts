@@ -127,6 +127,14 @@ export type MigrationState =
       reason: "no-migration-journal-empty-db" | "no-migration-journal-non-empty-db" | "pending-migrations";
     };
 
+export type CredentialSource = () => string | Promise<string>;
+
+type CredentialMeta = {
+  credentialSource?: CredentialSource;
+  credentialUrl?: string;
+  lastCredentialUrl?: string;
+};
+
 export interface DatabaseClientOptions {
   /**
    * postgres.js `prepare`. Set false when connecting through a
@@ -267,13 +275,33 @@ export async function withDedicatedDbConnection<T>(db: Db, action: (dedicated: D
   finally { await dedicated.$client.end({ timeout: 1 }); }
 }
 
-export function createDb(url: string, options?: DatabaseClientOptions) {
-  const resolved = resolveDatabaseClientOptions(options ?? databaseClientOptionsFromEnv());
-  return createDbClient(url, resolved);
+export function createDb(url: string, options?: DatabaseClientOptions & { credentialSource?: CredentialSource }) {
+  const { credentialSource, ...clientOptions } = options ?? {};
+  const resolved = resolveDatabaseClientOptions(Object.keys(clientOptions).length > 0
+    ? clientOptions
+    : databaseClientOptionsFromEnv());
+  return createDbClient(url, resolved, undefined, credentialSource);
 }
 
-function createDbClient(url: string, resolved: DatabaseClientOptions, owner?: object) {
-  const sql = postgres(url, postgresJsOptions(resolved));
+function createDbClient(url: string, resolved: DatabaseClientOptions, owner?: object, credentialSource?: CredentialSource) {
+  const sql = postgres(url, {
+    ...postgresJsOptions(resolved),
+    ...(credentialSource
+      ? {
+          pass: async () => {
+            // Target-check: only supply the file's password to the server the
+            // pool actually connects to. If the operator repoints the file to a
+            // different database, sending its password to the original server
+            // would disclose it — return "" so the base URL's own password (or
+            // none) is used instead.
+            const current = await resolveCurrentDatabaseCredential(credentialSource, url);
+            if (!current) return "";
+            const next = new URL(current);
+            return next.password ? decodeURIComponent(next.password) : "";
+          },
+        }
+      : {}),
+  });
   const key = hostPortKeyOrNull(url);
   if (key) registerClient(key, sql);
   // A disconnect can lose the response after a statement has committed.
@@ -281,10 +309,106 @@ function createDbClient(url: string, resolved: DatabaseClientOptions, owner?: ob
   // message cannot establish that replay is safe. Leave retries to callers
   // that know the complete operation is idempotent.
   const db = installDatabaseWorkSignals(drizzlePg(sql, { schema }), owner);
+  (db as Db & CredentialMeta).credentialSource = credentialSource;
+  (db as Db & CredentialMeta).credentialUrl = url;
+  (db as Db & CredentialMeta).lastCredentialUrl = url;
   dedicatedDbFactories.set(db, () => createDbClient(url, {
     ...resolved, maxConnections: 1, applicationName: "paperclip-workspace-finalization-lock",
-  }, db));
+  }, db, credentialSource));
   return db;
+}
+
+function parseDatabaseTarget(url: string): { host: string; port: number; user: string; database: string } | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "postgres:" && parsed.protocol !== "postgresql:") return null;
+  return {
+    host: parsed.hostname,
+    port: parsed.port === "" ? 5432 : Number.parseInt(parsed.port, 10),
+    user: decodeURIComponent(parsed.username),
+    database: parsed.pathname.replace(/^\/+/, ""),
+  };
+}
+
+/**
+ * Resolve the file-backed credential to use right now, or null when it must
+ * not be trusted for `expectedUrl`: the source is unreadable/unparseable, or it
+ * points at a different database than `expectedUrl` (a repointed file). Callers
+ * use this to send a password only to the server it belongs to — connection
+ * pools, one-off startup checks, and backups alike.
+ */
+export async function resolveCurrentDatabaseCredential(
+  credentialSource: CredentialSource,
+  expectedUrl: string,
+): Promise<string | null> {
+  const nextUrl = await credentialSource();
+  const next = parseDatabaseTarget(nextUrl);
+  const expected = parseDatabaseTarget(expectedUrl);
+  if (!next || !expected) return null;
+  if (
+    next.host !== expected.host ||
+    next.port !== expected.port ||
+    next.user !== expected.user ||
+    next.database !== expected.database
+  ) {
+    return null;
+  }
+  return nextUrl;
+}
+
+/**
+ * Return `baseUrl` with the file-backed password copied in (target-checked),
+ * preserving every other part of `baseUrl` — notably connection options such as
+ * `?sslmode=require` — so a rotated password is used without dropping TLS or
+ * timeout settings that only `DATABASE_URL` carries. Returns `baseUrl` unchanged
+ * when the source is unreadable, unparseable, or points at a different database
+ * (a repointed file).
+ */
+export async function mergeDatabaseCredentialPassword(
+  baseUrl: string,
+  credentialSource: CredentialSource,
+): Promise<string> {
+  const fileUrl = await resolveCurrentDatabaseCredential(credentialSource, baseUrl);
+  if (!fileUrl) return baseUrl;
+  const base = new URL(baseUrl);
+  base.password = new URL(fileUrl).password;
+  return base.toString();
+}
+
+export type CredentialReloadResult =
+  | { status: "no-source" }
+  | { status: "unchanged" }
+  | { status: "reloaded" }
+  | { status: "rejected"; reason: "unparseable" | "target-mismatch" };
+
+export async function reloadDatabaseCredential(db: Db): Promise<CredentialReloadResult> {
+  const meta = db as Db & CredentialMeta;
+  if (!meta.credentialSource) return { status: "no-source" };
+  const nextUrl = await meta.credentialSource();
+  if (nextUrl === meta.lastCredentialUrl) return { status: "unchanged" };
+  const next = parseDatabaseTarget(nextUrl);
+  const current = parseDatabaseTarget(meta.credentialUrl ?? "");
+  if (!next || !current) return { status: "rejected", reason: "unparseable" };
+  if (
+    next.host !== current.host ||
+    next.port !== current.port ||
+    next.user !== current.user ||
+    next.database !== current.database
+  ) {
+    return { status: "rejected", reason: "target-mismatch" };
+  }
+  // Same target, new credential (rotated password). Close the pool so the next
+  // connection re-reads the file through the pass callback. Only advance
+  // lastCredentialUrl once the pool has actually been reset, so a rejected
+  // change is re-detected (and re-rejected) on the next reload instead of being
+  // misreported as unchanged.
+  await (db.$client as unknown as { close: () => Promise<void> }).close();
+  meta.lastCredentialUrl = nextUrl;
+  return { status: "reloaded" };
 }
 
 export async function getPostgresDataDirectory(url: string): Promise<string | null> {

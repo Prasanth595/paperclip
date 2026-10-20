@@ -35,6 +35,7 @@ import { reconcileAbandonedExecutionControl } from "./services/execution-control
 import { EXECUTION_RECONCILIATION_INTERVAL_MS } from "./services/execution-control-deadline.js";
 import { connectionIntentDeliveryService } from "./services/connection-intent-delivery.js";
 import { existsSync, readFileSync, rmSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import type { Server, RequestListener } from "node:http";
 import { createPaperclipHttpServer } from "./http/server.js";
 import { resolve } from "node:path";
@@ -46,6 +47,9 @@ import { warnIfUnsupportedNodeVersion } from "@paperclipai/shared/node-version";
 import { and, eq } from "drizzle-orm";
 import {
   createDb,
+  reloadDatabaseCredential,
+  mergeDatabaseCredentialPassword,
+  type CredentialSource,
   ensurePostgresDatabase,
   formatEmbeddedPostgresError,
   getPostgresDataDirectory,
@@ -431,6 +435,7 @@ async function startServerWithDatabaseTeardown(
   
   let db;
   let pluginMigrationDb;
+  let databaseCredentialSource: CredentialSource | undefined;
   let embeddedPostgres: EmbeddedPostgresInstance | null = null;
   let embeddedPostgresSupervisor: EmbeddedPostgresSupervisor | null = null;
   let embeddedPostgresStartedByThisProcess = false;
@@ -443,9 +448,20 @@ async function startServerWithDatabaseTeardown(
   assertCloudDatabaseContract();
   if (config.databaseUrl) {
     const migrationUrl = config.databaseMigrationUrl ?? config.databaseUrl;
-    migrationSummary = await ensureMigrations(migrationUrl, "PostgreSQL");
-  
-    db = createDb(config.databaseUrl);
+    databaseCredentialSource = config.databaseUrlFile
+      ? async () => (await readFile(resolve(config.databaseUrlFile!), "utf8")).trim()
+      : undefined;
+    // When migrations run against the application database (no separate
+    // DATABASE_MIGRATION_URL) and the password is file-backed, resolve the
+    // current credential target-checked so a password-protected DB is
+    // reachable even when DATABASE_URL omits the password.
+    let migrationConnectionString = migrationUrl;
+    if (!config.databaseMigrationUrl && databaseCredentialSource) {
+      migrationConnectionString = await mergeDatabaseCredentialPassword(migrationUrl, databaseCredentialSource);
+    }
+    migrationSummary = await ensureMigrations(migrationConnectionString, "PostgreSQL");
+
+    db = createDb(config.databaseUrl, { credentialSource: databaseCredentialSource });
     pluginMigrationDb = config.databaseMigrationUrl ? createDb(config.databaseMigrationUrl) : db;
     logger.info("Using external PostgreSQL via DATABASE_URL/config");
     activeDatabaseConnectionString = config.databaseUrl;
@@ -864,8 +880,14 @@ async function startServerWithDatabaseTeardown(
       const retention = generalSettings.backupRetention;
       const verifyCheckpoint = trigger === "idle" || existsSync(idleBackupWakeMarker(config.databaseBackupDir));
 
+      // Copy the current file-backed password into the startup URL (target-
+      // checked) so backups track the rotated password while keeping the
+      // connection options (e.g. sslmode) that only DATABASE_URL carries.
+      const backupConnectionString = databaseCredentialSource
+        ? await mergeDatabaseCredentialPassword(activeDatabaseConnectionString, databaseCredentialSource)
+        : activeDatabaseConnectionString;
       const result = await runDatabaseBackup({
-        connectionString: activeDatabaseConnectionString,
+        connectionString: backupConnectionString,
         backupDir: config.databaseBackupDir,
         retention,
         filenamePrefix: "paperclip",
@@ -2164,6 +2186,30 @@ async function startServerWithDatabaseTeardown(
   process.once("SIGTERM", () => {
     void shutdown("SIGTERM", true);
   });
+
+  if (databaseCredentialSource) {
+    process.on("SIGHUP", () => {
+      void (async () => {
+        try {
+          const result = await reloadDatabaseCredential(db);
+          if (result.status === "reloaded") {
+            logger.info(`SIGHUP: reloaded database credential from ${config.databaseUrlFile}`);
+          } else if (result.status === "unchanged") {
+            logger.info("SIGHUP: database credential unchanged; no pool reset");
+          } else if (result.status === "no-source") {
+            logger.info("SIGHUP: no file-backed database credential; nothing to reload");
+          } else {
+            logger.warn(
+              { reason: result.reason },
+              `SIGHUP: database credential change rejected (${result.reason}); keeping the existing pool`,
+            );
+          }
+        } catch (error) {
+          logger.warn({ err: error }, "SIGHUP: database credential reload failed; keeping the existing pool");
+        }
+      })();
+    });
+  }
 
   return {
     server,

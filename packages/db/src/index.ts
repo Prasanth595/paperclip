@@ -1,5 +1,9 @@
 export {
   createDb,
+  reloadDatabaseCredential,
+  resolveCurrentDatabaseCredential,
+  mergeDatabaseCredentialPassword,
+  type CredentialReloadResult,
   withDedicatedDbConnection,
   closeRegisteredClients,
   getPostgresDataDirectory,
@@ -13,6 +17,7 @@ export {
   migratePostgresIfEmpty,
   type MigrationBootstrapResult,
   type Db,
+  type CredentialSource,
 } from "./client.js";
 export {
   getEmbeddedPostgresTestSupport,
