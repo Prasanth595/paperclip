@@ -345,16 +345,24 @@ async function promoteDeferredWake(
       issueId: currentIssue.id,
       finishingRunId: run.id,
       commentIds: workingCandidate.deferredCommentIds,
+      // Agent resumeIntent must carry at least one comment written after the
+      // issue completed. Mentions deferred during the delivery run otherwise
+      // reopen a finished leaf and hit workspace_validation on the released
+      // worktree (board-only orphan park).
+      after: currentIssue.completedAt,
     });
+    const agentResumeAfterCompletion =
+      currentIssue.status === "done" &&
+      workingCandidate.agentId === currentIssue.assigneeAgentId &&
+      workingCandidate.requestedByActorType === "agent" &&
+      workingCandidate.deferredContextSeed.resumeIntent === true &&
+      workingCandidate.queuedCommentIds.length > 0 &&
+      selfAuthorship.hasCommentCreatedAfter;
     shouldReopen =
       !selfAuthorship.allSelfAuthored &&
       (workingCandidate.requestedByActorType === "user" ||
         workingCandidate.wakeReason === "issue_reopened_via_comment" ||
-        (currentIssue.status === "done" &&
-          workingCandidate.agentId === currentIssue.assigneeAgentId &&
-          workingCandidate.requestedByActorType === "agent" &&
-          workingCandidate.deferredContextSeed.resumeIntent === true &&
-          workingCandidate.queuedCommentIds.length > 0));
+        agentResumeAfterCompletion);
   }
 
   // Agent continuations can outlive the work they addressed. Live,
