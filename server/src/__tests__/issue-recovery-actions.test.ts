@@ -985,8 +985,12 @@ describeEmbeddedPostgres("issue recovery actions", () => {
     });
   });
 
-  it("does not re-arm a provider-quota monitor that was manually cleared after the failing run", async () => {
+  it.each([
+    { label: "after", clearOffsetMs: 60_000, providerQuotaMonitored: 0 },
+    { label: "before", clearOffsetMs: -60_000, providerQuotaMonitored: 1 },
+  ])("re-arms a provider-quota monitor only when it was not manually cleared $label the failing run", async ({ clearOffsetMs, providerQuotaMonitored }) => {
     const { companyId, coderId, sourceIssueId } = await seedCompany();
+    const runCreatedAt = new Date();
     await db.update(issues).set({
       executionState: {
         status: "idle",
@@ -1005,7 +1009,7 @@ describeEmbeddedPostgres("issue recovery actions", () => {
           attemptCount: 27,
           notes: null,
           scheduledBy: null,
-          clearedAt: new Date(Date.now() + 60_000).toISOString(),
+          clearedAt: new Date(runCreatedAt.getTime() + clearOffsetMs).toISOString(),
           clearReason: "manual",
         },
       },
@@ -1019,6 +1023,7 @@ describeEmbeddedPostgres("issue recovery actions", () => {
       resultJson: { executionRecovery: { kind: "bootstrap", providerWorkStarted: false } },
       error: "Provider quota exceeded for this model.",
       errorCode: "adapter_failed",
+      createdAt: runCreatedAt,
       startedAt: new Date("2026-07-15T20:00:00.000Z"),
       finishedAt: new Date("2026-07-15T20:01:00.000Z"),
       contextSnapshot: { issueId: sourceIssueId },
@@ -1027,9 +1032,13 @@ describeEmbeddedPostgres("issue recovery actions", () => {
 
     const result = await recovery.reconcileStrandedAssignedIssues();
 
-    expect(result).toMatchObject({ providerQuotaMonitored: 0, skipped: 1 });
+    expect(result.providerQuotaMonitored).toBe(providerQuotaMonitored);
     const [updatedIssue] = await db.select().from(issues).where(eq(issues.id, sourceIssueId));
-    expect(updatedIssue?.monitorNextCheckAt).toBeNull();
+    if (providerQuotaMonitored) {
+      expect(updatedIssue?.monitorNextCheckAt).toBeInstanceOf(Date);
+    } else {
+      expect(updatedIssue?.monitorNextCheckAt).toBeNull();
+    }
   });
 
   it("skips provider-quota monitor scheduling for todo issues without aborting reconciliation", async () => {
