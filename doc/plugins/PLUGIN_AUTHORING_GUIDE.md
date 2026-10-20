@@ -791,3 +791,14 @@ The host resets plugin state on account/company changes and keeps its built-in
 menu when no unique contribution exists, discovery fails, the module is missing,
 or rendering throws. The slot is a React-only contract; do not use a custom
 element export. This replaces only the menu, not company policy or authorization.
+
+## Plugin-provided Runner execution
+
+Plugins can [provide Runner execution through environment drivers](PLUGIN_RUNNER_EXECUTION.md).
+Core can select this path for `paperclip_runner` agents assigned to a saved plugin
+environment. The plugin owns project volumes and starts Runner from structured
+task launch inputs. Core connects PRP and verifies cancellation and durable cleanup.
+Resource transfer and credential synchronization use a separate workflow.
+Persistent computers keep their agent home and session files between runs. No remote shell, file-command,
+or workspace hook is required. The guide defines the task operations, lease
+hooks, artifact qualification, and supported per-turn lifecycle.

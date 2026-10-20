@@ -87,3 +87,4 @@ packages/grok-acp/bin
 !packages/paperclip-runner/test/fixtures/copilot-profile-v23-identity.json
 
 !packages/paperclip-runner/test/fixtures/copilot-profile-v24-identity.json
+!packages/paperclip-runner/test/fixtures/copilot-profile-v25-identity.json

@@ -1,3 +1,4 @@
+import type { PluginTaskCredentialWritebackBinding } from "./plugin-task-credential-writeback.js";
 import { OPENROUTER_ATTRIBUTION_HEADERS, openRouterClaudeHeaders } from "@paperclipai/shared/openrouter-attribution";
 import { createHash } from "node:crypto";
 import { HttpError, unprocessable } from "../errors.js";
@@ -107,6 +108,10 @@ export async function assertManagedAiProjectAuth(
         : [];
   const pattern =
     "apiKeyHelper|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|CLAUDE_CODE_OAUTH_TOKEN|OPENAI_API_KEY|model_provider[[:space:]]*=|env_key[[:space:]]*=|experimental_bearer_token|cli_auth_credentials_store";
+  if (target?.kind === "remote" && target.transport === "sandbox" && target.runnerTask && files.length) {
+    // The Runner checks project overrides against its installed account before provider startup.
+    return;
+  }
   if (target?.kind === "remote" && files.length) {
     // Only inspect for conflicting keys; never return configuration or credential values.
     const result = await runAdapterExecutionTargetProcess(
@@ -383,6 +388,9 @@ export async function prepareManagedAiRuntime(
     const sessionIdentity = `${selection.grant.id}:${input.responsibleUserId ?? "shared"}:${noAuth ? "no-auth" : `${credentialRef!.secretId}:${freshness!.epoch}`}`;
     return {
       sessionIdentity,
+      credentialWriteback: subscriptionFile && input.binding.provider === "openai" && credentialRef && freshness
+        ? { grantId: selection.grant.id, secretId: credentialRef.secretId, sessionEpoch: freshness.epoch,
+            versionSelector: credentialRef.versionSelector ?? "latest" } satisfies PluginTaskCredentialWritebackBinding : undefined,
       config: {
         ...input.config,
         ...projected?.config,

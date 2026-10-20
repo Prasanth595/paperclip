@@ -3084,7 +3084,7 @@ export function agentRoutes(
     if (!selection) return undefined;
     if (test) {
       const testEnvironmentId = await resolveAdapterTestEnvironmentId(companyId, environmentId);
-      if (testEnvironmentId) await assertAdapterTestEnvironmentForCompany(companyId, testEnvironmentId);
+      if (testEnvironmentId) await assertAdapterTestEnvironmentForCompany(companyId, testEnvironmentId, adapterType);
       const target = await resolveAdapterTestExecutionContext({ companyId, adapterType, environmentId: testEnvironmentId });
       try {
         if (!target.executionTarget && target.fallbackChecks.length > 0) throw unprocessable("The agent environment is not available for adoption");
@@ -3136,7 +3136,7 @@ export function agentRoutes(
       // Fail closed on a foreign environment before any secret resolution, env
       // merge, target resolution, sandbox lease, or adapter test runs.
       if (requestedEnvironmentId) {
-        await assertAdapterTestEnvironmentForCompany(companyId, requestedEnvironmentId);
+        await assertAdapterTestEnvironmentForCompany(companyId, requestedEnvironmentId, type);
       }
       // Agent reads redact every plain environment value. When this is a saved
       // agent test, restore those display-only placeholders from the
@@ -3456,7 +3456,7 @@ export function agentRoutes(
       await assertCanCreateAgentsForCompany(req, companyId);
       const environmentId = asNonEmptyString(req.query.environmentId);
       if (environmentId) {
-        await assertAdapterTestEnvironmentForCompany(companyId, environmentId);
+        await assertAdapterTestEnvironmentForCompany(companyId, environmentId, type);
       }
       res.setHeader("Cache-Control", "no-store");
 
