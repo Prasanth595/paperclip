@@ -1,6 +1,6 @@
 {
-  "id": "529b178d-2192-4a6a-8906-2068e5d077af",
-  "prevId": "043fa318-32fd-4ed6-955f-bf5437ace611",
+  "id": "b17facc4-025a-4fb3-bc4b-fe4206971c72",
+  "prevId": "d34e0f36-d7d1-409e-b868-6e4262e8adca",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -4387,7 +4387,7 @@
       "checkConstraints": {
         "ai_connection_defaults_provider_check": {
           "name": "ai_connection_defaults_provider_check",
-          "value": "\"ai_connection_defaults\".\"provider\" in ('anthropic','openai','openrouter','xai','google')"
+          "value": "\"ai_connection_defaults\".\"provider\" in ('anthropic','openai','openrouter','xai','google','github')"
         },
         "ai_connection_defaults_method_check": {
           "name": "ai_connection_defaults_method_check",
@@ -4860,7 +4860,7 @@
       "checkConstraints": {
         "ai_provider_defaults_provider_check": {
           "name": "ai_provider_defaults_provider_check",
-          "value": "\"ai_provider_defaults\".\"provider\" in ('anthropic','openai','openrouter','xai','google')"
+          "value": "\"ai_provider_defaults\".\"provider\" in ('anthropic','openai','openrouter','xai','google','github')"
         }
       },
       "isRLSEnabled": false
@@ -7595,6 +7595,138 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.case_access_sources": {
+      "name": "case_access_sources",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "case_id": {
+          "name": "case_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_kind": {
+          "name": "source_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_id": {
+          "name": "source_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "case_access_sources_case_source_uq": {
+          "name": "case_access_sources_case_source_uq",
+          "columns": [
+            {
+              "expression": "case_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "source_kind",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "source_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "case_access_sources_company_case_idx": {
+          "name": "case_access_sources_company_case_idx",
+          "columns": [
+            {
+              "expression": "company_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "case_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "case_access_sources_company_id_companies_id_fk": {
+          "name": "case_access_sources_company_id_companies_id_fk",
+          "tableFrom": "case_access_sources",
+          "tableTo": "companies",
+          "columnsFrom": [
+            "company_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "case_access_sources_case_id_cases_id_fk": {
+          "name": "case_access_sources_case_id_cases_id_fk",
+          "tableFrom": "case_access_sources",
+          "tableTo": "cases",
+          "columnsFrom": [
+            "case_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "case_access_sources_kind_check": {
+          "name": "case_access_sources_kind_check",
+          "value": "\"case_access_sources\".\"source_kind\" in ('issue', 'project')"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.case_attachments": {
       "name": "case_attachments",
       "schema": "",
@@ -8058,11 +8190,472 @@
       "checkConstraints": {
         "case_events_kind_check": {
           "name": "case_events_kind_check",
-          "value": "\"case_events\".\"kind\" in (\n        'created',\n        'updated',\n        'fields_changed',\n        'status_changed',\n        'issue_linked',\n        'issue_unlinked',\n        'document_revised',\n        'child_linked',\n        'attachment_added',\n        'label_added',\n        'label_removed'\n      )"
+          "value": "\"case_events\".\"kind\" in (\n        'created',\n        'updated',\n        'fields_changed',\n        'status_changed',\n        'issue_linked',\n        'issue_unlinked',\n        'document_revised',\n        'child_linked',\n        'attachment_added',\n        'label_added',\n        'label_removed',\n        'handoff_requested',\n        'handoff_applied',\n        'handoff_delivered',\n        'handoff_completed',\n        'handoff_cancelled'\n      )"
         },
         "case_events_actor_type_check": {
           "name": "case_events_actor_type_check",
           "value": "\"case_events\".\"actor_type\" in ('user', 'agent', 'system')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.case_handoffs": {
+      "name": "case_handoffs",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "case_id": {
+          "name": "case_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "issue_id": {
+          "name": "issue_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "from_agent_id": {
+          "name": "from_agent_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "destination_kind": {
+          "name": "destination_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'agent'"
+        },
+        "to_agent_id": {
+          "name": "to_agent_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "phase": {
+          "name": "phase",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "instructions": {
+          "name": "instructions",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "comment_id": {
+          "name": "comment_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "actor_type": {
+          "name": "actor_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "actor_id": {
+          "name": "actor_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_run_id": {
+          "name": "source_run_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "responsible_user_id": {
+          "name": "responsible_user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "expected_issue_status_version": {
+          "name": "expected_issue_status_version",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "applied_issue_status_version": {
+          "name": "applied_issue_status_version",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "wakeup_request_id": {
+          "name": "wakeup_request_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "idempotency_key": {
+          "name": "idempotency_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "input_fingerprint": {
+          "name": "input_fingerprint",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "attempt_count": {
+          "name": "attempt_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "next_attempt_at": {
+          "name": "next_attempt_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "lease_expires_at": {
+          "name": "lease_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_error_code": {
+          "name": "last_error_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_error": {
+          "name": "last_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "assignment_applied_at": {
+          "name": "assignment_applied_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "delivered_at": {
+          "name": "delivered_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cancelled_at": {
+          "name": "cancelled_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "case_handoffs_case_version_uq": {
+          "name": "case_handoffs_case_version_uq",
+          "columns": [
+            {
+              "expression": "company_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "case_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "version",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "case_handoffs_actor_idempotency_uq": {
+          "name": "case_handoffs_actor_idempotency_uq",
+          "columns": [
+            {
+              "expression": "company_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "actor_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "actor_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "idempotency_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "case_handoffs_pending_case_uq": {
+          "name": "case_handoffs_pending_case_uq",
+          "columns": [
+            {
+              "expression": "case_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"case_handoffs\".\"state\" in ('awaiting_release', 'pending_dispatch', 'awaiting_completion')",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "case_handoffs_pending_issue_uq": {
+          "name": "case_handoffs_pending_issue_uq",
+          "columns": [
+            {
+              "expression": "issue_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"case_handoffs\".\"state\" in ('awaiting_release', 'pending_dispatch', 'awaiting_completion')",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "case_handoffs_pending_attempt_idx": {
+          "name": "case_handoffs_pending_attempt_idx",
+          "columns": [
+            {
+              "expression": "next_attempt_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"case_handoffs\".\"state\" in ('awaiting_release', 'pending_dispatch')",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "case_handoffs_case_created_idx": {
+          "name": "case_handoffs_case_created_idx",
+          "columns": [
+            {
+              "expression": "case_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "case_handoffs_source_run_idx": {
+          "name": "case_handoffs_source_run_idx",
+          "columns": [
+            {
+              "expression": "company_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "source_run_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"case_handoffs\".\"source_run_id\" is not null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "case_handoffs_wakeup_request_uq": {
+          "name": "case_handoffs_wakeup_request_uq",
+          "columns": [
+            {
+              "expression": "wakeup_request_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "case_handoffs_company_id_companies_id_fk": {
+          "name": "case_handoffs_company_id_companies_id_fk",
+          "tableFrom": "case_handoffs",
+          "tableTo": "companies",
+          "columnsFrom": [
+            "company_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "case_handoffs_case_id_cases_id_fk": {
+          "name": "case_handoffs_case_id_cases_id_fk",
+          "tableFrom": "case_handoffs",
+          "tableTo": "cases",
+          "columnsFrom": [
+            "case_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "case_handoffs_issue_id_issues_id_fk": {
+          "name": "case_handoffs_issue_id_issues_id_fk",
+          "tableFrom": "case_handoffs",
+          "tableTo": "issues",
+          "columnsFrom": [
+            "issue_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "case_handoffs_from_agent_id_agents_id_fk": {
+          "name": "case_handoffs_from_agent_id_agents_id_fk",
+          "tableFrom": "case_handoffs",
+          "tableTo": "agents",
+          "columnsFrom": [
+            "from_agent_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "case_handoffs_to_agent_id_agents_id_fk": {
+          "name": "case_handoffs_to_agent_id_agents_id_fk",
+          "tableFrom": "case_handoffs",
+          "tableTo": "agents",
+          "columnsFrom": [
+            "to_agent_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "case_handoffs_state_check": {
+          "name": "case_handoffs_state_check",
+          "value": "\"case_handoffs\".\"state\" in ('awaiting_release', 'pending_dispatch', 'delivered', 'awaiting_completion', 'completed', 'cancelled')"
+        },
+        "case_handoffs_destination_check": {
+          "name": "case_handoffs_destination_check",
+          "value": "(\"case_handoffs\".\"destination_kind\" = 'agent' and \"case_handoffs\".\"to_agent_id\" is not null) or (\"case_handoffs\".\"destination_kind\" = 'done' and \"case_handoffs\".\"to_agent_id\" is null)"
+        },
+        "case_handoffs_destination_state_check": {
+          "name": "case_handoffs_destination_state_check",
+          "value": "(\"case_handoffs\".\"destination_kind\" = 'agent' and \"case_handoffs\".\"state\" in ('awaiting_release', 'pending_dispatch', 'delivered', 'cancelled')) or (\"case_handoffs\".\"destination_kind\" = 'done' and \"case_handoffs\".\"state\" in ('awaiting_completion', 'completed', 'cancelled'))"
+        },
+        "case_handoffs_actor_type_check": {
+          "name": "case_handoffs_actor_type_check",
+          "value": "\"case_handoffs\".\"actor_type\" in ('agent', 'user', 'system')"
         }
       },
       "isRLSEnabled": false
@@ -8407,6 +9000,25 @@
           "primaryKey": false,
           "notNull": false
         },
+        "work_issue_id": {
+          "name": "work_issue_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "phase": {
+          "name": "phase",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "handoff_version": {
+          "name": "handoff_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
         "case_number": {
           "name": "case_number",
           "type": "integer",
@@ -8529,6 +9141,22 @@
             }
           ],
           "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "cases_work_issue_uq": {
+          "name": "cases_work_issue_uq",
+          "columns": [
+            {
+              "expression": "work_issue_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"cases\".\"work_issue_id\" is not null",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -8712,6 +9340,19 @@
             "id"
           ],
           "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "cases_work_issue_id_issues_id_fk": {
+          "name": "cases_work_issue_id_issues_id_fk",
+          "tableFrom": "cases",
+          "tableTo": "issues",
+          "columnsFrom": [
+            "work_issue_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
           "onUpdate": "no action"
         },
         "cases_parent_case_id_cases_id_fk": {
@@ -36854,6 +37495,22 @@
         }
       },
       "indexes": {
+        "issue_recovery_actions_retained_workspace_recovery_idx": {
+          "name": "issue_recovery_actions_retained_workspace_recovery_idx",
+          "columns": [
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\n      (\"issue_recovery_actions\".\"evidence\"->'workspaceRestoreRecovery'->>'schema' = 'paperclip.workspace-restore-recovery.v1'\n        or \"issue_recovery_actions\".\"cause\" in ('native_workspace_sync_out_unrecoverable', 'native_workspace_sync_out_retry_exhausted'))\n      and (\"issue_recovery_actions\".\"evidence\"->'executionReconciliation' is null\n        or \"issue_recovery_actions\".\"evidence\"#>>'{workspaceRecovery,status}' = 'recovered')\n    ",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "issue_recovery_actions_company_source_status_idx": {
           "name": "issue_recovery_actions_company_source_status_idx",
           "columns": [

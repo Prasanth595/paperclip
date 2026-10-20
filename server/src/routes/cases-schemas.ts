@@ -85,7 +85,11 @@ export const listCasesQuerySchema = z
     parent: z.string().guid().optional(),
     q: z.string().trim().min(1).max(200).optional(),
     includeAncestors: z.enum(["true", "false", "1", "0"]).optional(),
+    sortField: z.enum(["updated", "created", "title", "status", "type"]).optional().default("updated"),
+    sortDir: z.enum(["asc", "desc"]).optional().default("desc"),
+    groupBy: z.enum(["none", "status", "type", "project"]).optional().default("none"),
     limit: z.coerce.number().int().min(1).max(200).optional().default(100),
+    offset: z.coerce.number().int().min(0).max(100_000).optional().default(0),
   })
   .strict();
 
@@ -100,3 +104,8 @@ export const listEventsQuerySchema = z
       .default(DEFAULT_EVENTS_LIMIT),
   })
   .strict();
+
+export const caseDetailQuerySchema = z.object({
+  includeDocumentBodies: z.enum(["true", "false", "1", "0"]).optional()
+    .describe("Defaults to true. Set false to return document metadata without document bodies."),
+});
