@@ -1043,6 +1043,7 @@ export async function selectHeartbeatRuntime(db: Db, input: HeartbeatRuntimeSele
       resourceDisposition: providerResourceDispositionForRun,
       onCheckpoint: input.workspace.onCheckpoint,
       onPhase: input.workspace.onPhase,
+      onEvent: onAdapterEvent,
     }));
   } else {
     const legacyWarmLifecycle =

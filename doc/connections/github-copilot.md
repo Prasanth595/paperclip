@@ -1,8 +1,8 @@
 # GitHub Copilot runtime connection
 
 GitHub Copilot uses a saved GitHub token and the packaged Copilot CLI **1.0.88**.
-Runtime profile **v46** passed the local and Daytona qualification campaign.
-The [qualification record](../plans/2026-10-19-copilot-qualification-v46.json)
+Runtime profile **v47** passed the local and Daytona qualification campaign.
+The [qualification record](../plans/2026-10-20-copilot-qualification-v47.json)
 identifies the tested build, retained failures, and remaining release gates.
 
 On first setup, choose **GitHub Copilot** when creating your first agent. In an
@@ -59,3 +59,9 @@ zero-dollar usage. Session-scoped notices cannot establish task completion,
 artifacts, or charges.
 
 Model discovery uses the selected environment and can create a short-lived Daytona sandbox. Copilot model choices refresh when opening a task selector, changing an account or environment, reconnecting, or explicitly refreshing. Background live-data reconciliation does not repeat this probe.
+
+The qualification record retains one Daytona tool-dispatch timeout whose exact
+cause is unresolved. Its unchanged instrumented recheck passed after independent
+ordinary remote delivery and the other19 Product cases passed. No timeout or
+completion check was weakened. Qualification does not establish deployment: use
+the release record to verify the shipped package and canary.

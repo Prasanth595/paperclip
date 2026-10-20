@@ -1078,7 +1078,7 @@ console.log(JSON.stringify({ type: "result", subtype: "success", result: "hello"
       apiKey: "fixture", allAgents: true, agentIds: [],
     }, "github_pat_fixture_migration");
     await service.setDefault(companyId, "migration-copilot", copilot.grantId);
-    const migration = await readFile(new URL("../../../packages/db/src/migrations/0359_deep_mystique.sql", import.meta.url), "utf8");
+    const migration = await readFile(new URL("../../../packages/db/src/migrations/0361_mighty_dracula.sql", import.meta.url), "utf8");
     for (let attempt = 0; attempt < 2; attempt += 1) {
       await db.transaction(async (tx) => {
         for (const statement of migration.split("--> statement-breakpoint")) {
