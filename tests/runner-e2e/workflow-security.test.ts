@@ -15,6 +15,24 @@ const everydayOracleImage =
   "python@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285";
 
 describe("public repository paid workflow security", () => {
+  it("keeps the manual hosted Linux image build credential-free and pins the authorized target", async () => {
+    const workflow = await readFile(path.join(repositoryRoot, ".github/workflows/docker-runner-check.yml"), "utf8");
+    const manual = workflow.slice(workflow.indexOf("  authorize_manual:"));
+    expect(manual.match(/AWS_CI_TRUSTED_USER_IDS/gu)).toHaveLength(2);
+    expect(manual.match(/test "\$REPOSITORY_ID" = 1170821064/gu)).toHaveLength(2);
+    expect(manual.slice(manual.indexOf('  manual_image:'))).toContain('runs-on: ubuntu-latest');
+    expect(manual).toContain('repos/$REPOSITORY/git/ref/heads/$TARGET_BRANCH');
+    expect(manual).toContain("ref: ${{ inputs.release_run_id != '' && github.sha || needs.authorize_manual.outputs.target_sha }}");
+    expect(manual).toContain('test "$PUBLISH_EVAL_IMAGE" = true');
+    expect(manual).toContain('test "$VERIFY_SOURCE" != true');
+    expect(manual).toContain('test "$VERIFY_PUBLIC_INSTALL" != true');
+    expect(manual).toContain('SOURCE_SHA: ${{ needs.authorize_manual.outputs.target_sha }}');
+    expect([...manual.matchAll(/secrets\.([A-Z_]+)/gu)].map(match => match[1])).toEqual(["GITHUB_TOKEN"]);
+    expect(manual).toContain('pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile');
+    expect(manual).toContain('PAPERCLIP_RUNNER_LOCK_SHA256=$lock_sha');
+    expect(manual).toContain('docker logout ghcr.io');
+  });
+
   it("uses the reviewed master branch for the first-party trusted PR workflow", async () => {
     const ordinaryPrWorkflow = await readFile(
       path.join(repositoryRoot, ".github/workflows/pr.yml"),
@@ -206,7 +224,7 @@ describe("public repository paid workflow security", () => {
     );
     expect(daytonaImageJob).not.toContain("name: runner-e2e-paid");
     expect(daytonaImageJob).not.toMatch(
-      /(?:OPENAI|ANTHROPIC|OPENROUTER|DAYTONA|XAI)_API_KEY/,
+      /(?:(?:OPENAI|ANTHROPIC|OPENROUTER|DAYTONA|XAI)_API_KEY|GROK_AUTH_JSON)/,
     );
     expect(authorizeJob).toContain(
       "aws_runner='runs-on/fleet=paperclip-public-pr-x64/env=public-ci'",
@@ -306,7 +324,7 @@ describe("public repository paid workflow security", () => {
     expect(grokPreparation).toBeGreaterThan(paidInstall);
     expect(paidExecution).toBeGreaterThan(grokPreparation);
     expect(paidJob).toContain("if: matrix.environmentId == 'local' && (matrix.profileId == 'runner-acpx-grok' || matrix.profileId == 'runner-acpx-grok-subscription')");
-    expect(paidJob).toContain("run: node packages/grok-acp/install.mjs");
+    expect(paidJob).toContain("run: sudo node packages/paperclip-runner/scripts/provision-grok.mjs /opt/paperclip/providers/grok/1.0.13/grok");
 
     const everydayOracleStep = paidJob.slice(
       everydayOraclePreparation,
