@@ -6,6 +6,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "../../__tests__/helpers/embedded-postgres.js";
 import { runningProcesses } from "../../adapters/index.js";
 import {
+  markLocalRunCancellationRequested,
+  terminateSystemdRunScope,
+} from "../../adapters/utils.js";
+import {
   adapterExecutionControls,
   createAdapterExecutionControl,
   reportAdapterStopIfUnsettled,
@@ -34,6 +38,11 @@ vi.mock("../adapter-execution-control.js", async (importOriginal) => {
 vi.mock("../local-service-supervisor.js", async (importOriginal) => ({
   ...await importOriginal<typeof import("../local-service-supervisor.js")>(),
   terminateLocalService: vi.fn(async () => undefined),
+}));
+vi.mock("../../adapters/utils.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../adapters/utils.js")>(),
+  markLocalRunCancellationRequested: vi.fn(),
+  terminateSystemdRunScope: vi.fn(async () => undefined),
 }));
 
 type Run = typeof heartbeatRuns.$inferSelect;
@@ -183,6 +192,7 @@ describe.skipIf(!support.supported)("heartbeat run-control database wiring", () 
   });
   beforeEach(async () => {
     vi.mocked(terminateLocalService).mockReset().mockResolvedValue(undefined);
+    vi.mocked(terminateSystemdRunScope).mockReset().mockResolvedValue(undefined);
     await db.execute(sql`truncate table companies restart identity cascade`);
   });
   afterEach(() => runningProcesses.clear());
@@ -404,6 +414,30 @@ describe.skipIf(!support.supported)("heartbeat run-control database wiring", () 
     expect(terminateLocalService).toHaveBeenCalledTimes(2);
     // The executor still owns removal of this evidence after it observes Stop.
     expect(deps.failedProcessRunCancellations.get(run.id)?.error).toBe(failure);
+  });
+
+  it("stops an owned systemd run scope before recording cancellation", async () => {
+    const { company, agent } = await fixture();
+    const run = await liveRun(company.id, agent.id);
+    const tracked = runningProcesses.get(run.id)!;
+    tracked.containment = {
+      kind: "systemd_user_scope",
+      unitName: `paperclip-run-${run.id}.scope`,
+      setup: Promise.resolve(),
+    };
+    const deps = callbacks(db);
+
+    await expect(
+      createHeartbeatRunControl(db, deps).cancelRunInternal(run.id, "Stop"),
+    ).resolves.toMatchObject({ status: "cancelled" });
+
+    expect(markLocalRunCancellationRequested).toHaveBeenCalledWith(run.id);
+    expect(terminateSystemdRunScope).toHaveBeenCalledWith(
+      tracked.containment,
+      { graceMs: 4_000, signal: "SIGINT" },
+    );
+    expect(terminateLocalService).not.toHaveBeenCalled();
+    expect(deps.setRunStatusFromLive).toHaveBeenCalledTimes(1);
   });
 
   async function ownedAdapterRun() {

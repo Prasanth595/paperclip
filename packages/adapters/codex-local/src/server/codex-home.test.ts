@@ -361,6 +361,29 @@ describe("codexHomeHasUsableAuth", () => {
 });
 
 describe("seedManagedCodexHome", () => {
+  it("copies the trusted hook manifest into the managed Codex home", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-codex-hooks-"));
+    try {
+      const sharedCodexHome = path.join(root, "shared-codex-home");
+      const managedCodexHome = path.join(root, "managed-codex-home");
+      const hooks = JSON.stringify({ hooks: { preToolUse: [{ command: "/opt/hooks/pre" }] } });
+      await fs.mkdir(sharedCodexHome, { recursive: true });
+      await fs.writeFile(path.join(sharedCodexHome, "hooks.json"), hooks, "utf8");
+
+      await seedManagedCodexHome(
+        managedCodexHome,
+        { CODEX_HOME: sharedCodexHome },
+        async () => {},
+      );
+
+      expect(
+        await fs.readFile(path.join(managedCodexHome, "hooks.json"), "utf8"),
+      ).toBe(hooks);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("symlinks auth.json from the shared source into an explicit per-agent home", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-codex-seed-"));
     try {
@@ -1103,6 +1126,7 @@ describe("stageCodexHomeForSync", () => {
     await fs.symlink(authSource, path.join(home, "auth.json"));
     await fs.writeFile(path.join(home, "config.toml"), "model_provider = \"paperclip\"\n", "utf8");
     await fs.writeFile(path.join(home, "config.json"), "{}\n", "utf8");
+    await fs.writeFile(path.join(home, "hooks.json"), "{}\n", "utf8");
     await fs.writeFile(path.join(home, "instructions.md"), "hi\n", "utf8");
     // skills/ is a directory of symlinks.
     await fs.mkdir(path.join(home, "skills"), { recursive: true });

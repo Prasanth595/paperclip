@@ -4,7 +4,10 @@
 import type { ChildProcess } from "node:child_process";
 import { logger } from "../middleware/logger.js";
 import * as serverUtils from "@paperclipai/adapter-utils/server-utils";
-export type { RunProcessResult } from "@paperclipai/adapter-utils/server-utils";
+export type {
+  LocalRunContainment,
+  RunProcessResult,
+} from "@paperclipai/adapter-utils/server-utils";
 
 type BuildInvocationEnvForLogsOptions = {
   runtimeEnv?: NodeJS.ProcessEnv | Record<string, string>;
@@ -13,8 +16,16 @@ type BuildInvocationEnvForLogsOptions = {
   resolvedCommandEnvKey?: string;
 };
 
-export const runningProcesses: Map<string, { child: ChildProcess; graceSec: number; processGroupId: number | null }> =
+export const runningProcesses: Map<string, {
+  child: ChildProcess;
+  graceSec: number;
+  processGroupId: number | null;
+  containment?: serverUtils.LocalRunContainment;
+}> =
   serverUtils.runningProcesses;
+export const terminateSystemdRunScope = serverUtils.terminateSystemdRunScope;
+export const markLocalRunCancellationRequested =
+  serverUtils.markLocalRunCancellationRequested;
 export const MAX_CAPTURE_BYTES = serverUtils.MAX_CAPTURE_BYTES;
 export const MAX_EXCERPT_BYTES = serverUtils.MAX_EXCERPT_BYTES;
 export const parseObject = serverUtils.parseObject;
