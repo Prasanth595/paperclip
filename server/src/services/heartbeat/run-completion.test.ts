@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Db } from "@paperclipai/db";
 import { agents, agentWakeupRequests, companies, costEvents, createDb, EMBEDDED_POSTGRES_TEST_TIMEOUT_MS, heartbeatRuns, issues, nativeRunFinalizations } from "@paperclipai/db";
 import { eq, sql } from "drizzle-orm";
@@ -6,7 +7,7 @@ import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } fro
 import * as usageReceipts from "../usage-receipts.js";
 import { createAgentIdentityRedactor } from "../agent-identity-redaction.js";
 import { UnresolvedWorkspaceBaseRefError } from "../workspace-runtime.js";
-import { LegacyControllerLeaseLostError } from "../legacy-controller-lease.js";
+import { LegacyControllerLeaseLostError, legacyControllerBootId } from "../legacy-controller-lease.js";
 import { requestedRunCancellation } from "../run-cancellation.js";
 import { createHeartbeatLifecycle, type HeartbeatLifecycleDependencies } from "./run-lifecycle.js";
 import { createHeartbeatRunPreparation, ConfigurationIncompleteFailure } from "./run-preparation.js";
@@ -204,6 +205,79 @@ describe.skipIf(!support.supported)("heartbeat run completion boundary", () => {
     await f.completion.failRun(f.failure(f.controller.signal.reason));
     expect(await read(f.run.id)).toMatchObject({ status: "cancelled", resultJson: { cancellation: {
       source: "operator", expected: true, initiator: { type: "user", id: "operator-1" }, reason: "Stopped from the board" } } });
+  });
+
+  describe("a clean adapter result after the controller lease lapsed (#14840)", () => {
+    const lapsedLease = (patch: Partial<typeof heartbeatRuns.$inferInsert> = {}) => fixture({
+      controllerBootId: legacyControllerBootId, controllerLeaseExpiresAt: new Date(Date.now() - 30_000), ...patch });
+    const loseLease = (controller: AbortController) => controller.abort(new LegacyControllerLeaseLostError("renewal_deadline",
+      { sinceRenewalMs: 75_000, renewalPendingMs: 72_000, deadlineLateMs: 3, renewalCount: 12 }));
+
+    it("keeps the result when this process still owns the running row", async () => {
+      const f = await lapsedLease();
+      loseLease(f.controller);
+      await f.completion.completeRun(f.input);
+      const run = await read(f.run.id);
+      expect(run).toMatchObject({ status: "succeeded", errorCode: null, sessionIdAfter: "provider-session",
+        resultJson: { finalResponse: "Completed the work.", controllerLeaseLoss: { cause: "renewal_deadline", renewalCount: 12 } } });
+      expect(run.resultJson).not.toHaveProperty("cancellation");
+      expect(f.deps.finalizeAgentStatus).toHaveBeenCalledWith(f.agent.id, "succeeded", null, expect.any(Object));
+    });
+
+    it("keeps the result when the lease-loss warning cannot be recorded", async () => {
+      const f = await lapsedLease();
+      const appendRunEvent = vi.fn(f.deps.appendRunEvent).mockRejectedValueOnce(new Error("event store unavailable"));
+      const completion = createHeartbeatRunCompletion(db, { ...f.deps, appendRunEvent });
+      loseLease(f.controller);
+      await expect(completion.completeRun(f.input)).resolves.toBeUndefined();
+      expect(appendRunEvent).toHaveBeenNthCalledWith(1, expect.anything(), expect.objectContaining({ level: "warn" }));
+      expect(await read(f.run.id)).toMatchObject({ status: "succeeded", errorCode: null, sessionIdAfter: "provider-session",
+        resultJson: { controllerLeaseLoss: { cause: "renewal_deadline" } } });
+      expect((await f.deps.getTaskSession(f.agent.companyId, f.agent.id, f.agent.adapterType, "completion-task"))?.sessionDisplayId).toBe("provider-session");
+    });
+
+    it("stays cancelled when another controller revoked the lease", async () => {
+      const f = await lapsedLease({ controllerBootId: randomUUID() });
+      loseLease(f.controller);
+      await f.completion.completeRun(f.input);
+      expect(await read(f.run.id)).toMatchObject({ status: "cancelled", resultJson: { cancellation: { source: "controller_lease" } } });
+    });
+
+    it("stays cancelled when a Stop was recorded on the row", async () => {
+      const f = await lapsedLease({ resultJson: { cancellation: requestedRunCancellation(
+        { cancelledByActorType: "user", cancelledByUserId: "operator-1" }, "Stopped from the board") } });
+      loseLease(f.controller);
+      await f.completion.completeRun(f.input);
+      expect(await read(f.run.id)).toMatchObject({ status: "cancelled", resultJson: { cancellation: { source: "operator" } } });
+    });
+
+    it("stays cancelled when a process Stop is settling", async () => {
+      const f = await lapsedLease();
+      f.deps.processRunCancellationSettlements.set(f.run.id, { settled: Promise.resolve(), failed: false });
+      loseLease(f.controller);
+      await f.completion.completeRun(f.input);
+      expect((await read(f.run.id)).status).toBe("cancelled");
+    });
+
+    it.each([
+      { exitCode: 1 },
+      { exitCode: null, errorCode: "cancelled", errorMessage: "Execution was cancelled" },
+      { signal: "SIGTERM" },
+      { timedOut: true },
+    ])("stays cancelled when the adapter did not exit cleanly (%o)", async (result) => {
+      const f = await lapsedLease();
+      Object.assign(f.input.adapterResult, result);
+      loseLease(f.controller);
+      await f.completion.completeRun(f.input);
+      expect(await read(f.run.id)).toMatchObject({ status: "cancelled", resultJson: { cancellation: { source: "controller_lease" } } });
+    });
+
+    it("stays cancelled for any other abort reason", async () => {
+      const f = await lapsedLease();
+      f.controller.abort(new Error("Run stopped before provider startup"));
+      await f.completion.completeRun(f.input);
+      expect((await read(f.run.id)).status).toBe("cancelled");
+    });
   });
 
   it("does not publish or overwrite a conflicting terminal transition that wins the compare-and-set", async () => {
