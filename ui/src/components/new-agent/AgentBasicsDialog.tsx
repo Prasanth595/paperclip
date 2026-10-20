@@ -28,7 +28,6 @@ export type AgentBasics = {
   runnerProvider: string;
 };
 export { AdapterMark } from "../AdapterMark";
-
 function AgentBasicsCharacter() {
   const { selectedCompanyId } = useCompany();
   const { appearance } = useAgentAppearanceDraft(`${selectedCompanyId}:new-agent`);
