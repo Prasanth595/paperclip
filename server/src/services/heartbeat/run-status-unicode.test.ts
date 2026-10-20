@@ -116,4 +116,21 @@ describe("sanitizeRunScopeForPostgres", () => {
       right: { note: "nul" },
     });
   });
+
+  it("sanitizes very deep structures without overflowing the stack", () => {
+    let deep: unknown = "bottom\u0000";
+    for (let index = 0; index < 4000; index += 1) deep = [deep];
+    const sanitized = sanitizeRunScopeForPostgres(deep);
+    let cursor = sanitized as unknown[];
+    for (let index = 0; index < 4000; index += 1) cursor = cursor[0] as unknown[];
+    expect(cursor).toBe("bottom");
+  });
+
+  it("keeps a sanitized __proto__ key as an own property", () => {
+    const parsed = JSON.parse('{"__pro\\u0000to__":{"polluted":true}}') as Record<string, unknown>;
+    const sanitized = sanitizeRunScopeForPostgres(parsed) as Record<string, unknown>;
+    expect(Object.keys(sanitized)).toEqual(["__proto__"]);
+    expect(Object.getOwnPropertyDescriptor(sanitized, "__proto__")?.value).toEqual({ polluted: true });
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
 });
