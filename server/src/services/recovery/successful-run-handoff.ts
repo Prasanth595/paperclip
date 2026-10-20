@@ -139,6 +139,7 @@ const SUCCESSFUL_RUN_HANDOFF_VALID_PATH_SKIP_REASONS = new Set([
   "issue is under an active pause hold",
   "corrective handoff wake already exists for this source run",
   "chat conversation already owns the next action",
+  "recovery episode wake budget exhausted",
 ]);
 
 export function isSuccessfulRunHandoffValidPathSkip(
@@ -476,6 +477,7 @@ export function decideSuccessfulRunHandoff(input: {
   hasOpenRecoveryIssue: boolean;
   hasPauseHold: boolean;
   hasActiveRoutineContinuation: boolean;
+  recoveryEpisodeExhausted?: boolean;
   budgetBlocked: boolean;
   idempotentWakeExists: boolean;
 }): SuccessfulRunHandoffDecision {
@@ -525,6 +527,9 @@ export function decideSuccessfulRunHandoff(input: {
   if (input.hasExplicitBlockerPath) return { kind: "skip", reason: "explicit blocker path owns the next action" };
   if (input.hasOpenRecoveryIssue) return { kind: "skip", reason: "open recovery issue owns the ambiguity" };
   if (input.hasPauseHold) return { kind: "skip", reason: "issue is under an active pause hold" };
+  if (input.recoveryEpisodeExhausted) {
+    return { kind: "skip", reason: "recovery episode wake budget exhausted" };
+  }
   if (input.budgetBlocked) return { kind: "skip", reason: "budget hard stop blocks corrective wake" };
   if (input.idempotentWakeExists) {
     return { kind: "skip", reason: "corrective handoff wake already exists for this source run" };

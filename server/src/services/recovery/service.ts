@@ -154,6 +154,7 @@ import {
   DISPOSITION_REPAIR_MAX_ATTEMPTS,
 } from "./disposition-repair.js";
 import { ensureMissingDispositionDecisionCard } from "./missing-disposition-escalation.js";
+import { readRecoveryEpisodeWakeUsage } from "./episode-budget.js";
 import {
   createActiveRunWatchdog,
   WatchdogDecisionApplicationError,
@@ -3926,6 +3927,22 @@ export function recoveryService(
         terminalReason: !ownerInvokable
           ? "owner_not_invokable"
           : "owner_budget_blocked",
+      });
+      return escalated ? "escalated" : "skipped";
+    }
+
+    const episodeUsage = await readRecoveryEpisodeWakeUsage(db, {
+      companyId: current.companyId,
+      issueId: current.id,
+    });
+    if (episodeUsage.exhausted) {
+      const escalated = await escalateDispositionRepair({
+        issue: current,
+        latestRun,
+        fingerprint: state.fingerprint,
+        attemptCount: sameFingerprintAttempt,
+        terminalReason: "recovery_episode_wake_budget_exhausted",
+        legacyEpisode: episode,
       });
       return escalated ? "escalated" : "skipped";
     }

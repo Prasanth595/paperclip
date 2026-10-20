@@ -90,6 +90,7 @@ export function decideRunLivenessContinuation(input: {
   livenessReason: string | null;
   nextAction: string | null;
   budgetBlocked: boolean;
+  recoveryEpisodeExhausted?: boolean;
   idempotentWakeExists: boolean;
   maxAttempts?: number;
 }): RunContinuationDecision {
@@ -124,6 +125,9 @@ export function decideRunLivenessContinuation(input: {
   }
   if (!CONTINUATION_AGENT_STATUSES.has(agent.status)) {
     return { kind: "skip", reason: `agent status ${agent.status} is not invokable` };
+  }
+  if (input.recoveryEpisodeExhausted) {
+    return { kind: "skip", reason: "recovery episode wake budget exhausted" };
   }
   if (budgetBlocked) {
     return { kind: "skip", reason: "budget hard stop blocks continuation" };

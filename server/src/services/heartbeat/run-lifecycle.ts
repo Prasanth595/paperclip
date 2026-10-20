@@ -16,6 +16,7 @@ import {
 import { CONFIGURATION_INCOMPLETE_FAILURE_CODE } from "./run-preparation.js";
 import { WORKSPACE_VALIDATION_FAILURE_CODE } from "./workspaces.js";
 import { boundHeartbeatRunEventPayloadForStorage } from "./run-log.js";
+import { readRecoveryEpisodeWakeUsage } from "../recovery/episode-budget.js";
 import { preserveWorkspaceRestoreRecoveryMetadata } from "../workspace-restore-recovery-state.js";
 import { pendingNativeWorkspaceFinalizationCondition } from "../native-runtime/native-workspace-finalization-state.js";
 import { activeIssueInteractionCondition } from "../issue-question-context.js";
@@ -1463,6 +1464,13 @@ export function createHeartbeatLifecycle(db: Db, dependencies: HeartbeatLifecycl
         })
       : null;
 
+    const recoveryEpisodeUsage = issue
+      ? await readRecoveryEpisodeWakeUsage(db, {
+          companyId: issue.companyId,
+          issueId: issue.id,
+        })
+      : null;
+
     const decision = decideRunLivenessContinuation({
       run,
       issue,
@@ -1471,6 +1479,7 @@ export function createHeartbeatLifecycle(db: Db, dependencies: HeartbeatLifecycl
       livenessReason: run.livenessReason,
       nextAction: run.nextAction,
       budgetBlocked: Boolean(budgetBlock),
+      recoveryEpisodeExhausted: Boolean(recoveryEpisodeUsage?.exhausted),
       idempotentWakeExists: Boolean(existingWake),
     });
 
@@ -1829,6 +1838,13 @@ export function createHeartbeatLifecycle(db: Db, dependencies: HeartbeatLifecycl
         : Promise.resolve(null),
     ]);
 
+    const recoveryEpisodeUsage = issue
+      ? await readRecoveryEpisodeWakeUsage(db, {
+          companyId: issue.companyId,
+          issueId: issue.id,
+        })
+      : null;
+
     const decision = decideSuccessfulRunHandoff({
       run,
       issue,
@@ -1848,6 +1864,7 @@ export function createHeartbeatLifecycle(db: Db, dependencies: HeartbeatLifecycl
       hasOpenRecoveryIssue: Boolean(openRecoveryIssue),
       hasPauseHold: Boolean(pauseHold),
       hasActiveRoutineContinuation: Boolean(activeRoutineContinuation),
+      recoveryEpisodeExhausted: Boolean(recoveryEpisodeUsage?.exhausted),
       budgetBlocked: Boolean(budgetBlock),
       idempotentWakeExists: Boolean(existingWake),
     });
