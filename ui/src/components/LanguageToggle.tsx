@@ -30,7 +30,7 @@ export function LanguageToggle({
   if (!target) return null;
 
   const targetName = localeDisplayName(target);
-  const ariaLabel = t("app.language.switchTo", { language: targetName });
+  const label = t("app.language.switchTo", { language: targetName });
 
   function handleClick() {
     if (!target) return;
@@ -47,13 +47,13 @@ export function LanguageToggle({
           className,
         )}
         onClick={handleClick}
-        aria-label={ariaLabel}
+        aria-label={label}
       >
         <span className="mt-0.5 rounded-lg border border-border bg-background/70 p-2 text-muted-foreground">
           <Languages className="size-4" />
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block text-sm font-medium text-foreground" lang={target}>{targetName}</span>
+          <span className="block text-sm font-medium text-foreground">{label}</span>
           <span className="block text-xs text-muted-foreground">{t("app.language.description")}</span>
         </span>
       </button>
@@ -68,12 +68,12 @@ export function LanguageToggle({
         className,
       )}
       onClick={handleClick}
-      aria-label={ariaLabel}
+      aria-label={label}
     >
       <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
         <Languages className="size-4" />
       </span>
-      <span className="min-w-0 flex-1 truncate" lang={target}>{targetName}</span>
+      <span className="min-w-0 flex-1 truncate">{label}</span>
     </button>
   );
 }

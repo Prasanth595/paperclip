@@ -41,7 +41,7 @@ describe("LanguageToggle", () => {
     });
 
     const button = container.querySelector("button");
-    expect(button?.textContent).toBe("Português (Brasil)");
+    expect(button?.textContent).toBe("Switch language to Português (Brasil)");
     expect(button?.getAttribute("aria-label")).toBe("Switch language to Português (Brasil)");
 
     await act(async () => {
@@ -53,7 +53,7 @@ describe("LanguageToggle", () => {
     expect(localStorage.getItem(LOCALE_STORAGE_KEY)).toBe("pt-BR");
     expect(document.documentElement.lang).toBe("pt-BR");
     expect(afterToggleCalls).toBe(1);
-    expect(container.querySelector("button")?.textContent).toBe("English");
+    expect(container.querySelector("button")?.textContent).toBe("Mudar o idioma para English");
     expect(container.querySelector("button")?.getAttribute("aria-label")).toBe("Mudar o idioma para English");
   });
 
