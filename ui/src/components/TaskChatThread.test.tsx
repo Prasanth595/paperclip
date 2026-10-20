@@ -180,7 +180,11 @@ describe.each(["legacy", "native"] as const)("historical %s system status", (run
   it.each([true, false].flatMap(streamlined => ["done", "cancelled"].map(issueStatus => ({ streamlined, issueStatus }))))("removes failures, stops, waits and stored notices on $issueStatus tasks (streamlined=$streamlined)", ({ streamlined, issueStatus }) => {
     streamlinedState.enabled = streamlined;
     setTranscript("failed");
+    const pausedAgent = { id: "agent", name: "Assistant", status: "paused", pauseReason: "manual" } as Agent;
     const props = {
+      agentMap: new Map([[pausedAgent.id, pausedAgent]]),
+      currentAssigneeValue: `agent:${pausedAgent.id}`,
+      onResumeAssignee: vi.fn(),
       comments: [
         comment("response", "Saved the useful response.", "failed"),
         { ...comment("notice", "The previous execution needs to be checked.", "failed"), authorType: "system" as const,
@@ -194,7 +198,10 @@ describe.each(["legacy", "native"] as const)("historical %s system status", (run
       onAdd: async () => {},
     };
     render(<TaskChatThread {...props} issueStatus="blocked" />);
+    expect(container.querySelector('[data-testid="issue-assignee-paused-notice"]')).not.toBeNull();
     render(<TaskChatThread {...props} issueStatus={issueStatus} />);
+    expect(container.querySelector('[data-testid="issue-assignee-paused-notice"]')).toBeNull();
+    expect(container.querySelector('[data-testid="issue-assignee-paused-resume"]')).toBeNull();
     expect(container.textContent).toContain("Saved the useful response.");
     expect(container.textContent).toContain("Please keep this message.");
     expect(container.textContent).toContain("New session");
@@ -211,6 +218,10 @@ describe.each(["legacy", "native"] as const)("historical %s system status", (run
     }
     expect(props.linkedRuns[0].status).toBe("failed");
     expect(props.comments).toHaveLength(4);
+    render(<TaskChatThread {...props} issueStatus="todo" />);
+    expect(container.querySelector('[data-testid="issue-assignee-paused-notice"]')).not.toBeNull();
+    expect(pausedAgent.status).toBe("paused");
+    expect(props.onResumeAssignee).not.toHaveBeenCalled();
   });
 
   it("replaces old failure and wait notices when a new attempt succeeds, regardless of fetch order", () => {

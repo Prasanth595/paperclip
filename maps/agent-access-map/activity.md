@@ -41,6 +41,8 @@ API: `present` — representative operation IDs:
 
 - `GET /api/companies/{companyId}/activity`.
 - `GET /api/issues/{id}/activity` (UUID or issue identifier).
+- `GET /api/companies/{companyId}/audit/agent-actions?actorScope=all&entityType=case&entityId={caseRef}`
+  (case UUID or identifier).
 
 Agent access: `partial` — REST / native call_api / CLI activity for company
 activity. Sandbox agents can use GET issue activity through the default
@@ -66,6 +68,24 @@ inaccessible issue, another company, and company-wide audit.
 
 Gaps: Audit export and raw activity creation have extra restrictions; do not
 equate them with issue activity reading. Live sandbox access remains unverified.
+
+Working-tree case history update (2026-10-20): the all-actors Audit endpoint
+accepts case resource/action/date filters for ordinary company readers who can
+read those cases. Agent, responsible-person and run attribution filters still
+require `audit:view_agent_actions`; the basic tier still strips those fields and
+details. `case_events` mutations lacking an activity-log counterpart are merged
+with logged case events before the retained-source permission predicate and
+cursor limit. Case snippets are enriched only after that filter. Missing,
+inaccessible and other-company cases return no rows; exact identifiers are
+case-insensitive. The raw company activity API remains its existing stored-log
+view.
+
+Local verification: real temporary-Postgres
+[audit route regressions](../../server/src/__tests__/agent-action-audit-routes.test.ts)
+cover historical creation/fields, UUID/identifier filters, one-row cursor
+pagination, hidden private sources, and duplicate handoff suppression. This is
+local transport/database evidence, not a deployed agent run or a sandbox bridge
+qualification.
 
 ## `runs`
 

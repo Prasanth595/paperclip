@@ -102,6 +102,94 @@ in `packages/shared/src/constants.ts`.
 
 ## 6. Architecture
 
+### Experimental persistent cases and handoffs
+
+Standalone cases (`enableCases`) are independent of the experimental pipeline
+case model. A passive case has no execution requirement. `work_issue_id` binds at
+most one primary ordinary task per case and one primary case per task. Handoffs
+reuse that task, update its assignee through normal task policy, and store a free
+text phase separately from case/task status. They do not satisfy review gates.
+
+Native `create_case` requires `kickoff` and `workflow_document_text`, delegating
+to ordinary case handoff acceptance. New-case API handoffs also require workflow
+text. It is saved verbatim as ordinary task document key `workflow`, title
+`Workflow`, format `markdown`. Missing or blank text is rejected before mutation.
+Top-level `initialDocuments` belongs to first-task kickoff: normalized, unique
+task document keys, at most 20 additional documents and 200,000 total body
+characters including the workflow. Its key is reserved from additional seeds.
+The acceptance transaction writes
+ordinary task documents, attribution and activity before durable wake delivery.
+Retries share the kickoff receipt and cannot repeat document revisions. Existing
+primary tasks, binding existing tasks and terminal handoffs reject initial
+documents. There is no passive native creation branch or document seed storage. Native case-document
+tools are retired; case detail and execution context roll up authorized task
+document references, omitting bodies and system keys. Historical case document
+storage and REST reads remain compatible.
+
+Starting the first new task of an existing passive case also requires workflow
+text. New-case binding may create `workflow` on the bound task with ordinary task
+mutation authority and create-only revision semantics; an existing key conflicts
+atomically. Later handoffs of an existing primary task omit workflow text and
+revise it through ordinary task document tools. Existing stored cases are not
+backfilled. Receiving agents are instructed to read the task's workflow document;
+its authorized metadata precedes the document reference budget, while its body
+is read on demand. Recommend both a Mermaid `stateDiagram-v2` map and prose
+defining each transition's trigger, evidence, destination agent, human wait/resume
+rules, and correction/escalation limits. State IDs match phases and named edge
+outcomes are defined in prose. No graph parser, guard interpreter or new workflow
+execution service is added.
+
+`case_handoffs` is a durable, principal-idempotent intent/delivery ledger.
+Acceptance atomically stores the comment, links, observed revisions, audit, and
+delivery identity. A running source yields; it retains execution ownership until
+provider termination and workspace/session settlement are proven. Its late
+mutations cannot complete transferred work. Delivery uses the ordinary wake queue
+with a stable receipt, preserving Stop, private access, responsible-user, pause,
+and budget rules. A queued receipt is not proof that the recipient ran.
+
+An existing case with a primary task may instead receive `to: "done"`.
+This terminal handoff records `awaiting_completion`, keeps assignment and
+execution unchanged, and returns `callerMustYield: false`. Normal task
+completion remains authoritative: accepted transition to `done` atomically
+closes the case, sets its phase to `done` and records the handoff as `completed`.
+A task already done settles immediately. Reviews, questions and other legitimate
+waits do not close the case. Stop, task cancellation and reassignment cancel
+the intent. Recording a terminal intent cannot manufacture completion evidence
+or bypass review. Ordinary task completion without this intent leaves case
+status unchanged. Settling an admitted intent remains available while cases
+are disabled, like outgoing-execution cleanup.
+
+`case_access_sources` retains existing task/project boundaries. All sources must
+remain readable; unlinking or deletion cannot widen access. The same policy covers
+case contents, documents, revisions, annotations, assets, history, audit, and live
+publication. Agents cannot supply creator or responsible-user overrides.
+
+The REST operation is `POST /api/companies/:companyId/case-handoffs`; native agents
+use `handoff_case`. History, retry, and cancel stay on the case. Workflow routing
+lives in prompts/skills, without a server-configured phase graph. See
+[persistent case handoffs](plans/2026-10-19-persistent-case-handoffs.md).
+
+Native standard-mode agents also have `create_case`, `read_case` and
+`update_case`. Reads and updates default to the task's primary case and preserve
+the standalone-case authorization, provenance and audit rules of REST. Case
+updates expose facts only; routing, status and permissions remain outside those
+updates. Update receipts deduplicate identical keys within one admitted run;
+creation and handoff receipts remain principal-scoped. Ordinary `read_document`
+and `write_document` manage the active task's revisioned documents.
+
+Case context is authorized on each admission. Fresh sessions receive a bounded
+snapshot; verified native continuations send current routing metadata and new
+handoff instructions, plus case facts when their content or document revisions
+change. An incompatible or unproven prior projection falls back to full context.
+This limits repeated input without treating prepared database snapshots as proof
+that a provider received them.
+
+The existing Cases navigation opens read-only list and detail pages. List filters
+are URL-backed and applied before authorized pagination. A distinct-types read
+uses the same case visibility policy. Rows include batched current work context;
+detail preserves document previews/revisions, attachments, references, activity
+and handoff history. No case mutation or handoff recovery controls appear there.
+
 ## 6.1 Runtime Components
 
 - `server/`: REST API, auth, orchestration services

@@ -2,6 +2,45 @@
 
 Paperclip uses PostgreSQL via [Drizzle ORM](https://orm.drizzle.team/). There are three ways to run the database, from simplest to most production-ready.
 
+### Persistent case handoffs
+
+Standalone `cases` add a nullable unique `work_issue_id`, a descriptive `phase`,
+and an integer `handoff_version`. Historical passive records have no primary task;
+native `create_case` requires kickoff plus explicit workflow text and creates its primary task atomically. This is
+separate from `pipeline_cases`.
+
+First-task `initialDocuments` use ordinary `documents`, `document_revisions`
+and `issue_documents` in the case kickoff transaction. No case document copies,
+pending seeds or new tables are introduced. Case read surfaces join accessible
+linked task documents; historical `case_documents` records remain unchanged.
+Required `workflow_document_text` uses the same tables, under ordinary task key
+`workflow`. It is committed before delivery and contributes to the idempotency
+fingerprint. Existing cases and tasks receive no inferred workflow or backfill.
+Authoring guidance recommends both a Mermaid `stateDiagram-v2` map and prose
+defining each transition. Neither representation is parsed into database states.
+
+`case_handoffs` retains the task/agent identities, principal-scoped idempotency
+key and request fingerprint, observed/applied bigint task status revisions,
+instructions/comment, source run, and stable wakeup receipt. Partial unique
+indexes permit only one pending handoff per task and case. The pending-attempt
+index and expiring lease support bounded delivery across controller restarts.
+The ledger states distinguish release waiting, assignment applied but admission
+pending, queue acceptance, and cancellation. Provider execution remains in the
+ordinary heartbeat tables.
+
+Terminal handoffs have `destination_kind = 'done'`, a null destination agent,
+and states `awaiting_completion` / `completed` with `completed_at`. They share
+pending task/case uniqueness with agent transfers but do not enter the delivery
+lease index or wake queue. Accepted ordinary task completion and terminal case
+closure commit together. No terminal intent is inferred from a case's status.
+
+`case_access_sources` stores retained logical issue/project identities without
+deletion cascades from those sources. A missing source denies access. The case
+is readable only when every source's existing permissions allow it; unlinking a
+task or changing presentation metadata cannot widen that set. Migration 0355
+backfills historical project and linked-task sources conservatively and leaves
+all existing cases passive. Source identities are not grants.
+
 ### Task query performance
 
 Run-context lookups use expression indexes for both `context_snapshot.issueId`

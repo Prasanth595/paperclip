@@ -61,6 +61,11 @@ Manual: Filter by status and assignee, change grouping/sort, open a task, and re
 
 Automated: [task detail](../../ui/src/pages/IssueDetail.test.tsx) covers component behavior, while [issue service](../../server/src/__tests__/issues-service.test.ts) covers server contracts.
 
+Automated: [paused assignee relevance](../../tests/e2e/completed-task-paused-assignee.spec.ts)
+uses a real disposable server and paused process agent, with no inference, to
+check both task interfaces. Done and cancelled tasks hide the paused-agent
+warning; reopening restores it. The agent stays paused and no run starts.
+
 Manual: For a disposable task owned by a legacy agent, have its current run
 assign the task to a human with status In review. Verify that assignment and
 status persist, that the current run finishes without `issue_reassigned`, and
