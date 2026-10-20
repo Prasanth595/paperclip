@@ -130,6 +130,10 @@ Each execution records the immutable versions it uses; resuming keeps those vers
 while a new execution resolves latest again. Upstream failures and removals preserve
 installed snapshots. GitHub refresh does not delay task execution.
 
+Old, unused skill-version disk caches expire automatically while current and in-use
+versions remain. Saved database snapshots rebuild an expired copy on demand, including
+when its upstream repository is unavailable. Recovery data has separate retention.
+
 Disconnecting removes a repository from Sources after an explicit choice: keep
 independent editable copies in My Skills, or delete its imported skills. Kept
 copies and derived forks retain their project access restrictions. Copies preserve

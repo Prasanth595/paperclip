@@ -599,6 +599,7 @@ export type ResourceLifecycleEvent = {
 } & (
   | { resourceType: "agent"; action: "create" | "pause" | "resume" | "terminate" }
   | { resourceType: "project"; action: "create" | "update" | "archive" | "delete" }
+  | { resourceType: "agent_runtime"; action: "update" | "delete" }
 );
 
 /** Return acknowledged only after durable effects finish. Retry unfinished work;
@@ -1686,7 +1687,34 @@ export interface PluginApprovalsClient {
  * Requires `agents.read` for reads; `agents.pause` / `agents.resume` /
  * `agents.invoke` for write operations.
  */
+export interface PluginAgentRuntimeSkill {
+  key: string;
+  runtimeName: string;
+  source: string;
+  versionId?: string | null;
+  currentVersionId?: string | null;
+  sourceStatus?: "available" | "missing";
+  missingDetail?: string | null;
+}
+
+export interface PluginAgentConnectionAssignments {
+  features: { publicMcp: boolean; chatConnectors: boolean };
+  connections: Array<{ id: string; name: string; transport: string; enabled: boolean; status: string }>;
+  profileIds: string[];
+}
+
+export interface PluginAgentRuntimeState {
+  connectionAssignments: PluginAgentConnectionAssignments;
+  skills: PluginAgentRuntimeSkill[];
+  revision: string;
+  agent: Agent;
+  instructionsRootPath: string | null;
+  instructionsEntryFile: string;
+  instanceSecrets: Record<string, string>;
+}
+
 export interface PluginAgentsClient {
+  getRuntime(agentId: string, companyId: string): Promise<PluginAgentRuntimeState | null>;
   list(input: { companyId: string; status?: Agent["status"]; limit?: number; offset?: number }): Promise<Agent[]>;
   get(agentId: string, companyId: string): Promise<Agent | null>;
   /** Pause an agent. Throws if agent is terminated or not found. Requires `agents.pause`. */

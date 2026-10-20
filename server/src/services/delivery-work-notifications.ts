@@ -27,6 +27,8 @@ export const DELIVERY_QUEUES = {
   pluginLifecycle: "plugin-resource-lifecycle",
   toolAction: "tool-action-receipts",
   terminalWorkspaces: "terminal-workspaces",
+  routineSchedules: "routine-schedules",
+  issueMonitors: "issue-monitors",
 } as const;
 export type DeliveryQueue = typeof DELIVERY_QUEUES[keyof typeof DELIVERY_QUEUES];
 

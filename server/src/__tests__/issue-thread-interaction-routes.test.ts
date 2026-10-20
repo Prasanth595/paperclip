@@ -1,6 +1,6 @@
 import express from "express";
 import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ASSIGNEE_AGENT_ID = "11111111-1111-4111-8111-111111111111";
 const UNRELATED_AGENT_ID = "33333333-3333-4333-8333-333333333333";
@@ -309,13 +309,17 @@ async function resolveMockInteraction(
 }
 
 describe("issue thread interaction routes", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     vi.doUnmock("../routes/issues.js");
     vi.doUnmock("../routes/authz.js");
     vi.doUnmock("../middleware/index.js");
     vi.doUnmock("../services/index.js");
     registerModuleMocks();
+    await loadAppModules();
+  }, 60_000);
+
+  beforeEach(() => {
     // Every mock here is a vi.hoisted() singleton. All 70+ tests share it.
     // A queued mockResolvedValueOnce() value can outlive its own test and
     // leak into a later, unrelated test. vi.resetAllMocks() drains that
@@ -581,9 +585,7 @@ describe("issue thread interaction routes", () => {
     mockCrossIssueInfluence.sourceIssueId = ISSUE_ID;
     mockCrossIssueInfluence.priorCount = 0;
     mockCrossIssueInfluence.inserted.length = 0;
-    // Keep cold route imports in setup rather than the HTTP assertion timeout.
-    await loadAppModules();
-  }, 60_000);
+  });
 
   it("creates board-authored interactions", async () => {
     const app = await createApp();

@@ -1,3 +1,4 @@
+import { ensureSkillCacheDirectory, touchSkillVersionCache, withSkillVersionCacheLock } from "./skill-version-cache.js";
 import { retainProjectSkillAccess, skillAccessService } from "./skill-access.js";
 import type { AuthorizationActor } from "./authorization.js";
 import { updateAgentConfigurationInTransaction } from "./agent-configuration-transaction.js";
@@ -34,6 +35,7 @@ import {
 import { readPaperclipSkillSyncPreference, writePaperclipSkillSyncPreference, resolvePaperclipDesiredSkillNames,
   resolveLegacyPaperclipDesiredSkillNames } from "@paperclipai/adapter-utils/server-utils";
 import { REPOSITORY_CONTENT_DIR, repositorySkillProjection } from "./skill-repository-package.js";
+import { runVersionSnapshotFlight } from "./skill-version-retention.js";
 import type { PaperclipDesiredSkillEntry, PaperclipSkillEntry } from "@paperclipai/adapter-utils/server-utils";
 import type {
   AgentDesiredSkillEntry,
@@ -280,8 +282,6 @@ type ParsedSkillImportSource = {
   originalSkillsShUrl: string | null;
   warnings: string[];
 };
-
-const versionSnapshotFlights = new Map<string, Promise<string>>();
 
 const EXTERNAL_SKILL_SOURCE_TYPES = new Set<CompanySkillSourceType>(["github", "skills_sh", "url"]);
 
@@ -3383,6 +3383,11 @@ export function companySkillService(db: Db, options: { actor?: AuthorizationActo
   async function listFull(companyId: string): Promise<CompanySkill[]> {
     if (!visibility().canReadCompany(companyId)) return [];
     await ensureSkillInventoryCurrent(companyId);
+    return readFullSkillRows(companyId);
+  }
+
+  async function readFullSkillRows(companyId: string): Promise<CompanySkill[]> {
+    if (!visibility().canReadCompany(companyId)) return [];
     const rows = await db
       .select(selectCompanySkillColumns())
       .from(companySkills)
@@ -3533,17 +3538,20 @@ export function companySkillService(db: Db, options: { actor?: AuthorizationActo
     const skill = await getById(companyId, skillId);
     if (!skill) return null;
     if (skill.metadata?.skillSourceId && skill.metadata?.snapshotHash && skill.currentVersionId) {
-      const version = await getVersion(companyId, skill.id, skill.currentVersionId);
-      if (!version) throw unprocessable("Installed skill version is unavailable.");
-      const sourceLocator = await materializeVersionSnapshot(companyId, skill, version);
-      const audit = await auditInstalledSkillBytes({
-        ...skill,
-        sourceType: "local_path",
-        sourceLocator,
-        fileInventory: await runtimeVersionInventory(companyId, version),
+      const versionId = skill.currentVersionId;
+      return withSkillVersionCacheLock(db, companyId, async () => {
+        const version = await getVersion(companyId, skill.id, versionId);
+        if (!version) throw unprocessable("Installed skill version is unavailable.");
+        const sourceLocator = await materializeVersionSnapshot(companyId, skill, version);
+        const audit = await auditInstalledSkillBytes({
+          ...skill,
+          sourceType: "local_path",
+          sourceLocator,
+          fileInventory: await runtimeVersionInventory(companyId, version),
+        });
+        await persistAuditMetadata(skill, audit);
+        return audit;
       });
-      await persistAuditMetadata(skill, audit);
-      return audit;
     }
     if (skill.sourceType !== "catalog" && skill.sourceType !== "local_path") {
       throw unprocessable("Only local-path and catalog-managed company skills support audit.");
@@ -5963,13 +5971,15 @@ export function companySkillService(db: Db, options: { actor?: AuthorizationActo
         } else if (entry.isFile()) {
           out.push(normalizePortablePath(relativePath));
         } else {
-          out.push(normalizePortablePath(relativePath));
+          throw unprocessable("Unsafe file in materialized skill version.");
         }
       }
       return out;
     }
 
     try {
+      const rootStat = await fs.lstat(root);
+      if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw unprocessable("Unsafe materialized skill directory.");
       return await walk(root, "");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
@@ -6013,14 +6023,20 @@ export function companySkillService(db: Db, options: { actor?: AuthorizationActo
   }
 
   async function materializeVersionSnapshot(companyId: string, skill: CompanySkill, version: CompanySkillVersion): Promise<string> {
+    return withSkillVersionCacheLock(db, companyId, async () => {
+      const directory = await materializeVersionSnapshotLocked(companyId, skill, version);
+      await touchSkillVersionCache(companyId, skill.id, version.id);
+      return directory;
+    });
+  }
+
+  async function materializeVersionSnapshotLocked(companyId: string, skill: CompanySkill, version: CompanySkillVersion): Promise<string> {
     version = { ...version, fileInventory: await runtimeVersionInventory(companyId, version) };
     const runtimeRoot = path.resolve(resolveManagedSkillsRoot(companyId), "__versions__", skill.id);
     const skillDir = path.join(runtimeRoot, version.id);
-    const existing = versionSnapshotFlights.get(skillDir);
-    if (existing) return existing;
-    const work = (async () => {
+    return runVersionSnapshotFlight(skillDir, async () => {
+      await ensureSkillCacheDirectory(runtimeRoot, true);
       if (await materializedVersionSnapshotMatches(skillDir, version)) return skillDir;
-      await fs.mkdir(runtimeRoot, { recursive: true });
       const staging = await fs.mkdtemp(path.join(runtimeRoot, `.${version.id}-`));
       try {
         let wroteSkillFile = false;
@@ -6044,9 +6060,7 @@ export function companySkillService(db: Db, options: { actor?: AuthorizationActo
         }
         return skillDir;
       } finally { await fs.rm(staging, { recursive: true, force: true }); }
-    })();
-    versionSnapshotFlights.set(skillDir, work);
-    try { return await work; } finally { versionSnapshotFlights.delete(skillDir); }
+    });
   }
 
   function resolveRuntimeSkillMaterializedPath(companyId: string, skill: Pick<CompanySkill, "key" | "slug">) {
@@ -6075,6 +6089,20 @@ export function companySkillService(db: Db, options: { actor?: AuthorizationActo
       // with the real cause — a silent drop makes the skill vanish from the
       // runtime while the library still shows it installed.
       try {
+        if (options.materializeMissing === false && !options.snapshotLatest) {
+          // Agent settings enumerate the library, including unselected skills.
+          // Execution, rather than browsing, validates the repository bytes.
+          try {
+            await ensureSkillCacheDirectory(versionPath);
+            const entrypoint = await fs.lstat(path.join(versionPath, "SKILL.md"));
+            if (!entrypoint.isFile() || entrypoint.isSymbolicLink()) throw unprocessable("Unsafe skill cache entrypoint.");
+            return { status: "available", source: versionPath };
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+            return { status: "missing", source: versionPath,
+              detail: "The selected skill version will be materialized on the next run." };
+          }
+        }
         const versionSource = await materializeVersionSnapshot(companyId, skill, version);
         if (versionSource) return { status: "available", source: versionSource };
         return { status: "missing", source: versionPath, detail: "The selected skill version produced no files." };
@@ -6143,9 +6171,25 @@ export function companySkillService(db: Db, options: { actor?: AuthorizationActo
     companyId: string,
     options: RuntimeSkillEntryOptions = {},
   ): Promise<PaperclipSkillEntry[]> {
+    return withRuntimeSkillEntries(companyId, options, entries => entries);
+  }
+
+  async function withRuntimeSkillEntries<T>(
+    companyId: string,
+    options: RuntimeSkillEntryOptions,
+    consume: (entries: PaperclipSkillEntry[]) => T | Promise<T>,
+  ): Promise<T> {
     if (options.onlyKeys?.size === 0 || (!options.onlyKeys && options.selectionConfig && !options.includeLegacy
-      && readPaperclipSkillSyncPreference(options.selectionConfig).desiredSkills.length === 0)) return [];
-    const skills = await listFull(companyId);
+      && readPaperclipSkillSyncPreference(options.selectionConfig).desiredSkills.length === 0)) return consume([]);
+    await ensureSkillInventoryCurrent(companyId);
+    return withSkillVersionCacheLock(db, companyId, async () => consume(await listRuntimeSkillEntriesLocked(companyId, options)));
+  }
+
+  async function listRuntimeSkillEntriesLocked(
+    companyId: string,
+    options: RuntimeSkillEntryOptions,
+  ): Promise<PaperclipSkillEntry[]> {
+    const skills = await readFullSkillRows(companyId);
     const selectedKeys = options.onlyKeys ?? (options.selectionConfig ? new Set(
       (options.includeLegacy ? resolveLegacyPaperclipDesiredSkillNames : resolvePaperclipDesiredSkillNames)(
         options.selectionConfig, skills.map(skill => ({ key: skill.key, runtimeName: buildSkillRuntimeName(skill.key, skill.slug) }))),
@@ -7351,6 +7395,8 @@ export function companySkillService(db: Db, options: { actor?: AuthorizationActo
         logger.warn({ err: error, companyId }, "Skill deleted; quarantined source cleanup failed");
       });
     }
+    // Version caches may still be linked into a captured run. The retention
+    // worker removes orphan versions only after their run pins have settled.
     return deleted;
   }
 
@@ -7424,5 +7470,6 @@ export function companySkillService(db: Db, options: { actor?: AuthorizationActo
     installUpdate,
     resetSkill,
     listRuntimeSkillEntries,
+    withRuntimeSkillEntries,
   };
 }

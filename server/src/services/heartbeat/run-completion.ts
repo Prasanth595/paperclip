@@ -1,3 +1,4 @@
+import { measureRunPhase } from "../execution-preparation-timing.js";
 import { NON_RETRYABLE_PREFLIGHT_FAILURE_CODES, isHeartbeatRunTerminalStatus } from "./run-lifecycle.js";
 import { ChatControlRecoveryUnresolvedError } from "./queue.js";
 import { readTransientRecoveryContractFromRun, readHeartbeatRunErrorFamily, isTransientWorkspaceGitScanCode } from "./retries.js";
@@ -465,7 +466,7 @@ export function createHeartbeatRunCompletion(db: Db, dependencies: HeartbeatRunC
       compressed: boolean;
     } | null = null;
     if (handle) {
-      logSummary = await runLogStore.finalize(handle);
+      logSummary = await measureRunPhase("completion.output", () => runLogStore.finalize(handle));
     }
     const finalLogBytes = logSummary?.bytes;
     if (outputProgressState.pending && typeof finalLogBytes === "number") {
@@ -599,12 +600,12 @@ export function createHeartbeatRunCompletion(db: Db, dependencies: HeartbeatRunC
       logSha256: logSummary?.sha256,
       logCompressed: logSummary?.compressed ?? false,
     };
-    const persistedRunWrite = await setRunStatusIfRunning(
+    const persistedRunWrite = await measureRunPhase("completion.terminal_write", () => setRunStatusIfRunning(
       run.id,
       status,
       finalRunPatch,
       { adapterErrorMeta: adapterResult.errorMeta, secretValues: readFailureReportSecrets() },
-    );
+    ));
     let persistedRun: typeof heartbeatRuns.$inferSelect | null =
       persistedRunWrite.run;
     if (!persistedRunWrite.updated) {
@@ -645,7 +646,7 @@ export function createHeartbeatRunCompletion(db: Db, dependencies: HeartbeatRunC
           .then((rows) => rows[0] ?? null);
       }
       if (!persistedRun) {
-        await accountRunCost(db, run.id, budgetHooks).catch((err) => {
+        await measureRunPhase("completion.cost", () => accountRunCost(db, run.id, budgetHooks)).catch((err) => {
           logger.error({ err, runId: run.id }, "Late run accounting queued for recovery");
         });
         logger.info(
@@ -661,14 +662,14 @@ export function createHeartbeatRunCompletion(db: Db, dependencies: HeartbeatRunC
     }
     if (persistedRun) {
       // Accounting recovery is independent of workspace or issue finalization.
-      await accountRunCost(db, persistedRun.id, budgetHooks).catch((err) => {
+      await measureRunPhase("completion.cost", () => accountRunCost(db, persistedRun!.id, budgetHooks)).catch((err) => {
         logger.error({ err, runId: run.id }, "Run accounting queued for recovery");
       });
       persistedRun =
-        (await classifyAndPersistRunLiveness(
-          persistedRun,
+        (await measureRunPhase("completion.liveness", () => classifyAndPersistRunLiveness(
+          persistedRun!,
           persistedResultJson,
-        )) ?? persistedRun;
+        ))) ?? persistedRun;
     }
 
     await setWakeupStatus(
@@ -712,25 +713,25 @@ export function createHeartbeatRunCompletion(db: Db, dependencies: HeartbeatRunC
         );
       }
       const livenessRun = finalizedRun;
-      await refreshContinuationSummaryForRun(livenessRun, agent);
+      await measureRunPhase("completion.summary", () => refreshContinuationSummaryForRun(livenessRun, agent));
       const skipRunIssueComment =
         parseObject(livenessRun.contextSnapshot).skipIssueComment === true;
       let resolvedPresentationDecision: RunPresentationDecision | null =
         null;
       try {
         const existingRunComment = issueId
-          ? await findRunIssueComment(
+          ? await measureRunPhase("response.resolve", () => findRunIssueComment(
               livenessRun.id,
               livenessRun.companyId,
               issueId,
               persistedResultJson,
-            )
+            ))
           : null;
         const finalAgentMessage =
-          await findLatestCompletedFinalAgentMessage(
+          await measureRunPhase("response.resolve", () => findLatestCompletedFinalAgentMessage(
             livenessRun.id,
             livenessRun.companyId,
-          );
+          ));
         const externalChatPresentationCandidate =
           isExternalChatPresentationContext(livenessRun.contextSnapshot) ||
           parseObject(livenessRun.contextSnapshot).source === "tool_action_review" ||
@@ -738,11 +739,11 @@ export function createHeartbeatRunCompletion(db: Db, dependencies: HeartbeatRunC
           parseObject(livenessRun.contextSnapshot).source === "issue.update";
         const externalChatPresentationAuthorization =
           issueId && externalChatPresentationCandidate
-            ? await resolveChatRunPresentationAuthorizationReason(db, {
+            ? await measureRunPhase("response.authorize", () => resolveChatRunPresentationAuthorizationReason(db, {
                 companyId: livenessRun.companyId,
                 issueId,
                 runId: livenessRun.id,
-              })
+              }))
             : null;
         const externalChatPresentationContext = isExternalChatPresentationContext(
           livenessRun.contextSnapshot,
@@ -781,17 +782,17 @@ export function createHeartbeatRunCompletion(db: Db, dependencies: HeartbeatRunC
           // authorize that narrow presentation as the provider reply;
           // ordinary internal runs retain the private default.
           const presentationAuthorizationReason =
-            await resolveChatRunPresentationAuthorizationReason(db, {
+            await measureRunPhase("response.authorize", () => resolveChatRunPresentationAuthorizationReason(db, {
               companyId: livenessRun.companyId,
               issueId,
               runId: livenessRun.id,
-            });
-          const comment = await issuesSvc.addComment(
-            issueId,
-            resolved.text,
+            }));
+          const comment = await measureRunPhase("response.add_comment", () => issuesSvc.addComment(
+            issueId!,
+            resolved.text!,
             { agentId: agent.id, runId: livenessRun.id },
             { authorizationReason: presentationAuthorizationReason, completionReply: true },
-          );
+          ));
           presentationDecision = {
             ...presentationDecision,
             commentId: comment.id,
@@ -800,7 +801,7 @@ export function createHeartbeatRunCompletion(db: Db, dependencies: HeartbeatRunC
               "resolved_response_materialized",
             ],
           };
-          await logActivity(db, {
+          await measureRunPhase("response.activity", () => logActivity(db, {
             companyId: livenessRun.companyId,
             actorType: "agent",
             actorId: agent.id,
@@ -819,7 +820,7 @@ export function createHeartbeatRunCompletion(db: Db, dependencies: HeartbeatRunC
               source: "run_presentation_resolver",
               presentationSource: presentationDecision.chosenSource,
             },
-          });
+          }));
         } else if (presentationDecision.commentAction === "create") {
           presentationDecision = {
             ...presentationDecision,
@@ -1092,7 +1093,7 @@ export function createHeartbeatRunCompletion(db: Db, dependencies: HeartbeatRunC
     } | null = null;
     if (handle) {
       try {
-        logSummary = await runLogStore.finalize(handle);
+        logSummary = await measureRunPhase("completion.output", () => runLogStore.finalize(handle));
       } catch (finalizeErr) {
         logger.warn(
           { err: finalizeErr, runId },
@@ -1114,7 +1115,7 @@ export function createHeartbeatRunCompletion(db: Db, dependencies: HeartbeatRunC
     const stoppedDuringFailure = signal.aborted;
     const stopSnapshot = stoppedDuringFailure ? await getRun(run.id) : null;
     const failureOutcome = stoppedDuringFailure ? "cancelled" : "failed";
-    const failedRunWrite = await setRunStatusIfRunning(run.id, failureOutcome, {
+    const failedRunWrite = await measureRunPhase("completion.terminal_write", () => setRunStatusIfRunning(run.id, failureOutcome, {
       error: message,
       errorCode: stopSnapshot?.errorCode ?? failureErrorCode,
       finishedAt: new Date(),
@@ -1143,7 +1144,7 @@ export function createHeartbeatRunCompletion(db: Db, dependencies: HeartbeatRunC
       logBytes: logSummary?.bytes,
       logSha256: logSummary?.sha256,
       logCompressed: logSummary?.compressed ?? false,
-    }, { error: err, phase: "execute", secretValues: readFailureReportSecrets() });
+    }, { error: err, phase: "execute", secretValues: readFailureReportSecrets() }));
     if (
       !failedRunWrite.updated &&
       !(
@@ -1175,7 +1176,7 @@ export function createHeartbeatRunCompletion(db: Db, dependencies: HeartbeatRunC
         message,
       });
       const livenessRun =
-        (await classifyAndPersistRunLiveness(failedRun)) ?? failedRun;
+        (await measureRunPhase("completion.liveness", () => classifyAndPersistRunLiveness(failedRun))) ?? failedRun;
       try {
         await completeSkillTestRunForHeartbeatOutcome({
           run: livenessRun,
@@ -1190,7 +1191,7 @@ export function createHeartbeatRunCompletion(db: Db, dependencies: HeartbeatRunC
           "failed to complete skill test run after heartbeat adapter failure",
         );
       }
-      await refreshContinuationSummaryForRun(livenessRun, agent);
+      await measureRunPhase("completion.summary", () => refreshContinuationSummaryForRun(livenessRun, agent));
       if (
         !isWorkspaceValidationFailedRun(livenessRun) &&
         !isConfigurationIncompleteFailedRun(livenessRun)

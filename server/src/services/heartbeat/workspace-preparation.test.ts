@@ -19,11 +19,22 @@ import { workspaceOperationService } from "../workspace-operations.js";
 import { nativeWorkspaceSyncInternals, prepareNativeWorkspaceSync } from "../native-runtime/native-workspace-sync.js";
 import { createHeartbeatWorkspaceResolver, prepareProjectRepositoryWorkspaces, resolveExecutionWorkspaceReuseRequestForIssue } from "./workspaces.js";
 import { prepareHeartbeatWorkspace, type HeartbeatWorkspacePreparationInput } from "./workspace-preparation.js";
+import { buildNativeExecutionInput } from "../native-runtime/native-execution-input.js";
+import { nativeRuntimeContextFixture } from "../native-runtime/runtime-context.test-fixture.js";
 import * as managedRepositoryCheckout from "../managed-repository-checkout.js";
 import { isolatedRemoteSourcePath } from "../isolated-remote-workspace-source.js";
 import { cleanupExecutionWorkspaceArtifacts } from "../workspace-runtime.js";
 import { issueService } from "../issues.js";
 import { trace } from "@opentelemetry/api";
+import { buildExecutionWorkspaceAdapterConfig } from "../execution-workspace-policy.js";
+import { prepareRestrictedWorkspaceRetry } from "../restricted-workspace-retry.js";
+import express from "express";
+import request from "supertest";
+import { issueRoutes } from "../../routes/issues.js";
+import { errorHandler } from "../../middleware/error-handler.js";
+import { issueRecoveryActionService } from "../issue-recovery-actions.js";
+import { createLocalDiskStorageProvider } from "../../storage/local-disk-provider.js";
+import { createStorageService } from "../../storage/service.js";
 import { InMemorySpanExporter, SimpleSpanProcessor, TracerProvider } from "@opentelemetry/sdk-trace";
 
 const execFile = promisify(execFileCallback);
@@ -105,6 +116,47 @@ describe.skipIf(!support.supported)("heartbeat workspace preparation boundary", 
     input.run = run;
   }
 
+  it.each(["muse", "openai_dot", "grok_bot"] as const)("uses private %s controller storage without rebinding task files or preparing repositories", async provider => {
+    const { input, issue } = await fixture();
+    input.agent.adapterType = "paperclip_runner";
+    input.config.mergedConfig = { provider, cwd: "/task/source/must-not-be-read", workspaceStrategy: { type: "git_worktree" } };
+    input.reuse.isDotRun = true;
+    const resolve = vi.spyOn(input.services, "resolveWorkspaceForRun").mockRejectedValue(new Error("Task files must not be adopted"));
+    const bind = vi.spyOn(input.services.executionWorkspacesSvc, "bindTaskWorkspace").mockRejectedValue(new Error("Task binding must not change"));
+    const repos = vi.spyOn(input.services.executionWorkspacesSvc, "prepareTaskRepositoriesForAdmission").mockRejectedValue(new Error("Repositories must not be prepared"));
+    try {
+      const result = await prepareHeartbeatWorkspace(db, input);
+      expect(result.executionWorkspace.cwd).toContain(provider === "muse" ? "muse-controllers" : "dot-controllers");
+      expect(result.persistedExecutionWorkspace).toBeNull();
+      expect(result.projectRepositoryPaths).toEqual([]);
+      expect((await readIssue(issue.id)).executionWorkspaceId).toBeNull();
+      expect(resolve).not.toHaveBeenCalled();
+      expect(bind).not.toHaveBeenCalled();
+      expect(repos).not.toHaveBeenCalled();
+      const binding = { companyId: input.agent.companyId, agentId: input.agent.id, bindingId: input.run.id,
+        bindingGeneration: 1, acceptByUnixMs: Date.now() + 60_000, expiresAtUnixMs: Date.now() + 600_000 };
+      const admitted = buildNativeExecutionInput({ companyId: input.agent.companyId, agentId: input.agent.id,
+        runId: input.run.id, provider, ...(provider === "muse" ? { museBinding: binding } : { dotBinding: binding }),
+        issue: { id: issue.id, identifier: null, title: issue.title, description: null, workMode: "standard" },
+        taskPrompt: "Preserve the admitted controller", normalizedSessionId: input.run.id,
+        workspace: { id: input.run.id, cwd: result.executionWorkspace.cwd, repoUrl: null, repoRef: null, branchName: null },
+        completionContract: { id: input.run.id, sha256: `sha256:${"a".repeat(64)}`, schemaVersion: "paperclip.run-result.v1",
+          contract: { revision: "1", objective: "Preserve the controller", criteria: [{ id: "objective", requirement: "Preserve the original checkpoint path" }] } },
+        runtimeContext: nativeRuntimeContextFixture(),
+      });
+      input.reuse.persistedNativeExecutionInput = admitted;
+      input.run.runtimeMode = "native";
+      input.run.runnerProfileJson = { nativeExecutionInput: admitted };
+      input.config.mergedConfig = { provider: "codex" };
+      const recovered = await prepareHeartbeatWorkspace(db, input);
+      expect(recovered.executionWorkspace.cwd).toBe(result.executionWorkspace.cwd);
+      expect(recovered.persistedExecutionWorkspace).toBeNull();
+      expect(bind).not.toHaveBeenCalled();
+      expect(repos).not.toHaveBeenCalled();
+
+    } finally { resolve.mockRestore(); bind.mockRestore(); repos.mockRestore(); }
+  });
+
   it("persists the workspace and issue binding before acquiring its environment", async () => {
     const { input, source, issue, envOrchestrator } = await fixture();
     const acquire = envOrchestrator.acquireForRun;
@@ -163,7 +215,7 @@ describe.skipIf(!support.supported)("heartbeat workspace preparation boundary", 
     }
   });
 
-  it.each(["create", "failed-save", "shared-retry-after-failed-save", "literal-branch", "legacy-explicit-source", "inherited-source", "legacy-untyped-source", "changed-source-intent", "context-source"] as const)("preserves restricted source isolation during %s", async scenario => {
+  it.each(["create", "retry-restricted", "retry-fixed-branch", "retry-existing-branch", "retry-adapter-branch", "failed-save", "shared-retry-after-failed-save", "literal-branch", "legacy-explicit-source", "inherited-source", "legacy-untyped-source", "changed-source-intent", "context-source"] as const)("preserves restricted source isolation during %s", async scenario => {
     const { input, source, issue: originalIssue } = await fixture(true);
     await db.update(companies).set({ issueCounter: 1 }).where(eq(companies.id, originalIssue.companyId));
     const issue = await issueService(db).create(originalIssue.companyId, {
@@ -217,6 +269,73 @@ describe.skipIf(!support.supported)("heartbeat workspace preparation boundary", 
       return { cwd, warning: null };
     });
     const isolatedSource = isolatedRemoteSourcePath(issue.companyId, issue.id);
+    if (scenario.startsWith("retry-")) {
+      const fixedBranch = scenario === "retry-fixed-branch";
+      const existingBranch = scenario === "retry-existing-branch";
+      const projectPolicy = { enabled: true, defaultMode: "isolated_workspace" as const,
+        workspaceStrategy: { type: "git_worktree" as const, baseRef: "main", provisionCommand: "true",
+          ...(fixedBranch ? { branchTemplate: "fixed-project-branch" } : {}) } };
+      await db.update(projects).set({ executionWorkspacePolicy: projectPolicy }).where(eq(projects.id, issue.projectId!));
+      input.policy.projectExecutionWorkspacePolicy = projectPolicy;
+      const [oldWorkspace] = await db.insert(executionWorkspaces).values({ companyId: issue.companyId,
+        projectId: issue.projectId, projectWorkspaceId: issue.projectWorkspaceId, sourceIssueId: issue.id,
+        name: "Original files", cwd: source, repoUrl: remoteUrl, mode: "shared_workspace",
+        strategyType: "project_primary", providerType: "local", status: "idle" }).returning();
+      await writeFile(join(source, "unfinished.txt"), "Keep my original files\n");
+      await db.update(heartbeatRuns).set({ status: "failed", contextSnapshot: { issueId: issue.id, projectId: issue.projectId },
+        resultJson: { configurationIncomplete: { reason: "workspace_source_restricted" }, executionRecovery: { kind: "bootstrap", providerWorkStarted: false } },
+      }).where(eq(heartbeatRuns.id, run.id));
+      await db.update(issues).set({ status: "blocked", executionWorkspaceId: oldWorkspace.id, executionWorkspacePreference: "reuse_existing",
+        assigneeAdapterOverrides: scenario === "retry-adapter-branch" ? { adapterConfig: { model: "preserved-model", workspaceStrategy: { type: "git_worktree", baseRef: "main", branchTemplate: "fixed-adapter-branch" } } } : null,
+        executionWorkspaceSettings: { mode: "shared_workspace", environmentId: input.environment.localEnvironment.id,
+          ...(existingBranch ? { workspaceStrategy: { type: "git_worktree", baseRef: "main", existingBranch: "restricted-task" } } : {}) },
+      }).where(eq(issues.id, issue.id));
+      const service = executionWorkspaceService(db);
+      const actor = { type: "board" as const, source: "local_implicit" as const };
+      const action = await issueRecoveryActionService(db).upsertSourceScoped({
+        companyId: issue.companyId, sourceIssueId: issue.id, kind: "configuration_validation",
+        ownerType: "board", returnOwnerAgentId: input.agent.id, cause: "configuration_incomplete",
+        fingerprint: `restricted:${run.id}`, evidence: { latestRunId: run.id }, nextAction: "Retry the task.",
+      });
+      const retryPlan = await prepareRestrictedWorkspaceRetry(db, await readIssue(issue.id), action);
+      expect(retryPlan?.selection).toEqual({ kind: "configured_source", projectWorkspaceId: issue.projectWorkspaceId!, mode: "managed_isolated" });
+      const enqueue = vi.fn(async () => null);
+      const app = express();
+      app.use(express.json());
+      app.use((req, _res, next) => { req.actor = actor; next(); });
+      app.use("/api", issueRoutes(db, createStorageService(createLocalDiskStorageProvider(join(home, "storage"))), {
+        recoveryActionEnqueueWakeup: enqueue,
+      }));
+      app.use(errorHandler);
+      const retry = () => request(app).post(`/api/issues/${issue.id}/recovery-actions/resolve`)
+        .send({ actionId: action.id, outcome: "restored", sourceIssueStatus: "todo" });
+      const failedResult = (await readRun(run.id)).resultJson!;
+      await db.update(heartbeatRuns).set({ resultJson: { ...failedResult, executionRecovery: { kind: "bootstrap", providerWorkStarted: true } } })
+        .where(eq(heartbeatRuns.id, run.id));
+      expect((await retry()).status).toBe(409);
+      expect((await readIssue(issue.id)).workspacePendingSelection).toBeNull();
+      expect(enqueue).not.toHaveBeenCalled();
+      await db.update(heartbeatRuns).set({ resultJson: failedResult }).where(eq(heartbeatRuns.id, run.id));
+      await db.update(projects).set({ pausedAt: new Date() }).where(eq(projects.id, issue.projectId!));
+      expect((await retry()).status).toBe(409);
+      expect((await readIssue(issue.id)).workspacePendingSelection).toBeNull();
+      expect(enqueue).not.toHaveBeenCalled();
+      await db.update(projects).set({ pausedAt: null }).where(eq(projects.id, issue.projectId!));
+      const responses = await Promise.all([retry(), retry()]);
+      for (const response of responses) expect(response.status, JSON.stringify(response.body)).toBe(200);
+      expect(enqueue).toHaveBeenCalledOnce();
+      expect((await readIssue(issue.id)).workspacePendingSelection?.intent.source).toBe("recovery");
+      expect((await readIssue(issue.id)).executionWorkspaceId).toBe(oldWorkspace.id);
+      await service.applyPendingTaskWorkspaceSelection({ companyId: issue.companyId, issueId: issue.id, runId: run.id, actor });
+      const selected = await readIssue(issue.id);
+      input.task.issueRef = selected;
+      input.task.workspaceSelection = selected.workspaceSelection;
+      input.policy.issueExecutionWorkspaceSettings = selected.executionWorkspaceSettings;
+      input.config.mergedConfig = buildExecutionWorkspaceAdapterConfig({ agentConfig: {}, projectPolicy,
+        issueSettings: selected.executionWorkspaceSettings, mode: "isolated_workspace", legacyUseProjectWorkspace: null,
+        adapterConfigOverrides: selected.assigneeAdapterOverrides?.adapterConfig as Record<string, unknown> | undefined });
+      if (scenario === "retry-adapter-branch") expect(input.config.mergedConfig.model).toBe("preserved-model");
+    }
     if (["literal-branch", "legacy-explicit-source", "inherited-source", "legacy-untyped-source", "changed-source-intent", "context-source"].includes(scenario)) {
       const selectedBranch = scenario === "literal-branch" ? "feature/literal-pin" : `test-${issue.identifier}`;
       await execFile("git", ["-C", source, "checkout", "-b", selectedBranch]);
@@ -227,7 +346,8 @@ describe.skipIf(!support.supported)("heartbeat workspace preparation boundary", 
       await execFile("git", ["-C", source, "checkout", "main"]);
       if (scenario === "literal-branch") input.config.mergedConfig = { workspaceStrategy: { type: "git_worktree", baseRef: "main", branchTemplate: "feature/literal-pin" } };
       const acquire = vi.spyOn(input.services.envOrchestrator, "acquireForRun");
-      await expect(prepareHeartbeatWorkspace(db, input)).rejects.toThrow("Task workspace access is no longer available");
+      await expect(prepareHeartbeatWorkspace(db, input)).rejects.toMatchObject({ code: "configuration_incomplete",
+        resultJson: { configurationIncomplete: { reason: "workspace_source_restricted", issueId: issue.id } } });
       expect(clone).not.toHaveBeenCalled();
       expect(acquire).not.toHaveBeenCalled();
       expect((await readIssue(issue.id)).executionWorkspaceId).toBeNull();
@@ -273,6 +393,11 @@ describe.skipIf(!support.supported)("heartbeat workspace preparation boundary", 
     expect(await readFile(join(result.executionWorkspace.cwd, "README.md"), "utf8")).toBe("source content\n");
     await expect(access(join(result.executionWorkspace.cwd, "private-work"))).rejects.toMatchObject({ code: "ENOENT" });
     expect(clone).toHaveBeenCalledOnce();
+    if (scenario.startsWith("retry-")) {
+      expect((await readIssue(issue.id)).executionWorkspaceSettings).toMatchObject({ mode: "isolated_workspace", environmentId: input.environment.localEnvironment.id });
+      expect(await readFile(join(source, "unfinished.txt"), "utf8")).toBe("Keep my original files\n");
+      await expect(access(join(result.executionWorkspace.cwd, "unfinished.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+    }
     await expect(execFile("git", ["-C", isolatedSource, "cat-file", "-e", privateCommit])).rejects.toBeDefined();
     await expect(execFile("git", ["-C", isolatedSource, "rev-parse", "--verify", "refs/heads/restricted-task"])).rejects.toBeDefined();
     expect(await realpath(join(isolatedSource, ".git"))).not.toBe(await realpath(join(source, ".git")));
@@ -296,6 +421,32 @@ describe.skipIf(!support.supported)("heartbeat workspace preparation boundary", 
     expect(reopened).toMatchObject({ ok: true });
     expect(await readFile(join(workspace.cwd!, "README.md"), "utf8")).toBe("source content\n");
     expect(await readFile(join(privateCwd, "confidential.txt"), "utf8")).toBe("Private source must not be copied");
+  });
+
+  it("keeps a reused shared-checkout workspace denied with an owner action after a restricted worktree appears", async () => {
+    const { input, source, issue } = await fixture(true);
+    const first = await prepareHeartbeatWorkspace(db, input);
+    const workspace = first.persistedExecutionWorkspace!;
+    expect(first.executionWorkspace.baseCwd).toBe(source);
+    await writeFile(join(workspace.cwd!, "unpublished-work.txt"), "Keep this task's local work\n");
+    const [privateIssue] = await db.insert(issues).values({ companyId: issue.companyId, title: "Private work",
+      visibility: "private", projectId: issue.projectId }).returning();
+    const privateCwd = join(source, "private-work");
+    await execFile("git", ["-C", source, "worktree", "add", "-b", "restricted-task", privateCwd, "main"]);
+    const [privateWorkspace] = await db.insert(executionWorkspaces).values({ companyId: issue.companyId,
+      name: "Private workspace", projectId: issue.projectId, sourceIssueId: privateIssue.id, cwd: privateCwd, mode: "isolated_workspace",
+      strategyType: "git_worktree", providerType: "git_worktree", providerRef: privateCwd, branchName: "restricted-task", status: "idle" }).returning();
+    await db.update(issues).set({ executionWorkspaceId: privateWorkspace.id }).where(eq(issues.id, privateIssue.id));
+    await reuse(input, workspace);
+    const clone = vi.spyOn(managedRepositoryCheckout, "materializeManagedProjectWorkspace");
+    const acquire = vi.spyOn(input.services.envOrchestrator, "acquireForRun");
+    await expect(prepareHeartbeatWorkspace(db, input)).rejects.toMatchObject({ code: "configuration_incomplete",
+      resultJson: { configurationIncomplete: { reason: "workspace_source_restricted", issueId: issue.id } } });
+    expect(clone).not.toHaveBeenCalled();
+    expect(acquire).not.toHaveBeenCalled();
+    expect((await readIssue(issue.id)).executionWorkspaceId).toBe(workspace.id);
+    expect(await readFile(join(workspace.cwd!, "unpublished-work.txt"), "utf8")).toBe("Keep this task's local work\n");
+    await expect(access(isolatedRemoteSourcePath(issue.companyId, issue.id))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it.each(["sandbox", "ssh", "local", null] as const)("uses the selected %s placement for controller provisioning", async driver => {

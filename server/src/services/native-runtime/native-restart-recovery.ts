@@ -19,7 +19,7 @@ import { readProcessStartedAt } from "../hot-restart.js";
 import { getServerInfoSnapshot } from "../../server-info.js";
 import { redactSensitiveText } from "../../redaction.js";
 import { issueRecoveryActionService } from "../issue-recovery-actions.js";
-import { reportRunFailure } from "../run-failure-report.js";
+import { isNewTerminalRunFailure, reportRunFailure } from "../run-failure-report.js";
 import { isNativeRunnerOwnershipHeld } from "./native-runner-ownership.js";
 import { nativeRestartInterruptedTurnId, type PersistedNativeSession } from "../../vendor/paperclip-runner/index.js";
 
@@ -177,11 +177,12 @@ export async function evaluateNativeControllerTakeover(input: {
   } | null;
   isProcessAlive?: (pid: number) => boolean;
   readProcessStartedAt?: (pid: number) => Promise<Date | null>;
+  requireStoppedController?: boolean;
 }): Promise<{ allowed: boolean; reason: string }> {
   const { owner, now } = input;
   const isAlive = input.isProcessAlive ?? processIsAlive;
   const readStartedAt = input.readProcessStartedAt ?? observedProcessStart;
-  if (!owner.leaseOwner || !owner.leaseExpiresAt) {
+  if ((!owner.leaseOwner || !owner.leaseExpiresAt) && !input.requireStoppedController) {
     return { allowed: true, reason: "unowned" };
   }
 
@@ -190,7 +191,7 @@ export async function evaluateNativeControllerTakeover(input: {
     return {
       allowed: false,
       reason:
-        owner.leaseExpiresAt <= now
+        owner.leaseExpiresAt !== null && owner.leaseExpiresAt <= now
           ? "expired_lease_without_controller_identity"
           : "live_legacy_lease_without_controller_identity",
     };
@@ -199,7 +200,7 @@ export async function evaluateNativeControllerTakeover(input: {
     return {
       allowed: true,
       reason:
-        owner.leaseExpiresAt <= now
+        owner.leaseExpiresAt !== null && owner.leaseExpiresAt <= now
           ? "expired_lease_controller_process_dead"
           : "controller_process_dead",
     };
@@ -894,7 +895,7 @@ export async function claimNativeRestartRecoveries(input: {
           })
           .where(eq(heartbeatRuns.id, row.run.id))
           .returning();
-        if (updatedRun && updatedRun.status !== row.run.status) {
+        if (updatedRun && isNewTerminalRunFailure(row.run, updatedRun)) {
           terminalRunToReport = updatedRun;
         }
         await tx

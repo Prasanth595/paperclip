@@ -1,7 +1,7 @@
 import { enableRunFailureReporting } from "./helpers/run-failure-reporting.js";
 import { EMBEDDED_POSTGRES_TEST_TIMEOUT_MS } from "@paperclipai/db";
 import * as conversationContinuation from "../services/conversation-continuation.js";
-import { environmentRuntimeService } from "../services/environment-runtime.js";
+import { classifyEnvironmentCapabilities, environmentRuntimeService } from "../services/environment-runtime.js";
 import * as workspaceRuntime from "../services/workspace-runtime.js";
 import { nativeWorkspaceSyncInternals } from "../services/native-runtime/native-workspace-sync.js";
 import { ensureNativeCompletionContract } from "../services/native-runtime/completion-contracts.js";
@@ -3521,7 +3521,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     }
   }
 
-  it("retains the source when a saved native descriptor fails inside runtime selection", async () => {
+  it.each([false, true])("settles a failed saved native descriptor without inventing files when workspace access is disabled: %s", async withoutWorkspace => {
     await withTempPaperclipHome(async () => {
       const f = await seedQueuedIssueRunFixture();
       await db.update(agents).set({ adapterType: "paperclip_runner",
@@ -3547,7 +3547,12 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
               descriptorSha256: "a".repeat(64), baselineSha256: "b".repeat(64), finalHostSha256: null,
               workspaceId: randomUUID(), leaseId: lease!.id, providerLeaseId: lease!.providerLeaseId!, remoteCwd: "/work", resourceDisposition: "destroy" as const };
             await db.update(heartbeatRuns).set({ runtimeMode: "native", nativeIssueId: f.issueId, nativePhase: "observed",
-              runnerProfileJson: { nativeWorkspaceSync: reference },
+              driverKind: withoutWorkspace ? "grok_bot_mcp" : null,
+              runnerProfileJson: { nativeWorkspaceSync: reference, ...(withoutWorkspace ? { nativeExecutionInput: {
+                schema: "paperclip.native-execution-input.v6", provider: { kind: "grok_bot" },
+                binding: { companyId: f.companyId, agentId: f.agentId, runId, issueId: f.issueId },
+                workspace: { access: "none", cwd: null, repoUrl: null, repoRef: null, branchName: null },
+              } } : {}) },
             }).where(eq(heartbeatRuns.id, runId));
             await db.insert(nativeRunFinalizations).values({ runId, companyId: f.companyId, issueId: f.issueId, phase: "observed" });
             await nativeWorkspaceSyncInternals.readDescriptor({ companyId: f.companyId, runId, workspaceId: reference.workspaceId, reference });
@@ -3556,15 +3561,21 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
         await heartbeat.resumeQueuedRuns();
         await heartbeat.drainActiveRunExecutions();
         expect(leaseId).toBeDefined();
-        expect(await heartbeat.getRun(f.runId, { includeExecutionEvidence: true })).toMatchObject({ status: "failed",
-          runtimeMode: "native", nativePhase: "terminal_failure", resultJson: {
-            workspaceRestoreFailure: "restore_failed", workspaceRestoreRecovery: { leaseIds: [leaseId] },
-          },
-        });
-        expect(await db.select().from(environmentLeases).where(eq(environmentLeases.id, leaseId!)))
-          .toMatchObject([{ status: "pending_cleanup", leasePolicy: "retain_on_failure" }]);
-        expect(await getExecutionBlocker(db, f.companyId, f.issueId)).toMatchObject({ workspaceRepairRequired: true, canRetry: false });
-        expect(release).toHaveBeenCalledWith(expect.objectContaining({ providerResourceDisposition: "stop_and_retain" }));
+        const failed = await heartbeat.getRun(f.runId, { includeExecutionEvidence: true });
+        expect(failed).toMatchObject({ status: "failed", runtimeMode: "native", nativePhase: "terminal_failure" });
+        if (withoutWorkspace) {
+          expect(failed?.resultJson?.workspaceRestoreFailure ?? null).toBeNull();
+          expect(failed?.resultJson?.workspaceRestoreRecovery ?? null).toBeNull();
+          expect((await getExecutionBlocker(db, f.companyId, f.issueId))?.workspaceRepairRequired).not.toBe(true);
+          expect(release).toHaveBeenCalled();
+          expect(release).not.toHaveBeenCalledWith(expect.objectContaining({ providerResourceDisposition: "stop_and_retain" }));
+        } else {
+          expect(failed?.resultJson).toMatchObject({ workspaceRestoreFailure: "restore_failed", workspaceRestoreRecovery: { leaseIds: [leaseId] } });
+          expect(await db.select().from(environmentLeases).where(eq(environmentLeases.id, leaseId!)))
+            .toMatchObject([{ status: "pending_cleanup", leasePolicy: "retain_on_failure" }]);
+          expect(await getExecutionBlocker(db, f.companyId, f.issueId)).toMatchObject({ workspaceRepairRequired: true, canRetry: false });
+          expect(release).toHaveBeenCalledWith(expect.objectContaining({ providerResourceDisposition: "stop_and_retain" }));
+        }
         expect(provider).not.toHaveBeenCalled();
         expect(mockAdapterExecute).not.toHaveBeenCalled();
       } finally { factory.mockRestore(); }
@@ -4068,6 +4079,63 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
         lostRunIds: [],
       });
     });
+  });
+
+  it("drains late legacy settlement before releasing its source and scheduling one continuation", async () => {
+    const f = await seedRunFixture({ runtimeMode: "legacy", adapterType: "codex_local", agentStatus: "running" });
+    await db.update(heartbeatRuns).set({ scopeKind: "issue", issueId: f.issueId }).where(eq(heartbeatRuns.id, f.runId));
+    const { leaseId } = await seedEnvironmentLeaseFixture({ ...f, provider: "daytona", driver: "sandbox" });
+    await db.update(environmentLeases).set({ providerLeaseId: randomUUID(), metadata: { driver: "sandbox" } })
+      .where(eq(environmentLeases.id, leaseId));
+    const release = vi.fn(async () => {
+      const [saved] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, f.runId));
+      expect(saved.resultJson).toMatchObject({ workspaceRestored: true });
+      return (await db.update(environmentLeases).set({ status: "released", cleanupStatus: "success", releasedAt: new Date() })
+        .where(eq(environmentLeases.id, leaseId)).returning())[0];
+    });
+    const runtime = environmentRuntimeService(db, { drivers: [{ driver: "sandbox",
+      resolveCapabilities: async () => classifyEnvironmentCapabilities({}),
+      acquireRunLease: async () => { throw new Error("Unexpected acquire"); }, releaseRunLease: release }] });
+    const heartbeat = heartbeatService(db, { environmentRuntime: runtime });
+    const control = createAdapterExecutionControl();
+    adapterExecutionControls.set(f.runId, control);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const shutdown = heartbeat.drainRunningRunsForShutdown("SIGTERM", new Date(), [f.runId]);
+    let drained = false;
+    let finalizers: Promise<void> | undefined;
+    try {
+      await vi.waitFor(() => expect(control.controller.signal.aborted).toBe(true));
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(await shutdown).toMatchObject({ interruptedRunIds: [f.runId], retryRunIds: [] });
+      finalizers = heartbeat.drainActiveRunExecutions().then(() => { drained = true; });
+      await Promise.resolve();
+      expect(drained).toBe(false);
+      expect(release).not.toHaveBeenCalled();
+      expect(await selectRecoveryRunsByAgent(f.agentId)).toHaveLength(1);
+      expect(await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.sourceIssueId, f.issueId))).toHaveLength(0);
+      await db.update(heartbeatRuns).set({ resultJson: sql`coalesce(${heartbeatRuns.resultJson}, '{}'::jsonb) || '{"workspaceRestored":true}'::jsonb` })
+        .where(eq(heartbeatRuns.id, f.runId));
+      control.finish();
+      await finalizers;
+      expect(release).toHaveBeenCalledOnce();
+      const runs = await selectRecoveryRunsByAgent(f.agentId);
+      expect(runs).toHaveLength(2);
+      expect(runs.find(run => run.id !== f.runId)).toMatchObject({ status: "scheduled_retry", scheduledRetryAttempt: 1,
+        scopeKind: "issue", issueId: f.issueId });
+      const reloaded = heartbeatService(db, { environmentRuntime: runtime });
+      await reloaded.drainRunningRunsForShutdown("SIGTERM", new Date(), [f.runId]);
+      expect(await selectRecoveryRunsByAgent(f.agentId)).toHaveLength(2);
+      expect((await db.select().from(environmentLeases).where(eq(environmentLeases.id, leaseId)))[0])
+        .toMatchObject({ status: "released", cleanupStatus: "success", metadata: { legacyShutdownWorkspaceSettlement: { state: "settled" } } });
+      expect(await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.sourceIssueId, f.issueId))).toHaveLength(0);
+      expect(mockAdapterExecute).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      control.finish();
+      adapterExecutionControls.delete(f.runId);
+      await shutdown;
+      await finalizers;
+    }
   });
 
   it("reports a selectively drained ACP run as lost when terminal persistence fails", async () => {

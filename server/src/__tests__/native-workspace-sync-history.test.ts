@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { summarizeStartupReuse } from "@paperclipai/adapter-utils/startup-reuse";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,7 @@ import { heartbeatRuns, type Db } from "@paperclipai/db";
 import type { EnvironmentLease } from "@paperclipai/shared";
 import type { AdapterSandboxExecutionTarget } from "@paperclipai/adapter-utils/execution-target";
 import type { CommandManagedRuntimeRunner } from "@paperclipai/adapter-utils/command-managed-runtime";
+import * as restoreMerge from "@paperclipai/adapter-utils/workspace-restore-merge";
 import * as workspaceSeedCache from "@paperclipai/adapter-utils/workspace-seed-cache";
 import * as gitWorkspaceSync from "@paperclipai/adapter-utils/git-workspace-sync";
 import { runLocalGit } from "@paperclipai/adapter-utils/git-workspace-sync";
@@ -51,6 +53,7 @@ describe("native warm workspace Git history", () => {
     "checks Git identity before reusing a warm sandbox: %s", async (change) => {
       const invalidRunSeed = change === "remote_commit_missing_run_seed" || change === "remote_commit_corrupt_run_seed";
       const cacheRefused = change === "remote_commit_cache_refused" || change === "host_bytes_cache_refused" || invalidRunSeed;
+      const snapshotWorker = vi.spyOn(restoreMerge, "captureDirectorySnapshotOffThread");
       const packClone = vi.spyOn(gitWorkspaceSync, "withShallowGitWorkspaceClone");
       const root = await mkdtemp(path.join(os.tmpdir(), "paperclip-warm-history-"));
       roots.push(root);
@@ -101,6 +104,7 @@ describe("native warm workspace Git history", () => {
       const input = { db: db as unknown as Db, companyId: "company", workspaceId: "workspace", workspaceLocalDir: host, lease, target };
       const first = (await prepareNativeWorkspaceSync({ ...input, runId: "first" }))!;
       expect(first.mode).toBe("host_current");
+      expect(snapshotWorker).toHaveBeenCalled();
       expect(first.reference.schema).toBe("paperclip.native-workspace-sync/v3");
       if (change === "plain_nested_commit") {
         const recovered = await nativeWorkspaceSyncInternals.readDescriptor({ runId: "first", reference: first.reference });
@@ -155,7 +159,8 @@ describe("native warm workspace Git history", () => {
           return result;
         },
       };
-      const second = (await prepareNativeWorkspaceSync({ ...input, runId: "second", target: {
+      const reuseEvents: import("@paperclipai/adapter-utils").AdapterRuntimeEvent[] = [];
+      const second = (await prepareNativeWorkspaceSync({ ...input, runId: "second", onEvent: async event => { reuseEvents.push(event); }, target: {
         ...target, runner: secondRunner, sandboxLeaseAcquisition: { outcome: "resumed", providerLeaseId: "sandbox" },
       } }))!;
       try {
@@ -164,6 +169,9 @@ describe("native warm workspace Git history", () => {
         if (invalidRunSeed) expect(invalidatedRunSeed).toBe(true);
         if (change === "remote_commit_corrupt_seed" || change === "remote_commit_missing_seed") expect(packClone).toHaveBeenCalled();
         expect(second.mode).toBe(change === "unchanged" ? "adopt_remote" : "host_current");
+        expect(summarizeStartupReuse(reuseEvents).layers.workspace).toEqual(change === "unchanged"
+          ? { state: "reused", reason: "verified_reuse" }
+          : { state: "fresh", reason: "workspace_changed" });
         expect(await readFile(path.join(remoteRepo, "file.txt"), "utf8")).toBe(expectedContents);
         if (change === "host_bytes_cache_refused") expect(await readFile(path.join(remote, "extra.txt"), "utf8")).toBe("new host file\n");
         expect(await git(remoteRepo, "rev-parse", "HEAD")).toBe(expectedHead);

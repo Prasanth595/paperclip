@@ -1,5 +1,5 @@
-import { and, asc, eq, isNull, lt, sql } from "drizzle-orm";
-import { grokBotDispatches, grokBotRoutines, dotAgentBindings, dotRunnerAssignments, heartbeatRuns, type Db } from "@paperclipai/db";
+import { and, asc, eq } from "drizzle-orm";
+import { grokBotDispatches, grokBotRoutines, type Db } from "@paperclipai/db";
 import { grokRoutineService } from "./routine.js";
 import type { deliverGrokRoutineWake } from "./webhook.js";
 import { externalBotEnabled } from "../external-bot-authority.js";
@@ -14,17 +14,9 @@ export function createGrokRoutineDispatcher(db: Db, isBackgroundWorkEnabled: () 
     running = true;
     try {
       const service = grokRoutineService(db, deliver);
-      // A proactive caller receives an immediate assignment without an echo.
-      // Queued admission gets one delayed wake only while still unaccepted.
-      const proactive = await db.select({ assignment: dotRunnerAssignments }).from(dotRunnerAssignments)
-        .innerJoin(dotAgentBindings, eq(dotAgentBindings.id, dotRunnerAssignments.bindingId))
-        .innerJoin(heartbeatRuns, eq(heartbeatRuns.id, dotRunnerAssignments.runId))
-        .where(and(eq(dotAgentBindings.providerKind, "grok_bot"), isNull(dotAgentBindings.revokedAt), eq(dotRunnerAssignments.status, "offered"),
-          lt(dotRunnerAssignments.createdAt, new Date(Date.now() - 10_000)), sql`${heartbeatRuns.contextSnapshot}->'grokProactiveRequest'->>'bindingId' = ${dotAgentBindings.id}::text`)).limit(10);
-      for (const { assignment } of proactive) {
-        try { await service.reserve({ companyId: assignment.companyId, agentId: assignment.agentId, bindingId: assignment.bindingId,
-          assignmentId: assignment.id, kind: "mailbox_updated", sourceEventId: `proactive-admission:${assignment.id}` }); } catch { /* Current authority is rechecked on reservation and send. */ }
-      }
+      // Bot-initiated callers poll their durable request while admission is
+      // pending. Delay does not prove that the originating conversation ended.
+      // Starting a webhook here would create a competing Grok interaction.
       // An accepted session already has a routine handling it. Quiet MCP
       // traffic does not prove that routine ended. Keep feedback and receipts
       // durable for the Bot to read instead of starting overlapping work.

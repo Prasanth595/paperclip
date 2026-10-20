@@ -2,6 +2,18 @@
 
 Product map: [Execution workspaces, services, and files](../feature-map/workspaces.md).
 
+Lost-source reconstruction adds the board-only
+`POST /api/issues/{id}/recovery-actions/reconstruct-workspace` action. It requires
+`runtime:manage` and ordinary task visibility. Agents cannot authorize it. The
+result is a durable fresh-session admission request, subject to current execution
+gates. It grants no additional tool access, budget, work window or permission to
+repeat completed actions. Attachments must belong to the same task and company.
+The original failed run and lost-export evidence remain unchanged.
+Later native run-only cancellations can coexist only with confirmed lease stops,
+board file-only repair and an external-action outcome of `not_performed`.
+Their immutable evidence is checked again at dispatch. Historical cancellation
+retention runs internally and grants no new agent operation or authority.
+
 Review date: 2026-10-12. Source commit: `58e16dbddfc9c8d0cf60867f9d9847f0feda055b`.
 Native REST transport reconciled in this change; see the
 [shared transport contract](README.md#native-rest-transport).
@@ -44,19 +56,41 @@ Fresh standard-trust tasks with an implicit repository default can use an owned
 remote clone when the shared default source fails the restricted-task workspace
 guard. This does not grant access to the private local checkout or its Git metadata.
 The normal admitted Git identity must already authorize the configured remote.
-Creation of a fallback source is unavailable for explicit, parent/channel, reused
+Creation of an automatic fallback source is unavailable for explicit, parent/channel, reused
 or low-trust selections, or branch templates without a task-derived placeholder;
 an existing verified owned source remains reusable. Literal branch selections
 retain the original denial without cloning or replacing their unpublished commits.
 New implicit Git defaults record project-source provenance. Untyped explicit,
 inherited and older ambiguous checkout bindings retain the denial; admission reads
 the current company-scoped binding before considering the fallback.
+A retained denial blocks the task as `configuration_incomplete`
+(`workspace_source_restricted`) before dispatch; it grants no access and offers Retry.
+The same blocker applies when shared project workspace repository admission finds
+the restricted source. The existing binding and files stay intact; no provider
+starts and no automatic failure retry is queued.
+An authorized board recovery through `POST /api/issues/{id}/recovery-actions/resolve`
+can schedule a server-owned `recovery` selection for the latest restricted-source
+failure only when its saved evidence proves provider work never started. The
+selection requires task mutation and configured-source access and applies at normal
+admission. It keeps task environment settings and never reads or deletes the denied
+checkout. Pause, budget, approval, interaction, dependency, and ownership gates
+remain effective. Repeated resolution of the same action does not enqueue another
+run. Agents cannot mint recovery provenance through the workspace selection API;
+they can observe the existing recovery action and request board recovery.
 Local paths, unsupported transports and credential-bearing URLs are not fallback
 sources. Company/task/remote bindings, real paths, Git storage and the exact origin
 are revalidated for reuse, cleanup and reopening. A failed save removes only the
 owned task worktree. The [isolated-source service](../../server/src/services/isolated-remote-workspace-source.ts)
 and its local regression tests establish source and lifecycle boundaries; live
 agent/provider qualification remains separate.
+Reconstructable Git expiration adds no agent endpoint or permission. It records
+company/workspace/repository identity and an exact commit before removing owned
+cache files. Existing task/workspace reopening retains current company, source,
+and trust checks. Missing upstream access returns a retryable error; it does not
+choose a newer commit or grant access to another company's source. Shared project
+bases and unresolved recovery remain protected. Local lifecycle evidence is in
+[expiration tests](../../server/src/__tests__/git-workspace-expiration.test.ts).
+
 Writable aliases must also be compatible with current and retained physical
 source projects' trust boundaries. Incompatible choices are rejected before
 dispatch; a projectless alias cannot bypass required sandbox containment.

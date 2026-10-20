@@ -41,11 +41,23 @@ endpoint authorization independently of whether the admin UI is visible.
 
 Automated: [gateway service](../../server/src/__tests__/tool-gateway-service.test.ts), [connect client dialog](../../ui/src/pages/apps/gateways/ConnectClientDialog.test.tsx), and [token panel](../../ui/src/pages/apps/gateways/panels/TokensPanel.test.tsx) cover service/UI contracts.
 
+Gateway regressions also cover a failed remote call followed by a successful
+sibling tool call. Transient failures preserve the catalog. Authentication
+failures retain their access gates. Real HTTP timeout fixtures verify an explicit
+retry starts a fresh MCP session without replaying the failed action. These
+checks do not establish a live provider journey.
+
 Manual: Create a disposable gateway with one harmless tool, connect a client using its provided configuration, discover/call that tool, and inspect activity. Revoke the client token and confirm the same call fails. Test a tool outside the allowed set.
 
 ### `access-profile`
 
 Automated: [profile wizard](../../ui/src/pages/tools/profiles/ProfileWizard.test.tsx) and [profile detail](../../ui/src/pages/tools/profiles/ProfileDetail.test.tsx) cover component behavior with mocks.
+
+Backend: [profile entry validation](../../server/src/__tests__/tool-profile-entry-validation.test.ts)
+uses isolated PostgreSQL to create and replace a 518-selector assignment with
+bounded reference reads. It checks exact selector retention, company boundaries,
+invalid input order, and fresh validation after deletion. This does not establish
+live client latency.
 
 Manual: Create a bounded profile, choose its offered tools and options, save or resume its draft, and reload the detail. Apply/connect it through the offered flow and inspect the actual client-visible tool set. Verify cancellation and invalid selections retain an understandable draft.
 

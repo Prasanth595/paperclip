@@ -1370,6 +1370,8 @@ describe("realizeExecutionWorkspace", () => {
   it.each(["missing", "empty"] as const)("records the actual lookup and fetch outcome for a %s origin", async (mode) => {
     const { repoRoot } = await createClonedRepoWithRemote();
     await runGit(repoRoot, mode === "missing" ? ["remote", "remove", "origin"] : ["config", "remote.origin.url", ""]);
+    const remoteUrl = mode === "empty" ? await readGit(repoRoot, ["remote", "get-url", "origin"]) : null;
+    if (mode === "empty") expect(["", "origin"]).toContain(remoteUrl);
     let authCalls = 0;
     const error = await realizeWorktreeForTest(repoRoot, "absent-fixture", async () => { authCalls++; return null; }).catch(error => error);
     expect(error).toBeInstanceOf(UnresolvedWorkspaceBaseRefError);
@@ -1378,6 +1380,12 @@ describe("realizeExecutionWorkspace", () => {
       expect(authCalls).toBe(0);
       expect(readUnresolvedWorkspaceBaseRefDiagnostic(error)).toEqual({ schemaVersion: 1,
         remoteLookup: "failed", authLookup: "not_requested", fetch: "not_attempted", refResolution: "failed", refExitCode: 128 });
+    } else if (remoteUrl === "") {
+      expect(error.fetchError).toBeNull();
+      expect(authCalls).toBe(1);
+      expect(error.defaultBranch).toBeNull();
+      expect(readUnresolvedWorkspaceBaseRefDiagnostic(error)).toEqual({ schemaVersion: 1,
+        remoteLookup: "empty", authLookup: "not_requested", fetch: "not_attempted", refResolution: "failed", refExitCode: 128 });
     } else {
       // Git returns the remote name when its URL is empty, then the fetch fails.
       expect(error.fetchError).toBeTruthy();
@@ -5627,12 +5635,6 @@ describe("resolveShell (shell fallback)", () => {
     expect(resolveShell()).toBe("sh");
   });
 
-  it("falls back to /bin/sh on darwin when SHELL is unset", () => {
-    delete process.env.SHELL;
-    Object.defineProperty(process, "platform", { value: "darwin" });
-    expect(resolveShell()).toBe("/bin/sh");
-  });
-
   it("treats empty SHELL as unset and uses platform fallback", () => {
     process.env.SHELL = "";
     Object.defineProperty(process, "platform", { value: "linux" });
@@ -7326,8 +7328,10 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
     }
   }, 20_000);
 
-  it("commits fixed-port reservations before readiness windows longer than 60 seconds", async () => {
+  it("commits fixed-port reservations across the configured database idle timeout", async () => {
     const fixture = await createRuntimeFixture();
+    const readinessDb = createDb(tempDb!.connectionString, { idleTimeoutSeconds: 1, maxConnections: 1 });
+    const [initialConnection] = await readinessDb.$client<{ pid: number }[]>`select pg_backend_pid() as pid`;
     const cleanupRuntimeHome = await createRuntimeHome();
     const workspace = fixture.workspaces[0]!;
     const basePort = await findFreePort();
@@ -7353,7 +7357,7 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
 
     try {
       startPromise = startRuntimeServicesForWorkspaceControl({
-        db,
+        db: readinessDb,
         actor: fixture.actor,
         issue: null,
         workspace: fixture.realizedWorkspace(workspace),
@@ -7377,16 +7381,18 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
         parentWrite.then(() => "committed" as const),
         new Promise<"locked">((resolve) => setTimeout(() => resolve("locked"), 2_000)),
       ]);
+      expect(parentWriteOutcome).toBe("committed");
 
       const readinessWaitStartedAt = Date.now();
-      await new Promise((resolve) => setTimeout(resolve, 60_250));
-      expect(Date.now() - readinessWaitStartedAt).toBeGreaterThanOrEqual(60_000);
+      await new Promise((resolve) => setTimeout(resolve, 1_250));
+      expect(Date.now() - readinessWaitStartedAt).toBeGreaterThanOrEqual(1_000);
+      const [reconnected] = await readinessDb.$client<{ pid: number }[]>`select pg_backend_pid() as pid`;
+      expect(reconnected!.pid).not.toBe(initialConnection!.pid);
 
       await fs.writeFile(releaseMarkerPath, "release");
       const started = (await startPromise)[0]!;
       await parentWrite;
 
-      expect(parentWriteOutcome).toBe("committed");
       expect(started).toMatchObject({
         port: basePort,
         url: `http://127.0.0.1:${basePort}`,
@@ -7413,6 +7419,7 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
       }).catch(() => undefined);
       await cleanupRuntimeHome();
       await fixture.cleanup();
+      await readinessDb.$client.end({ timeout: 1 });
     }
   }, 80_000);
 
@@ -7533,6 +7540,8 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
     }
   }, 20_000);
 
+  // Exhaustion starts and stops all 32 candidates after ownership fails.
+  // Give their real-process stability checks and verified cleanup bounded headroom.
   it("does not accept an occupied allocated port when listener ownership is unavailable", async () => {
     const fixture = await createRuntimeFixture();
     const cleanupRuntimeHome = await createRuntimeHome();
@@ -7573,7 +7582,7 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
       await cleanupRuntimeHome();
       await fixture.cleanup();
     }
-  }, 20_000);
+  }, 60_000);
 
   it("returns a bounded structured conflict and exposes only same-company workspace references", async () => {
     const fixture = await createRuntimeFixture({

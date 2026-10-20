@@ -6,6 +6,7 @@ dist/
 dist-preview/
 dist-flow-preview/
 server/ui-dist/
+server/dist-runtime/
 packages/paperclip-runner/runner/target/
 ui/storybook-static/
 ui/storybook/generated/
@@ -89,3 +90,6 @@ test-results/
 
 # Local native Runner test/session state
 .paperclip-runner-prp/
+
+# Opt-in CI timing artifacts
+.ci-profile/

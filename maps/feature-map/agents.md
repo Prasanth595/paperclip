@@ -52,7 +52,7 @@ Manual: Hire an agent with a distinct name and role. Complete any required appro
 
 For a new Codex hire, choose the Codex harness. Automatic selection uses Paperclip
 Runner on a qualified selected target; Advanced offers an explicit Legacy runner
-override. Other harness defaults are unchanged. Record the persisted runner and
+override. Record the persisted runner and
 underlying harness, rather than treating the displayed Codex name as execution
 proof. See [runtime selection and validation](./runs-adapters.md#adapter-setup)
 and [target qualification](./execution-environments.md#environment-settings).
@@ -69,6 +69,17 @@ preserves its execution. For a native Codex import, edit a model or account bind
 and verify unchanged runtime settings survive; an explicit clear must stay cleared.
 Use the [portability recipe](./companies.md) for package preparation and boundaries.
 
+For Claude Code on qualified macOS or GNU/Linux x64/ARM64, submit without a
+runner override and inspect
+saved configuration: `paperclip_runner`, `provider: acpx`, `acpxAgent: claude`,
+and ordinary model `claude-opus-5-5`. The Advanced runner selector can explicitly
+choose Legacy. Keep explicit model/account choices and saved runners on edits.
+Verify useful output and a follow-up after a controller restart; setup success
+alone does not establish session continuity. Unsupported architectures/libc and unknown environment qualification retain
+Legacy. Darwin SSH also defaults to Legacy until automatic matching assets are
+qualified; explicit matching native assets and saved native configurations remain
+supported. Linux ARM64 cloud-image production remains deferred.
+
 The current hiring wizard assigns the first hire CEO and subsequent hires
 General reporting to the CEO. Change manager/role afterward through supported
 configuration. Process/HTTP agents can be created through API/CLI but are excluded
@@ -79,6 +90,12 @@ from the hiring picker; API fixture creation does not prove this UI journey.
 Automated: [instruction service](../../server/src/__tests__/agent-instructions-service.test.ts) and [instruction revisions](../../server/src/__tests__/agent-instruction-revisions.test.ts) cover file/revision contracts.
 
 Manual: Save a harmless instruction edit, reload, and verify its revision and effect in the next eligible run. Pause and resume the disposable agent; confirm pause prevents new work and does not erase previous runs.
+
+For failed setup, use an unavailable model or invalid command on a disposable agent.
+Confirm the profile names the failed verification step and gives a relevant action.
+Check that it explains automatic retry and offers **Retry now**. Fix the configuration,
+retry, and reload; the failure must disappear only after readiness commits.
+Provider output and credentials must not appear in the lifecycle message.
 
 An explicit runner change is a configuration change, with normal revisions and
 session invalidation. Incompatible settings must produce a field-specific error;

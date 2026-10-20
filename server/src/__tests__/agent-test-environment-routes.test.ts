@@ -1,6 +1,6 @@
 import express from "express";
 import request from "supertest";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ServerAdapterModule } from "../adapters/index.js";
 
 const mockAgentService = vi.hoisted(() => ({
@@ -164,11 +164,15 @@ function mockManagedRuntime(method: "api_key" | "subscription") {
   );
 }
 
-async function createApp() {
-  const [{ agentRoutes }, { errorHandler }] = await Promise.all([
+function loadAppModules() {
+  return Promise.all([
     vi.importActual<typeof import("../routes/agents.js")>("../routes/agents.js"),
     vi.importActual<typeof import("../middleware/index.js")>("../middleware/index.js"),
   ]);
+}
+
+async function createApp() {
+  const [{ agentRoutes }, { errorHandler }] = await loadAppModules();
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
@@ -192,8 +196,12 @@ async function unregisterTestAdapter(type: string) {
 }
 
 describe("agent test-environment route", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
+    await loadAppModules();
+  });
+
+  beforeEach(async () => {
     vi.clearAllMocks();
     mockInstanceSettingsService.get.mockResolvedValue({ defaultEnvironmentId: null });
     mockInstanceSettingsService.getExperimental.mockResolvedValue({ enableManagedSandboxOnly: false });
