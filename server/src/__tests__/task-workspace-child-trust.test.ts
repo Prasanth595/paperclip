@@ -1,6 +1,8 @@
 import express from "express";
 import request from "supertest";
 import { issueRoutes } from "../routes/issues.js";
+import { instanceSettingsService } from "../services/instance-settings.js";
+import { assertTaskWorkspaceExecutionAccess } from "../services/task-workspace-access.js";
 import { errorHandler } from "../middleware/error-handler.js";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -56,14 +58,24 @@ const support = await getEmbeddedPostgresTestSupport();
     });
     app.use("/api", issueRoutes(db));
     app.use(errorHandler);
-    const response = await request(app).patch(`/api/issues/${child.id}`).set("X-Paperclip-Run-Id", f.runId)
-      .send({ executionWorkspaceSettings: { mode: "isolated_workspace", workspaceStrategy: { type: "git_worktree", baseRef: "main" } } });
-    expect({ status: response.status, body: response.body }).toMatchObject({ status: 200, body: {
-      id: child.id, executionWorkspaceId: f.workspace.id,
-      executionWorkspaceSettings: { mode: "isolated_workspace", workspaceStrategy: { type: "git_worktree", baseRef: "main" } },
-    } });
+    const settings = instanceSettingsService(db);
+    const previous = await settings.getExperimental();
+    await settings.updateExperimental({ enableIsolatedWorkspaces: true });
+    try {
+      const response = await request(app).patch(`/api/issues/${child.id}`).set("X-Paperclip-Run-Id", f.runId)
+        .send({ executionWorkspaceSettings: { mode: "isolated_workspace", workspaceStrategy: { type: "git_worktree", baseRef: "main" } } });
+      expect({ status: response.status, body: response.body }).toMatchObject({ status: 200, body: {
+        id: child.id, executionWorkspaceId: f.workspace.id,
+        executionWorkspaceSettings: { mode: "isolated_workspace", workspaceStrategy: { type: "git_worktree", baseRef: "main" } },
+      } });
+    } finally {
+      await settings.updateExperimental({ enableIsolatedWorkspaces: previous.enableIsolatedWorkspaces });
+    }
     const [parentRun] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, f.runId));
     expect(parentRun.contextSnapshot?.issueId).toBe(f.issueId);
+    await expect(assertTaskWorkspaceExecutionAccess(db, f.actor, f.companyId, {
+      issueId: child.id, workspaceId: f.workspace.id,
+    })).rejects.toThrow(/run identity/);
   });
 
   it.each(["child_policy", "unrelated_parent", "missing_parent", "missing_run", "cross_company_run", "sponsor", "live_parent_policy", "absent_saved_policy", "child_agent_policy"] as const)(
