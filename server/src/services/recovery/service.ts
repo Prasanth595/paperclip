@@ -153,10 +153,7 @@ import {
   dispositionRepairDelayMs,
   DISPOSITION_REPAIR_MAX_ATTEMPTS,
 } from "./disposition-repair.js";
-import {
-  ensureMissingDispositionDecisionCard,
-  RECOVERY_EPISODE_MAX_ATTEMPTS,
-} from "./missing-disposition-escalation.js";
+import { ensureMissingDispositionDecisionCard } from "./missing-disposition-escalation.js";
 import {
   createActiveRunWatchdog,
   WatchdogDecisionApplicationError,
@@ -2625,10 +2622,7 @@ export function recoveryService(
       monitorPolicy: isProviderQuotaWait
         ? { type: "wait_recovery", retryAgentId: routing.returnOwnerAgentId }
         : null,
-      maxAttempts:
-        recoveryCause === SUCCESSFUL_RUN_MISSING_STATE_REASON
-          ? RECOVERY_EPISODE_MAX_ATTEMPTS
-          : null,
+      maxAttempts: null,
       lastAttemptAt: now,
     });
 

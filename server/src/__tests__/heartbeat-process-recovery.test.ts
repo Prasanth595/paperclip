@@ -273,7 +273,6 @@ import {
 } from "../services/recovery/index.ts";
 import {
   MISSING_DISPOSITION_DECISION_OPTION_IDS,
-  RECOVERY_EPISODE_MAX_ATTEMPTS,
   buildMissingDispositionDecisionInteractionKey,
 } from "../services/recovery/missing-disposition-escalation.ts";
 import { collectDispositionRepairSourceState } from "../services/recovery/disposition-repair.ts";
@@ -1454,11 +1453,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       returnOwnerAgentId: input.returnOwnerAgentId ?? input.agentId,
       cause: input.cause ?? "stranded_assigned_issue",
       attemptCount: 1,
-      maxAttempts:
-        (input.cause ?? "stranded_assigned_issue") ===
-        SUCCESSFUL_RUN_MISSING_STATE_REASON
-          ? RECOVERY_EPISODE_MAX_ATTEMPTS
-          : null,
+      maxAttempts: null,
     });
     expect(action.evidence).toMatchObject({
       sourceIssueId: input.issueId,

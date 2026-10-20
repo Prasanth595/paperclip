@@ -1,20 +1,10 @@
 import { and, eq, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { approvals, issueApprovals, issueThreadInteractions, issues } from "@paperclipai/db";
+import { approvals, heartbeatRuns, issueApprovals, issueThreadInteractions, issues } from "@paperclipai/db";
 import {
   askUserQuestionsPayloadSchema,
   type AskUserQuestionsPayload,
 } from "@paperclipai/shared";
-
-export const RECOVERY_EPISODE_LANE_MAX_ATTEMPTS = {
-  successful_run_handoff: 1,
-  disposition_repair: 5,
-  run_liveness_continuation: 2,
-} as const;
-
-export const RECOVERY_EPISODE_MAX_ATTEMPTS = Object.values(
-  RECOVERY_EPISODE_LANE_MAX_ATTEMPTS,
-).reduce((total, attempts) => total + attempts, 0);
 
 export const MISSING_DISPOSITION_DECISION_OPTION_IDS = [
   "mark_done",
@@ -27,13 +17,6 @@ export const MISSING_DISPOSITION_DECISION_OPTION_IDS = [
 
 export type MissingDispositionDecisionOptionId =
   (typeof MISSING_DISPOSITION_DECISION_OPTION_IDS)[number];
-
-export function isRecoveryEpisodeBudgetExhausted(
-  attemptCount: number,
-  maxAttempts: number = RECOVERY_EPISODE_MAX_ATTEMPTS,
-) {
-  return attemptCount >= maxAttempts;
-}
 
 export function buildMissingDispositionDecisionInteractionKey(input: {
   issueId: string;
@@ -49,7 +32,7 @@ export function buildMissingDispositionDecisionPayload(input: {
 }): AskUserQuestionsPayload {
   const issueLabel = input.issueIdentifier?.trim() || "this issue";
   const missingDisposition = input.missingDisposition?.trim() || "clear_next_step";
-  const attemptsUsed = input.handoffAttemptsUsed ?? RECOVERY_EPISODE_LANE_MAX_ATTEMPTS.successful_run_handoff;
+  const attemptsUsed = input.handoffAttemptsUsed ?? 1;
   return askUserQuestionsPayloadSchema.parse({
     version: 1,
     title: "Missing disposition recovery exhausted",
@@ -207,6 +190,20 @@ export async function ensureMissingDispositionDecisionCard(
     if (concurrent) return { id: concurrent.id, created: false };
     if (await hasDurableWaitingPath(tx, input.issue)) return null;
 
+    const sourceRun = input.sourceRunId
+      ? await tx
+          .select({ id: heartbeatRuns.id })
+          .from(heartbeatRuns)
+          .where(
+            and(
+              eq(heartbeatRuns.id, input.sourceRunId),
+              eq(heartbeatRuns.companyId, input.issue.companyId),
+            ),
+          )
+          .limit(1)
+          .then((rows) => rows[0] ?? null)
+      : null;
+
     const [created] = await tx
       .insert(issueThreadInteractions)
       .values({
@@ -223,7 +220,7 @@ export async function ensureMissingDispositionDecisionCard(
         title: "Missing disposition recovery exhausted",
         summary:
           "Automatic recovery stopped without a durable issue disposition. The board must choose one outcome.",
-        sourceRunId: input.sourceRunId ?? null,
+        sourceRunId: sourceRun?.id ?? null,
         payload,
       })
       .onConflictDoNothing()

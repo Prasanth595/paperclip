@@ -9,30 +9,10 @@ import {
 } from "../../__tests__/helpers/embedded-postgres.js";
 import {
   MISSING_DISPOSITION_DECISION_OPTION_IDS,
-  RECOVERY_EPISODE_LANE_MAX_ATTEMPTS,
-  RECOVERY_EPISODE_MAX_ATTEMPTS,
   buildMissingDispositionDecisionInteractionKey,
   buildMissingDispositionDecisionPayload,
   ensureMissingDispositionDecisionCard,
-  isRecoveryEpisodeBudgetExhausted,
 } from "./missing-disposition-escalation.js";
-
-describe("recovery episode budget", () => {
-  it("sums the lane caps into one episode budget", () => {
-    expect(RECOVERY_EPISODE_LANE_MAX_ATTEMPTS).toEqual({
-      successful_run_handoff: 1,
-      disposition_repair: 5,
-      run_liveness_continuation: 2,
-    });
-    expect(RECOVERY_EPISODE_MAX_ATTEMPTS).toBe(8);
-  });
-
-  it("reports exhaustion at the cap, not before it", () => {
-    expect(isRecoveryEpisodeBudgetExhausted(7)).toBe(false);
-    expect(isRecoveryEpisodeBudgetExhausted(8)).toBe(true);
-    expect(isRecoveryEpisodeBudgetExhausted(9)).toBe(true);
-  });
-});
 
 describe("missing disposition decision card", () => {
   it("builds a machine-checkable single-select payload", () => {
