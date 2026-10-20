@@ -32,6 +32,16 @@ async function authorizeCaseRunMutation(tx: Db, actor: AuthorizationActor, compa
   return sourceIssueId;
 }
 
+/** New records still need the run fence before acquiring a keyed upsert lock. */
+export async function authorizeCaseCreation(tx: Db, actor: AuthorizationActor, input: {
+  companyId: string;
+  projectId?: string | null;
+}) {
+  const sourceIssueId = await authorizeCaseRunMutation(tx, actor, input.companyId);
+  await assertActorCanWriteCase(tx, actor, input);
+  return sourceIssueId;
+}
+
 export async function authorizeCaseMutation(tx: Db, actor: AuthorizationActor, caseId: string, companyId: string) {
   const sourceIssueId = await authorizeCaseRunMutation(tx, actor, companyId);
   const [record] = await tx.select().from(cases).where(and(eq(cases.id, caseId), eq(cases.companyId, companyId))).for("update");

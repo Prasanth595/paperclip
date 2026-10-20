@@ -46,19 +46,21 @@ import {
   isUuidLike,
 } from "@paperclipai/shared";
 import { formatAttachmentSize, MAX_ATTACHMENT_BYTES, normalizeContentType } from "../attachment-types.js";
-import { badRequest, conflict, forbidden, notFound, unprocessable } from "../errors.js";
+import { HttpError, badRequest, conflict, forbidden, notFound, unprocessable } from "../errors.js";
 import { validate } from "../middleware/validate.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
 import { documentAnnotationService, logActivity } from "../services/index.js";
 import type { StorageService } from "../storage/types.js";
 import { authorizationService, issueReadSqlCondition, type AuthorizationActor } from "../services/authorization.js";
-import { assertActorCanReadCase, assertActorCanWriteCase, caseReadSqlCondition, filterCasesForActor, retainCaseAccessSource, retainCaseRunSource } from "../services/case-access.js";
+import { assertActorCanReadCase, assertActorCanWriteCase, caseReadSqlCondition, filterCasesForActor, retainCaseAccessSource } from "../services/case-access.js";
 import { enrichCaseWork } from "../services/case-work-summary.js";
 import { listCaseTaskDocuments } from "../services/case-task-documents.js";
-import { authorizeCaseMutation } from "../services/case-mutation-authorization.js";
+import { authorizeCaseCreation, authorizeCaseMutation } from "../services/case-mutation-authorization.js";
+import { logger } from "../middleware/logger.js";
 import { assertCompanyAccess, getActorInfo, hasCompanyAccess } from "./authz.js";
 
-type CaseRouteDb = Db | Parameters<Parameters<Db["transaction"]>[0]>[0];
+type CaseRouteTransaction = Parameters<Parameters<Db["transaction"]>[0]>[0];
+type CaseRouteDb = Db | CaseRouteTransaction;
 type CaseActor = ReturnType<typeof getActorInfo>;
 
 function eventActorValues(actor: CaseActor) {
@@ -160,16 +162,13 @@ function caseLookupCompanyIds(req: Request) {
   return [];
 }
 
-async function assertCaseAccess(db: Db, req: Request, idOrIdentifier: string, options: { retainRunSource?: boolean } = {}) {
+async function assertCaseAccess(db: Db, req: Request, idOrIdentifier: string) {
   const row = await loadCaseByIdOrIdentifier(db, idOrIdentifier, caseLookupCompanyIds(req));
   if (!row || !hasCompanyAccess(req, row.companyId)) throw notFound("Case not found");
   assertCompanyAccess(req, row.companyId);
   await assertActorCanReadCase(db, req.actor, row);
   if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) {
     await assertActorCanWriteCase(db, req.actor, row);
-    // PATCH facts and PUT document retain provenance in their guarded write
-    // transaction. A rejected outgoing run must not restrict a passive case.
-    if (options.retainRunSource !== false) await retainCaseRunSource(db, { companyId: row.companyId, caseId: row.id, runId: req.actor.runId, agentId: req.actor.agentId });
   }
   return row;
 }
@@ -574,6 +573,16 @@ export function caseRoutes(db: Db, storage: StorageService) {
   const router = Router();
   const documentAnnotationsSvc = documentAnnotationService(db);
 
+  // Keep run revocation, retained boundaries and every case write in one
+  // transaction. Preflight reads cannot authorize a request that races Stop.
+  function mutateCase<T>(req: Request, record: typeof cases.$inferSelect,
+    write: (tx: CaseRouteTransaction, current: typeof cases.$inferSelect) => Promise<T>) {
+    return db.transaction(async tx => {
+      const current = await authorizeCaseMutation(tx as unknown as Db, req.actor, record.id, record.companyId);
+      return write(tx, current);
+    });
+  }
+
   async function logCaseDocumentRevision(input: {
     caseRow: typeof cases.$inferSelect;
     key: string;
@@ -610,18 +619,10 @@ export function caseRoutes(db: Db, storage: StorageService) {
     caseRow: typeof cases.$inferSelect;
     key: string;
     document: Pick<typeof documents.$inferSelect, "id" | "latestRevisionId" | "latestRevisionNumber">;
-    body: string;
+    remapped: Awaited<ReturnType<typeof documentAnnotationsSvc.remapOpenThreadsForCaseDocument>>;
     actor: CaseActor;
   }) {
-    const remapped = await documentAnnotationsSvc.remapOpenThreadsForCaseDocument({
-      caseId: input.caseRow.id,
-      key: input.key,
-      documentId: input.document.id,
-      nextRevisionId: input.document.latestRevisionId,
-      nextRevisionNumber: input.document.latestRevisionNumber,
-      nextBody: input.body,
-    });
-    for (const remap of remapped) {
+    for (const remap of input.remapped) {
       await logActivity(db, {
         companyId: input.caseRow.companyId,
         actorType: input.actor.actorType,
@@ -654,6 +655,7 @@ export function caseRoutes(db: Db, storage: StorageService) {
     await assertActorCanWriteCase(db, req.actor, { companyId, projectId: body.projectId });
 
     const result = await db.transaction(async (tx) => {
+      const sourceIssueId = await authorizeCaseCreation(tx as unknown as Db, req.actor, { companyId, projectId: body.projectId });
       await assertProjectBelongsToCompany(tx, { companyId, projectId: body.projectId ?? null });
       if (body.projectId && !(await authorizationService(tx).decide({ actor: req.actor, action: "project:read", resource: {
         type: "project", companyId, projectId: body.projectId,
@@ -672,8 +674,7 @@ export function caseRoutes(db: Db, storage: StorageService) {
         .then((rows) => rows[0] ?? null);
 
       if (existing) {
-        await assertActorCanReadCase(tx, req.actor, existing);
-        await assertActorCanWriteCase(tx, req.actor, existing);
+        await authorizeCaseMutation(tx as unknown as Db, req.actor, existing.id, companyId);
         if (body.projectId) await retainCaseAccessSource(tx, {
           companyId, caseId: existing.id, sourceKind: "project", sourceId: body.projectId,
         });
@@ -718,6 +719,7 @@ export function caseRoutes(db: Db, storage: StorageService) {
         createdAt: now,
         updatedAt: now,
       }).returning();
+      if (sourceIssueId) await retainCaseAccessSource(tx, { companyId, caseId: created!.id, sourceKind: "issue", sourceId: sourceIssueId });
       await insertCaseEvent(tx, {
         companyId,
         caseId: created!.id,
@@ -888,12 +890,12 @@ export function caseRoutes(db: Db, storage: StorageService) {
       const caseRow = await assertCaseAccess(db, req, req.params.id as string);
       const key = parseDocumentKey(req.params.key as string);
       const { actor, annotationActor } = annotationActorInput(req);
-      const thread = await documentAnnotationsSvc.createCaseThread(
+      const thread = await mutateCase(req, caseRow, tx => documentAnnotationService(tx as unknown as Db).createCaseThread(
         caseRow.id,
         key,
         req.body,
         annotationActor,
-      );
+      ));
       const firstComment = thread.comments[0];
       await logActivity(db, {
         companyId: caseRow.companyId,
@@ -927,13 +929,13 @@ export function caseRoutes(db: Db, storage: StorageService) {
       const caseRow = await assertCaseAccess(db, req, req.params.id as string);
       const key = parseDocumentKey(req.params.key as string);
       const { actor, annotationActor } = annotationActorInput(req);
-      const comment = await documentAnnotationsSvc.addCaseComment(
+      const comment = await mutateCase(req, caseRow, tx => documentAnnotationService(tx as unknown as Db).addCaseComment(
         caseRow.id,
         key,
         req.params.threadId as string,
         req.body,
         annotationActor,
-      );
+      ));
       await logActivity(db, {
         companyId: caseRow.companyId,
         actorType: actor.actorType,
@@ -964,13 +966,13 @@ export function caseRoutes(db: Db, storage: StorageService) {
       const caseRow = await assertCaseAccess(db, req, req.params.id as string);
       const key = parseDocumentKey(req.params.key as string);
       const { actor, annotationActor } = annotationActorInput(req);
-      const thread = await documentAnnotationsSvc.updateCaseThread(
+      const thread = await mutateCase(req, caseRow, tx => documentAnnotationService(tx as unknown as Db).updateCaseThread(
         caseRow.id,
         key,
         req.params.threadId as string,
         req.body,
         annotationActor,
-      );
+      ));
       await logActivity(db, {
         companyId: caseRow.companyId,
         actorType: actor.actorType,
@@ -997,13 +999,12 @@ export function caseRoutes(db: Db, storage: StorageService) {
 
   router.put("/cases/:id/documents/:key", async (req, res) => {
     await assertCasesEnabled(db);
-    const caseRow = await assertCaseAccess(db, req, req.params.id as string, { retainRunSource: false });
+    const caseRow = await assertCaseAccess(db, req, req.params.id as string);
     const key = parseDocumentKey(req.params.key as string);
     const actor = getActorInfo(req);
     const body = upsertCaseDocumentSchema.parse(req.body);
 
-    const result = await db.transaction(async (tx) => {
-      await authorizeCaseMutation(tx as unknown as Db, req.actor, caseRow.id, caseRow.companyId);
+    const result = await mutateCase(req, caseRow, async (tx) => {
       await lockCaseDocumentKey(tx, { companyId: caseRow.companyId, caseId: caseRow.id, key });
       const existing = await tx
         .select({ link: caseDocuments, document: documents, revision: documentRevisions })
@@ -1114,6 +1115,10 @@ export function caseRoutes(db: Db, storage: StorageService) {
         payload: { key, documentId: document!.id, revisionId: revision!.id, revisionNumber: revision!.revisionNumber },
       });
       await autoLinkRunIssue(tx, { companyId: caseRow.companyId, caseId: caseRow.id, actor, role: "work" });
+      const remapped = await documentAnnotationService(tx as unknown as Db).remapOpenThreadsForCaseDocument({
+        caseId: caseRow.id, key, documentId: document!.id, nextRevisionId: revision!.id,
+        nextRevisionNumber: revision!.revisionNumber, nextBody: body.body,
+      });
       return {
         document: {
           ...document!,
@@ -1125,6 +1130,7 @@ export function caseRoutes(db: Db, storage: StorageService) {
           updatedAt: now,
         },
         revision,
+        remapped,
       };
     });
     await logCaseDocumentRevision({ caseRow, key, document: result.document, actor });
@@ -1132,10 +1138,11 @@ export function caseRoutes(db: Db, storage: StorageService) {
       caseRow,
       key,
       document: result.document,
-      body: result.document.latestBody,
+      remapped: result.remapped,
       actor,
     });
-    res.json(result);
+    const { remapped: _remapped, ...response } = result;
+    res.json(response);
   });
 
   router.post("/cases/:id/documents/:key/lock", async (req, res) => {
@@ -1143,7 +1150,7 @@ export function caseRoutes(db: Db, storage: StorageService) {
     const caseRow = await assertCaseAccess(db, req, req.params.id as string);
     const key = parseDocumentKey(req.params.key as string);
     const actor = getActorInfo(req);
-    const result = await db.transaction(async (tx) => {
+    const result = await mutateCase(req, caseRow, async (tx) => {
       await lockCaseDocumentKey(tx, { companyId: caseRow.companyId, caseId: caseRow.id, key });
       const link = await loadCaseDocumentLink(tx, { companyId: caseRow.companyId, caseId: caseRow.id, key });
       if (!link) throw notFound("Case document not found");
@@ -1165,7 +1172,7 @@ export function caseRoutes(db: Db, storage: StorageService) {
     await assertCasesEnabled(db);
     const caseRow = await assertCaseAccess(db, req, req.params.id as string);
     const key = parseDocumentKey(req.params.key as string);
-    const result = await db.transaction(async (tx) => {
+    const result = await mutateCase(req, caseRow, async (tx) => {
       await lockCaseDocumentKey(tx, { companyId: caseRow.companyId, caseId: caseRow.id, key });
       const link = await loadCaseDocumentLink(tx, { companyId: caseRow.companyId, caseId: caseRow.id, key });
       if (!link) throw notFound("Case document not found");
@@ -1190,7 +1197,7 @@ export function caseRoutes(db: Db, storage: StorageService) {
     const revisionId = req.params.revisionId as string;
     const actor = getActorInfo(req);
 
-    const result = await db.transaction(async (tx) => {
+    const result = await mutateCase(req, caseRow, async (tx) => {
       await lockCaseDocumentKey(tx, { companyId: caseRow.companyId, caseId: caseRow.id, key });
       const existing = await loadCaseDocumentLink(tx, { companyId: caseRow.companyId, caseId: caseRow.id, key });
       if (!existing) throw notFound("Case document not found");
@@ -1255,11 +1262,16 @@ export function caseRoutes(db: Db, storage: StorageService) {
         },
       });
       await autoLinkRunIssue(tx, { companyId: caseRow.companyId, caseId: caseRow.id, actor, role: "work" });
+      const remapped = await documentAnnotationService(tx as unknown as Db).remapOpenThreadsForCaseDocument({
+        caseId: caseRow.id, key, documentId: document!.id, nextRevisionId: restoredRevision!.id,
+        nextRevisionNumber: restoredRevision!.revisionNumber, nextBody: sourceRevision.body,
+      });
       return {
         document: caseDocumentResponse({ key, document: document! }),
         revision: restoredRevision!,
         restoredFromRevisionId: sourceRevision.id,
         restoredFromRevisionNumber: sourceRevision.revisionNumber,
+        remapped,
       };
     });
     await logCaseDocumentRevision({ caseRow, key, document: result.document, actor,
@@ -1269,17 +1281,18 @@ export function caseRoutes(db: Db, storage: StorageService) {
       caseRow,
       key,
       document: result.document,
-      body: result.document.body,
+      remapped: result.remapped,
       actor,
     });
-    res.json(result);
+    const { remapped: _remapped, ...response } = result;
+    res.json(response);
   });
 
   router.delete("/cases/:id/documents/:key", async (req, res) => {
     await assertCasesEnabled(db);
     const caseRow = await assertCaseAccess(db, req, req.params.id as string);
     const key = parseDocumentKey(req.params.key as string);
-    await db.transaction(async (tx) => {
+    await mutateCase(req, caseRow, async (tx) => {
       await lockCaseDocumentKey(tx, { companyId: caseRow.companyId, caseId: caseRow.id, key });
       const link = await loadCaseDocumentLink(tx, { companyId: caseRow.companyId, caseId: caseRow.id, key });
       if (!link) return;
@@ -1302,7 +1315,7 @@ export function caseRoutes(db: Db, storage: StorageService) {
     const actor = getActorInfo(req);
     const body = req.body as z.infer<typeof createIssueLinkSchema>;
 
-    const result = await db.transaction(async (tx) => {
+    const result = await mutateCase(req, caseRow, async (tx) => {
       const issue = await tx
         .select({ id: issues.id })
         .from(issues)
@@ -1376,7 +1389,7 @@ export function caseRoutes(db: Db, storage: StorageService) {
       contentType: normalizeContentType(file.mimetype),
       body: file.buffer,
     });
-    const result = await db.transaction(async (tx) => {
+    const result = await mutateCase(req, caseRow, async (tx) => {
       const now = new Date();
       const [asset] = await tx.insert(assets).values({
         companyId: caseRow.companyId,
@@ -1407,6 +1420,15 @@ export function caseRoutes(db: Db, storage: StorageService) {
       });
       await autoLinkRunIssue(tx, { companyId: caseRow.companyId, caseId: caseRow.id, actor, role: "work" });
       return { ...attachment!, asset };
+    }).catch(async error => {
+      // A denied transaction rolls back before publishing an asset. Do not
+      // delete on an unknown database/commit outcome that may have succeeded.
+      if (error instanceof HttpError && [403, 404].includes(error.status)) {
+        await storage.deleteObject(caseRow.companyId, stored.objectKey).catch(cleanupError => {
+          logger.warn({ err: cleanupError, companyId: caseRow.companyId, objectKey: stored.objectKey }, "Failed to remove rejected case attachment");
+        });
+      }
+      throw error;
     });
     res.status(201).json(result);
   });
@@ -1534,14 +1556,13 @@ export function caseRoutes(db: Db, storage: StorageService) {
 
   router.patch("/cases/:id", async (req, res) => {
     await assertCasesEnabled(db);
-    const caseRow = await assertCaseAccess(db, req, req.params.id as string, { retainRunSource: false });
+    const caseRow = await assertCaseAccess(db, req, req.params.id as string);
     const actor = getActorInfo(req);
     const body = patchCaseSchema.parse(req.body);
     const query = caseDetailQuerySchema.parse(req.query);
     const nextLabelIds = body.labelIds ?? body.labels;
 
-    const updated = await db.transaction(async (tx) => {
-      const currentCase = await authorizeCaseMutation(tx as unknown as Db, req.actor, caseRow.id, caseRow.companyId);
+    const updated = await mutateCase(req, caseRow, async (tx, currentCase) => {
       await assertProjectBelongsToCompany(tx, { companyId: caseRow.companyId, projectId: body.projectId ?? null });
       if (body.projectId) {
         if (!(await authorizationService(tx).decide({ actor: req.actor, action: "project:read", resource: {
