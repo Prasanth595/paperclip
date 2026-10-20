@@ -267,11 +267,15 @@ import {
 } from "../services/hot-restart.ts";
 import { secretService } from "../services/secrets.ts";
 import {
-  SUCCESSFUL_RUN_HANDOFF_EXHAUSTED_NOTICE_BODY,
   SUCCESSFUL_RUN_HANDOFF_REQUIRED_NOTICE_BODY,
   SUCCESSFUL_RUN_MISSING_STATE_REASON,
   noticeMetadataReferencesRecoveryAction,
 } from "../services/recovery/index.ts";
+import {
+  MISSING_DISPOSITION_DECISION_OPTION_IDS,
+  RECOVERY_EPISODE_MAX_ATTEMPTS,
+  buildMissingDispositionDecisionInteractionKey,
+} from "../services/recovery/missing-disposition-escalation.ts";
 import { collectDispositionRepairSourceState } from "../services/recovery/disposition-repair.ts";
 import {
   UNMANAGED_BACKGROUND_TASK_LIVENESS_REASON,
@@ -1450,7 +1454,11 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       returnOwnerAgentId: input.returnOwnerAgentId ?? input.agentId,
       cause: input.cause ?? "stranded_assigned_issue",
       attemptCount: 1,
-      maxAttempts: null,
+      maxAttempts:
+        (input.cause ?? "stranded_assigned_issue") ===
+        SUCCESSFUL_RUN_MISSING_STATE_REASON
+          ? RECOVERY_EPISODE_MAX_ATTEMPTS
+          : null,
     });
     expect(action.evidence).toMatchObject({
       sourceIssueId: input.issueId,
@@ -6943,57 +6951,36 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     );
 
     const comments = await selectRecoveryCommentsForIssue(issueId);
-    expect(comments[0]?.body).toBe(
-      SUCCESSFUL_RUN_HANDOFF_EXHAUSTED_NOTICE_BODY,
-    );
-    expect(comments[0]?.authorType).toBe("system");
-    expect(comments[0]?.presentation).toMatchObject({
-      kind: "system_notice",
-      tone: "danger",
-      detailsDefaultOpen: false,
+    expect(comments).toHaveLength(0);
+    const decisionCards = await db
+      .select()
+      .from(issueThreadInteractions)
+      .where(eq(issueThreadInteractions.issueId, issueId));
+    expect(decisionCards).toHaveLength(1);
+    expect(decisionCards[0]).toMatchObject({
+      companyId,
+      kind: "ask_user_questions",
+      status: "pending",
+      continuationPolicy: "wake_assignee",
+      effectiveResolverPolicy: "human_only",
+      idempotencyKey: buildMissingDispositionDecisionInteractionKey({
+        issueId,
+        recoveryActionId: recoveryAction.id,
+      }),
     });
-    expect(comments[0]?.presentation).not.toHaveProperty("density");
-    expect(comments[0]?.metadata).toMatchObject({
-      version: 1,
-      sections: expect.arrayContaining([
-        expect.objectContaining({
-          title: "Recovery",
-          rows: expect.arrayContaining([
-            expect.objectContaining({
-              type: "key_value",
-              label: "Recovery action",
-              value: recoveryAction.id,
-            }),
-            expect.objectContaining({
-              type: "key_value",
-              label: "Recovery owner",
-              value: "Board decision required",
-            }),
-          ]),
-        }),
-        expect.objectContaining({
-          title: "Run evidence",
-          rows: expect.arrayContaining([
-            expect.objectContaining({
-              type: "key_value",
-              label: "Normalized cause",
-              value: SUCCESSFUL_RUN_MISSING_STATE_REASON,
-            }),
-            expect.objectContaining({
-              type: "key_value",
-              label: "Missing disposition",
-              value: "clear_next_step",
-            }),
-          ]),
-        }),
-      ]),
-    });
-    expect(comments[0]?.body).not.toContain(
-      "sk-test-successful-handoff-secret",
+    const decisionPayload = decisionCards[0]?.payload as
+      | { questions?: Array<{ id: string; options?: Array<{ id: string }> }> }
+      | null;
+    expect(decisionPayload?.questions?.[0]?.id).toBe(
+      "missing_disposition_resolution",
     );
-    expect(JSON.stringify(comments[0]?.metadata ?? {})).not.toContain(
-      "sk-test-successful-handoff-secret",
-    );
+    expect(decisionPayload?.questions?.[0]?.options?.map((option) => option.id))
+      .toEqual([...MISSING_DISPOSITION_DECISION_OPTION_IDS]);
+
+    const again = await heartbeat.reconcileStrandedAssignedIssues();
+    expect(again.successfulRunHandoffEscalated).toBe(0);
+    expect(again.escalated).toBe(0);
+    expect(again.continuationRequeued).toBe(0);
 
     const activity = await db
       .select()

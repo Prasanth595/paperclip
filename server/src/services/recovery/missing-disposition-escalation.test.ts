@@ -2,7 +2,7 @@ import { createDb, companies, issueThreadInteractions, issues, EMBEDDED_POSTGRES
 import type { Db } from "@paperclipai/db";
 import { askUserQuestionsPayloadSchema } from "@paperclipai/shared";
 import { and, eq, sql } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
@@ -74,7 +74,7 @@ describe.skipIf(!support.supported)("missing disposition decision card persisten
     await db?.$client.end();
     await database?.cleanup();
   });
-  beforeAll(async () => {
+  beforeEach(async () => {
     await db.execute(sql`truncate table companies restart identity cascade`);
   });
 

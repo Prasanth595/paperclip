@@ -1,6 +1,6 @@
 import { and, eq, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { approvals, issueApprovals, issueThreadInteractions } from "@paperclipai/db";
+import { approvals, issueApprovals, issueThreadInteractions, issues } from "@paperclipai/db";
 import {
   askUserQuestionsPayloadSchema,
   type AskUserQuestionsPayload,
@@ -111,7 +111,9 @@ type MissingDispositionIssue = {
   monitorNextCheckAt?: Date | null;
 };
 
-async function hasDurableWaitingPath(db: Db, issue: MissingDispositionIssue) {
+type DatabaseReader = Pick<Db, "select" | "insert">;
+
+async function hasDurableWaitingPath(db: DatabaseReader, issue: MissingDispositionIssue) {
   if (issue.assigneeUserId) return true;
   if (issue.monitorNextCheckAt && issue.monitorNextCheckAt.getTime() > Date.now()) return true;
   const [pendingInteraction, pendingApproval] = await Promise.all([
@@ -165,8 +167,8 @@ export async function ensureMissingDispositionDecisionCard(
     issueId: input.issue.id,
     recoveryActionId: input.recoveryActionId,
   });
-  const findExisting = () =>
-    db
+  const findExisting = (reader: DatabaseReader) =>
+    reader
       .select({ id: issueThreadInteractions.id })
       .from(issueThreadInteractions)
       .where(
@@ -179,37 +181,55 @@ export async function ensureMissingDispositionDecisionCard(
       .limit(1)
       .then((rows) => rows[0] ?? null);
 
-  const existing = await findExisting();
+  const existing = await findExisting(db);
   if (existing) return { id: existing.id, created: false };
-  if (await hasDurableWaitingPath(db, input.issue)) return null;
 
   const payload = buildMissingDispositionDecisionPayload({
     issueIdentifier: input.issue.identifier,
     missingDisposition: input.missingDisposition,
     handoffAttemptsUsed: input.handoffAttemptsUsed,
   });
-  const [created] = await db
-    .insert(issueThreadInteractions)
-    .values({
-      companyId: input.issue.companyId,
-      issueId: input.issue.id,
-      kind: "ask_user_questions",
-      status: "pending",
-      continuationPolicy: "wake_assignee",
-      requestedResolverPolicy: "human_only",
-      effectiveResolverPolicy: "human_only",
-      resolverPolicyProvenance: "explicit",
-      effectiveResolverPolicySource: "requested",
-      idempotencyKey,
-      title: "Missing disposition recovery exhausted",
-      summary:
-        "Automatic recovery stopped without a durable issue disposition. The board must choose one outcome.",
-      sourceRunId: input.sourceRunId ?? null,
-      payload,
-    })
-    .onConflictDoNothing()
-    .returning({ id: issueThreadInteractions.id });
-  if (created) return { id: created.id, created: true };
-  const concurrent = await findExisting();
-  return concurrent ? { id: concurrent.id, created: false } : null;
+
+  return db.transaction(async (tx) => {
+    const [locked] = await tx
+      .select({ id: issues.id, status: issues.status })
+      .from(issues)
+      .where(
+        and(
+          eq(issues.id, input.issue.id),
+          eq(issues.companyId, input.issue.companyId),
+        ),
+      )
+      .for("update");
+    if (!locked || locked.status === "done" || locked.status === "cancelled") return null;
+
+    const concurrent = await findExisting(tx);
+    if (concurrent) return { id: concurrent.id, created: false };
+    if (await hasDurableWaitingPath(tx, input.issue)) return null;
+
+    const [created] = await tx
+      .insert(issueThreadInteractions)
+      .values({
+        companyId: input.issue.companyId,
+        issueId: input.issue.id,
+        kind: "ask_user_questions",
+        status: "pending",
+        continuationPolicy: "wake_assignee",
+        requestedResolverPolicy: "human_only",
+        effectiveResolverPolicy: "human_only",
+        resolverPolicyProvenance: "explicit",
+        effectiveResolverPolicySource: "requested",
+        idempotencyKey,
+        title: "Missing disposition recovery exhausted",
+        summary:
+          "Automatic recovery stopped without a durable issue disposition. The board must choose one outcome.",
+        sourceRunId: input.sourceRunId ?? null,
+        payload,
+      })
+      .onConflictDoNothing()
+      .returning({ id: issueThreadInteractions.id });
+    if (created) return { id: created.id, created: true };
+    const raced = await findExisting(tx);
+    return raced ? { id: raced.id, created: false } : null;
+  });
 }
