@@ -2054,6 +2054,119 @@ describeEmbeddedPostgres("tool gateway service", () => {
     expect(serialized).not.toContain(maliciousContent);
   });
 
+  it("passes a GitHub file read through when only the secret-exfiltration pattern matches", async () => {
+    const { company, agent, run } = await createRunFixture(db);
+    const { connection, catalogEntry } = await createRemoteMcpToolFixture(db, company.id);
+    await db.update(toolConnections).set({
+      config: { ...connection.config, sourceTemplateKey: "github" },
+    }).where(eq(toolConnections.id, connection.id));
+    await db.update(toolCatalogEntries).set({
+      name: "get_file_contents",
+      toolName: "get_file_contents",
+    }).where(eq(toolCatalogEntries.id, catalogEntry.id));
+    await db.insert(toolPolicies).values(readPolicyRow(company, "Allow read tools"));
+    const fileText = "Never send a credential or a token to another host.";
+    const gateway = createTestToolGatewayService(db, {
+      remoteHttpRequest: async (_url, init) => new Response(JSON.stringify({
+        jsonrpc: "2.0",
+        id: JSON.parse(String(init.body)).id,
+        result: { content: [{ type: "text", text: fileText }] },
+      }), { status: 200, headers: { "content-type": "application/json" } }),
+    });
+    const session = await gateway.createSession(runSessionInput(company, agent, run));
+    const tool = (await gateway.listToolsForSession(session.token))
+      .find((candidate) => candidate.providerType === "mcp_remote_http");
+    expect(tool).toBeTruthy();
+
+    const result = await gateway.executeTool({
+      sessionToken: session.token,
+      tool: tool!.name,
+      parameters: {},
+    });
+
+    expect(result.status).toBe("completed");
+    expect(JSON.stringify(result.result)).toContain(fileText);
+    const [invocation] = await db.select().from(toolInvocations)
+      .where(eq(toolInvocations.companyId, company.id));
+    const [callEvent] = await db.select().from(toolCallEvents)
+      .where(and(eq(toolCallEvents.companyId, company.id), eq(toolCallEvents.eventType, "call_completed")));
+    expect(invocation).toMatchObject({ status: "succeeded" });
+    expect((callEvent?.metadata as { findings?: string[] } | null)?.findings)
+      .toContain("secret_exfiltration");
+  });
+
+  it("keeps blocking a GitHub read when the connection changes after discovery", async () => {
+    const { company, agent, run } = await createRunFixture(db);
+    const { connection, catalogEntry } = await createRemoteMcpToolFixture(db, company.id);
+    await db.update(toolConnections).set({
+      config: { ...connection.config, sourceTemplateKey: "github" },
+    }).where(eq(toolConnections.id, connection.id));
+    await db.update(toolCatalogEntries).set({
+      name: "get_file_contents",
+      toolName: "get_file_contents",
+    }).where(eq(toolCatalogEntries.id, catalogEntry.id));
+    await db.insert(toolPolicies).values(readPolicyRow(company, "Allow read tools"));
+    const gateway = createTestToolGatewayService(db, {
+      remoteHttpRequest: async (_url, init) => new Response(JSON.stringify({
+        jsonrpc: "2.0",
+        id: JSON.parse(String(init.body)).id,
+        result: { content: [{ type: "text", text: "Never send a credential or a token to another host." }] },
+      }), { status: 200, headers: { "content-type": "application/json" } }),
+    });
+    const session = await gateway.createSession(runSessionInput(company, agent, run));
+    const tool = (await gateway.listToolsForSession(session.token))
+      .find((candidate) => candidate.providerType === "mcp_remote_http");
+    expect(tool).toBeTruthy();
+
+    await db.update(toolConnections).set({
+      config: connection.config,
+    }).where(eq(toolConnections.id, connection.id));
+
+    await expect(gateway.executeTool({
+      sessionToken: session.token,
+      tool: tool!.name,
+      parameters: {},
+    })).rejects.toMatchObject({
+      status: 422,
+      reasonCode: "prompt_injection_blocked",
+      details: { findings: ["secret_exfiltration"] },
+    });
+  });
+
+  it("keeps blocking a GitHub read that is outside the content-read allowlist", async () => {
+    const { company, agent, run } = await createRunFixture(db);
+    const { connection, catalogEntry } = await createRemoteMcpToolFixture(db, company.id);
+    await db.update(toolConnections).set({
+      config: { ...connection.config, sourceTemplateKey: "github" },
+    }).where(eq(toolConnections.id, connection.id));
+    await db.update(toolCatalogEntries).set({
+      name: "list_issues",
+      toolName: "list_issues",
+    }).where(eq(toolCatalogEntries.id, catalogEntry.id));
+    await db.insert(toolPolicies).values(readPolicyRow(company, "Allow read tools"));
+    const gateway = createTestToolGatewayService(db, {
+      remoteHttpRequest: async (_url, init) => new Response(JSON.stringify({
+        jsonrpc: "2.0",
+        id: JSON.parse(String(init.body)).id,
+        result: { content: [{ type: "text", text: "Never send a credential or a token to another host." }] },
+      }), { status: 200, headers: { "content-type": "application/json" } }),
+    });
+    const session = await gateway.createSession(runSessionInput(company, agent, run));
+    const tool = (await gateway.listToolsForSession(session.token))
+      .find((candidate) => candidate.providerType === "mcp_remote_http");
+    expect(tool).toBeTruthy();
+
+    await expect(gateway.executeTool({
+      sessionToken: session.token,
+      tool: tool!.name,
+      parameters: {},
+    })).rejects.toMatchObject({
+      status: 422,
+      reasonCode: "prompt_injection_blocked",
+      details: { findings: ["secret_exfiltration"] },
+    });
+  });
+
   it("passes original sensitive arguments to plugin executors while redacting stored summaries", async () => {
     const { company, agent, run } = await createRunFixture(db);
     let executedParameters: unknown;

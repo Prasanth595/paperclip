@@ -224,6 +224,7 @@ export function validateToolContent(input: {
   direction: "arguments" | "result";
   sensitiveMode?: "redact" | "block";
   promptInjectionMode?: "redact" | "block" | "ignore";
+  untrustedResult?: boolean;
 }) {
   const sensitiveMode = input.sensitiveMode ?? "redact";
   const promptInjectionMode = input.promptInjectionMode ?? (input.direction === "result" ? "block" : "ignore");
@@ -241,11 +242,15 @@ export function validateToolContent(input: {
   const promptFindings = promptInjectionMode === "ignore" ? [] : scanPromptInjection(input.value);
   if (promptFindings.length > 0) {
     findings.push(...promptFindings);
-    if (promptInjectionMode === "block") {
+    const blockingFindings =
+      input.direction === "result" && input.untrustedResult === true
+        ? promptFindings.filter((code) => code !== "secret_exfiltration")
+        : promptFindings;
+    if (promptInjectionMode === "block" && blockingFindings.length > 0) {
       throw new ToolContentValidationError(
         "Tool result contained prompt-injection instructions and was blocked",
         "prompt_injection_blocked",
-        promptFindings,
+        blockingFindings,
       );
     }
   }

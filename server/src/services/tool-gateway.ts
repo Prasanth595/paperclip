@@ -441,6 +441,7 @@ type RemoteHttpExecutionResult = {
   result: unknown;
   headerSummary?: HeaderPolicySummary;
   execution?: RemoteHttpExecutionAudit;
+  untrustedContentRead?: boolean;
 };
 
 type RemoteHttpExecutionAudit = {
@@ -829,6 +830,24 @@ function riskFromCatalogEntry(
     return "write";
   }
   return "read";
+}
+
+function isUntrustedContentReadTool(
+  connection: Pick<typeof toolConnections.$inferSelect, "config" | "transportConfig">,
+  entry: Pick<
+    typeof toolCatalogEntries.$inferSelect,
+    "toolName" | "riskLevel" | "isReadOnly" | "isWrite" | "isDestructive"
+  >,
+) {
+  const github =
+    connection.config.sourceTemplateKey === "github" ||
+    connection.transportConfig?.sourceTemplateKey === "github";
+  return (
+    github &&
+    riskFromCatalogEntry(entry) === "read" &&
+    (entry.toolName === "get_file_contents" ||
+      entry.toolName === "pull_request_read")
+  );
 }
 
 function slugSegment(
@@ -5999,6 +6018,7 @@ export function createToolGatewayService(
       session,
       tool,
     );
+    const untrustedContentRead = isUntrustedContentReadTool(connection, entry);
     // Recheck immediately before dispatch, including previously approved calls
     // and connections whose stored grant/catalog predates scope reduction.
     assertGoogleChatToolArgumentsSupported(connection, entry.toolName, parameters);
@@ -6403,7 +6423,12 @@ export function createToolGatewayService(
         "ok",
         "Remote MCP server responded to tools/call.",
       );
-      return { result, headerSummary, execution };
+      return {
+        result,
+        headerSummary,
+        execution,
+        ...(untrustedContentRead ? { untrustedContentRead: true } : {}),
+      };
     } catch (error) {
       if (error instanceof McpHttpResponseError) {
         const failure = error.reason === "too_large" ? responseTooLargeError()
@@ -6476,6 +6501,7 @@ export function createToolGatewayService(
       session,
       tool,
     );
+    const untrustedContentRead = isUntrustedContentReadTool(connection, entry);
     const grant = await resolveConnectionGrant(session, connection);
     const template = await resolveLocalStdioRuntimeTemplate(connection);
     const env = await localStdioEnvironment(
@@ -6514,6 +6540,7 @@ export function createToolGatewayService(
     );
     return {
       result: normalizeMcpToolResult(result, template.templateId === "paperclip.cognee-cloud" ? "cognee_cloud" : "local_stdio", template.templateId !== "paperclip.cognee-cloud"),
+      ...(untrustedContentRead ? { untrustedContentRead: true } : {}),
     };
   }
 
@@ -7384,6 +7411,7 @@ export function createToolGatewayService(
         direction: "result",
         sensitiveMode: "redact",
         promptInjectionMode: "block",
+        untrustedResult: connectedMcpExecution.untrustedContentRead === true,
       });
       const providerResult = asRecord(resultValidation.value);
       if (providerResult?.error) {
@@ -7415,6 +7443,9 @@ export function createToolGatewayService(
           source: "test",
           headerSummary: connectedMcpExecution.headerSummary ?? undefined,
           execution: connectedMcpExecution.execution,
+          ...(resultValidation.findings.length > 0
+            ? { findings: resultValidation.findings }
+            : {}),
         },
         tool: args.tool,
       });
@@ -10821,6 +10852,7 @@ export function createToolGatewayService(
           direction: "result",
           sensitiveMode: "redact",
           promptInjectionMode: "block",
+          untrustedResult: connectedMcpExecution?.untrustedContentRead === true,
         });
         const completedAt = new Date();
         const validatedMcpResult = connectedMcpExecution
@@ -10887,6 +10919,9 @@ export function createToolGatewayService(
               : {}),
             ...(connectedMcpExecution
               ? { execution: connectedMcpExecution.execution }
+              : {}),
+            ...(resultValidation.findings.length > 0
+              ? { findings: resultValidation.findings }
               : {}),
           },
           tool,
