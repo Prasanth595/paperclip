@@ -1,6 +1,7 @@
 import { MUSE_ASSET_VERSION, museStopBoundarySchema, museDetectorCleanupAttestationSchema, createGrokInvitationSchema, configureGrokRoutineSchema, verifyGrokRoutineSchema, recoverGrokRoutineSchema, pairGrokBindingSchema, stopGrokWorkSchema, retryGrokDeliverySchema, updateFastResponseSchema } from "@paperclipai/shared";
 import { slackTestMessageSchema, slackTestMessageResultSchema, slackManagerAuthorizationSchema, slackSetupOptionsSchema, slackManagedProvisionSchema, slackManagedResultSchema, slackRegistrationSchema, slackSetupActionSchema, slackInstallAuthorizationSchema, slackRegistrationStateSchema, slackAppConfigurationSchema, slackAvatarStateSchema, slackAccountStateSchema } from "@paperclipai/shared";
 import { experimentalApiMetadata } from "./experimental-api-metadata.js";
+import { agentCaseHandoffSchema, caseWorkflowDocumentTextSchema, doneCaseHandoffSchema } from "@paperclipai/shared";
 import {
   experimentalApiPaths,
   experimentalApiQueries,
@@ -12492,6 +12493,30 @@ registerCurrentRoute({
 
 // Every experimental REST route remains discoverable while its runtime feature
 // flag and actor checks stay authoritative. Shared validators prevent drift.
+// OpenAPI 3.0 cannot represent the shared validator's conditional refinement.
+// Derive separate creation/existing branches so discovery marks workflow text
+// required for case.create without requiring it for ordinary phase transfers.
+const caseHandoffApiBodySchema = z.union([
+  agentCaseHandoffSchema.safeExtend({ case: agentCaseHandoffSchema.shape.case.options[1], workflow_document_text: caseWorkflowDocumentTextSchema }),
+  agentCaseHandoffSchema.safeExtend({ case: agentCaseHandoffSchema.shape.case.options[0] }),
+  doneCaseHandoffSchema,
+]);
+registry.registerPath({ method: "post", path: "/api/companies/{companyId}/case-handoffs", tags: ["Cases"],
+  summary: "Start or hand off a case using its primary task",
+  description: "Requires enableCases and standard work mode. Creating a case or its first primary task requires workflow_document_text; it becomes the task's workflow document before dispatch. Recommend both a fenced Mermaid stateDiagram-v2 map and prose describing each transition's trigger, evidence, next agent, human wait/resume rules, and correction or escalation limits. State IDs should match phases and arrow outcomes should be defined in prose; diagrams are advisory, not server-enforced guards. Workflow and other initial document bodies together must total at most 200000 characters; workflow is a reserved initialDocuments key. Existing-task phase transfers cannot replace that document. Authenticated agents or board users need current case access and task creation/assignment authority; new-case binding also requires task mutation authority. Reuses the primary task; accepted self-handoffs yield the outgoing run. An idempotent replay returns the existing authorized receipt.",
+  request: { params: z.object({ companyId: z.string().uuid() }), body: jsonBody(caseHandoffApiBodySchema) },
+  responses: { 200: r.ok(), 202: r.ok(), 400: r.badRequest, 401: r.unauthorized, 403: r.forbidden,
+    404: r.notFound, 409: r.conflict, 422: r.unprocessable } });
+registry.registerPath({ method: "get", path: "/api/cases/{caseId}/handoffs", tags: ["Cases"],
+  summary: "Read a standalone case's handoff history", description: "Requires enableCases and access to all retained case permission sources.",
+  request: { params: z.object({ caseId: z.string().uuid() }), query: z.object({ limit: z.coerce.number().int().min(1).max(100).optional(),
+    before: z.iso.datetime().optional(), cursor: z.string().max(400).optional() }) }, responses: { 200: r.ok(), 401: r.unauthorized, 403: r.forbidden, 404: r.notFound } });
+for (const action of ["retry", "cancel"] as const) registry.registerPath({ method: "post", path: `/api/cases/{caseId}/handoffs/{handoffId}/${action}`,
+  tags: ["Cases"], summary: `${action === "retry" ? "Retry" : "Cancel"} pending case handoff`,
+  description: "Requires case access and ordinary task-control authority. Retry preserves the existing handoff/task identity. Cancellation remains available when enableCases is disabled; it prevents delivery and does not undo an applied assignment.",
+  request: { params: z.object({ caseId: z.string().uuid(), handoffId: z.string().uuid() }) },
+  responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized, 403: r.forbidden, 404: r.notFound, 409: r.conflict } });
+
 for (const [method, path, body] of experimentalApiPaths) {
   const query = experimentalApiQueries[`${method.toUpperCase()} ${path}`];
   const metadata = experimentalApiMetadata[`${method.toUpperCase()} ${path}`];

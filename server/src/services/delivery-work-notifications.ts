@@ -29,6 +29,7 @@ export const DELIVERY_QUEUES = {
   terminalWorkspaces: "terminal-workspaces",
   routineSchedules: "routine-schedules",
   issueMonitors: "issue-monitors",
+  caseHandoffs: "case-handoffs",
 } as const;
 export type DeliveryQueue = typeof DELIVERY_QUEUES[keyof typeof DELIVERY_QUEUES];
 

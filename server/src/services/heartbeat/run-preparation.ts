@@ -821,6 +821,8 @@ export async function resolveRunScopedMentionedSkillKeys(input: {
 
 
 export interface WakeupOptions {
+  /** Internal durable case assignment receipt. Never accepted from public wake payloads. */
+  durableCaseHandoffRequest?: { handoffId: string; wakeupRequestId: string; issueId: string; expectedIssueStatusVersion: number };
   /** Set only by authenticated board wake routes; never copied from caller payloads. */
   manualUserWake?: boolean;
   /** Internal resume of a queue with persisted board interruption intent. */

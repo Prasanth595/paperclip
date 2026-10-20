@@ -2,6 +2,30 @@
 
 Target specification for the Paperclip control plane. Living document — updated incrementally during spec interviews.
 
+Experimental standalone cases provide persistent structured work records that can
+exist independently of execution. Prompt-driven handoffs move their primary
+ordinary task between agents while retaining case data and history. Existing task
+permissions, execution ownership, budgets, and review gates remain authoritative;
+the concrete contract is in `SPEC-implementation.md` and the persistent case
+handoff implementation plan.
+
+A terminal handoff to `done` explicitly requests case closure on accepted
+completion of its primary task. Existing completion and review gates remain
+authoritative; an open case alone never creates an execution requirement.
+
+Native agents have dedicated case creation/read/update and handoff tools.
+Native creation requires first-task kickoff and explicit `workflow_document_text`,
+stored as the primary task's `workflow` Markdown document, with optional additional
+initial documents. Recommend both a Mermaid `stateDiagram-v2` map and prose
+defining every transition's conditions, evidence, destination and wait/retry rules;
+the server does not parse graph labels as executable transition rules.
+Documents belong to ordinary tasks; cases surface authorized document references
+and history without copying bodies. Historical case document storage is retained.
+Case
+awareness is supplied by the harness; compatible session continuations carry
+fresh routing information and changed facts, with full context retained for
+new sessions and resume failure.
+
 ---
 
 ## 1. Company Model [DRAFT]

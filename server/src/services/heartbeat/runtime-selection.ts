@@ -17,6 +17,7 @@ import {
   readNativeReviewAssignmentContext,
 } from "../native-runtime/native-review-participant.js";
 import { buildNativeReviewRequest } from "../native-runtime/native-review-prompt.js";
+import type { CaseExecutionContext } from "../case-context.js";
 import type { buildExecutionContinuation } from "../execution-continuation.js";
 import type { agentInstructionWorkingCopyService } from "../agent-instruction-working-copies.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -771,13 +772,15 @@ export async function selectHeartbeatRuntime(db: Db, input: HeartbeatRuntimeSele
               ].filter(Boolean).join("\n\n"),
               initialCommunicationGuidance: nativeReviewRequest ? null : readNonEmptyString(context.paperclipTaskCommunicationGuidance),
               wakePayload: context.paperclipWake,
+              caseContext: nativeReviewRequest ? null : context.paperclipCase as CaseExecutionContext | undefined,
               turnContext: context.paperclipTurnContext,
               githubInstructionSkillKeys: runScopedMentionedSkillKeys,
               resumedSession,
               previousTurn: (() => {
                 if (!previousNativeRun || nativeReviewRequest) return null;
                 try {
-                  const previousTask = parseNativeExecutionInput(parseObject(previousNativeRun.runnerProfileJson).nativeExecutionInput).task;
+                  const previousInput = parseNativeExecutionInput(parseObject(previousNativeRun.runnerProfileJson).nativeExecutionInput);
+                  const previousTask = previousInput.task;
                   if (paperclipWakePayload?.externalChatProvider) {
                     // External native inputs use a neutral task title. Compare
                     // the saved canonical brief so old provider text is not
@@ -785,9 +788,9 @@ export async function selectHeartbeatRuntime(db: Db, input: HeartbeatRuntimeSele
                     const savedIssue = parseObject(parseObject(previousNativeRun.contextSnapshot).paperclipIssue);
                     if (savedIssue.id !== issueRef.id || typeof savedIssue.title !== "string" ||
                       (savedIssue.description !== null && typeof savedIssue.description !== "string")) return null;
-                    return { runId: previousNativeRun.id, task: { title: savedIssue.title, description: savedIssue.description } };
+                    return { runId: previousNativeRun.id, task: { title: savedIssue.title, description: savedIssue.description }, nativeExecutionInput: previousInput };
                   }
-                  return { runId: previousNativeRun.id, task: previousTask };
+                  return { runId: previousNativeRun.id, task: previousTask, nativeExecutionInput: previousInput };
                 } catch {
                   // An invalid prior snapshot must use the fresh bootstrap.
                   return null;

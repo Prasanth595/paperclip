@@ -2332,3 +2332,90 @@ context; an arbitrary cache directory does not qualify. Git blob hashes, sizes a
 tracked file in the imported commit, including sibling skills, shared agents,
 binary assets and upstream credits. Both distinct discovery wrappers must point
 to their canonical entrypoints. The task must finish successfully in the UI.
+
+## Persistent case handoffs (explicit only)
+
+For case-page acceptance without any inference, use
+[`cases-read-only.spec.ts`](../e2e/cases-read-only.spec.ts) in the existing browser
+suite. It seeds passive records and linked-task document revisions through production APIs,
+creates no agents, and checks the shipped UI against a fresh server/database:
+
+```sh
+env -u DATABASE_URL -u DATABASE_MIGRATION_URL pnpm exec playwright test --config tests/e2e/playwright.config.ts tests/e2e/cases-read-only.spec.ts --project chromium
+```
+
+This covers record browsing, not agent execution. Use the cells below for the
+same-task agent workflow.
+
+The suite has three separately selectable local Codex cells. Receipt smoke has
+both an API-key profile and a subscription profile; the original arithmetic
+workflow remains subscription-only.
+
+| Cell | Durable result | Work-run bounds |
+|---|---|---|
+| `receipt-smoke` | Case receipt corrected from `{total:6}` to `{total:6,currency:"USD"}` after an independent review | Exactly four task work runs, 90 seconds each, low reasoning effort, one five-minute attempt, 100-cent company and agent budgets for accounted work |
+| `same-task-roundtrip` | Verified arithmetic answer `5` from inputs `2` and `3` | Four to six task work runs, one twelve-minute attempt, 1,000-cent company and agent budgets |
+
+`case-handoffs.runner-codex.local.receipt-smoke` and
+`case-handoffs.runner-codex-subscription.local.receipt-smoke` use one ordinary
+task across triage, builder, verifier and the returning builder. Agents save the
+ordinary primary-task documents `receipt` and `review` through native task tools.
+Kickoff requires `workflow_document_text`, stored on the primary task as `workflow`;
+each phase reads its recipe on demand. Authoring guidance recommends both a
+Mermaid `stateDiagram-v2` map and prose defining every transition; diagrams remain
+advisory and the small test fixture may use prose only. It also seeds a task-owned `brief` through `initialDocuments`; triage must read
+its persisted revision before continuing. Triage uses `read_case` and
+`update_case` to persist input validation; the other phases use `read_document`
+and `write_document`. The verifier checks
+the total and requests the missing currency; the returning builder reads that
+persisted review and updates the same receipt. The oracle requires attributed
+document revisions, four ordered delivered agent handoffs, fresh phase/version context,
+native API/tool receipts, four nonoverlapping successful task runs and task completion.
+The final builder also calls `handoff_case` with `to: "done"`; the fifth ledger
+entry is terminal and completes with the task, closing the case without another
+provider run. Two passive cases exercise browser list filters, and
+Chromium reads back the primary case, its rolled-up task documents and its task. Daily run caps
+are installed before kickoff: triage one, builder two, verifier one.
+
+Production lifecycle setup also performs hello inference outside heartbeat run
+counts and budget accounting. Up to three initial hello probes are expected,
+one per agent. Receipt smoke waits for readiness serially, for at most 45 seconds
+per agent, fails immediately on a reported lifecycle error, and pauses agents
+on failure to prevent the routine 60-second setup retry loop. A readiness timeout
+does not immediately cancel an in-flight probe, so four task runs is not an
+absolute inference cap. The work-run usage report excludes setup probes; their
+detailed tokens and cost are unavailable. Unknown usage does not mean free usage.
+
+`case-handoffs.runner-codex-subscription.local.same-task-roundtrip` uses three
+native Codex agents with the production hire instructions. Public REST kickoff
+creates one case and its task; the agents use the real `handoff_case` tool to
+route that task through triage, implementation, verification and revision.
+The independent oracle requires result `5` for inputs `2` and `3`, saved phase
+observations with fresh handoff versions, four delivered ledger entries, native
+tool lifecycle receipts, and the unchanged primary task. Final case history and
+task completion are inspected in Chromium. No database writes or private runner
+hooks manufacture the outcome.
+
+The local subscription profile requires explicit `CODEX_AUTH_JSON` containing
+only the selected operator login's `auth.json` bytes. Load this value privately
+into the launcher environment; never print it or place it in tracked config.
+Setup stages only that file in the disposable company's normal production
+Codex login slot. The API-key receipt profile instead requires `OPENAI_API_KEY`
+and uses the ordinary encrypted company-secret references for both provider key
+aliases. It stages no subscription login and preserves the same model and
+workflow limits. Credentials must be loaded privately into the launcher, never
+printed or written into tracked configuration. The arithmetic cell permits
+four to six accounted task runs, one attempt, a twelve-minute deadline,
+and 1,000-cent company/agent hard stops. The isolated instance and login are
+removed during ordinary harness cleanup. Usage coverage remains explicit for
+subscription runs; unavailable dollar accounting does not mean zero cost.
+
+```sh
+pnpm test:e2e:runner -- --list --suite case-handoffs
+pnpm test:e2e:runner -- --id case-handoffs.runner-codex.local.receipt-smoke --max-automatic-retries 0
+pnpm test:e2e:runner -- --id case-handoffs.runner-codex-subscription.local.receipt-smoke
+pnpm test:e2e:runner -- --id case-handoffs.runner-codex-subscription.local.same-task-roundtrip
+```
+
+The suite is excluded from `--all`. Its presence is not live qualification;
+inspect the packaged attempt evidence and normal Product E2E report.

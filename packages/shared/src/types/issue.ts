@@ -190,6 +190,8 @@ export interface DocumentRevision {
   changeSummary: string | null;
   createdByAgentId: string | null;
   createdByUserId: string | null;
+  /** Writer provenance; reading a revision does not grant access to the run. */
+  createdByRunId?: string | null;
   createdAt: Date;
 }
 

@@ -1,4 +1,5 @@
 import { measureRunTransaction } from "./execution-transaction-timing.js";
+import { assertNoCaseHandoffMutation, cancelCaseHandoffsForIssue, completeTerminalCaseHandoffsForIssue } from "./heartbeat/case-handoff-lifecycle.js";
 import { measureRunPhase } from "./execution-preparation-timing.js";
 import { automaticReadRecoveryCleanupCondition, touchedByUserCondition } from "./issue-participation.js";
 import { HUMAN_TASK_ORIGIN_KINDS } from "@paperclipai/shared";
@@ -10789,6 +10790,8 @@ export function issueService(db: Db) {
         blockedByIssueIds?: string[];
         actorAgentId?: string | null;
         actorRunId?: string | null;
+        /** Server-owned transfer being applied; never accepted from HTTP input. */
+        caseHandoffId?: string;
         actorRunStopId?: string | null;
         actorUserId?: string | null;
         companyGuard?: string;
@@ -10839,6 +10842,7 @@ export function issueService(db: Db) {
         blockedByIssueIds,
         actorAgentId,
         actorRunId,
+        caseHandoffId,
         actorRunStopId,
         actorUserId,
         companyGuard,
@@ -11105,6 +11109,7 @@ export function issueService(db: Db) {
           .for("update")
           .then((rows: Array<typeof issues.$inferSelect>) => rows[0] ?? null);
         if (!receiptExisting) return null;
+        if (actorRunId) await assertNoCaseHandoffMutation(tx, actorRunId, id);
         if (expectedStatusVersion !== undefined && (
           receiptExisting.statusVersion !== expectedStatusVersion || receiptExisting.status !== "backlog"
         )) {
@@ -11215,8 +11220,14 @@ export function issueService(db: Db) {
         });
         // Ownership changes invalidate observed handoff versions even if status
         // stays the same, including an A -> B -> A assignment race.
+        if (issueData.status === "done" || issueData.status === "cancelled") {
+          await cancelCaseHandoffsForIssue(tx, { companyId: receiptExisting.companyId, issueId: id,
+            reason: `Task was marked ${issueData.status}`, agentTransfersOnly: issueData.status === "done", publications: activityPublications });
+        }
         if ((issueData.assigneeAgentId !== undefined && issueData.assigneeAgentId !== receiptExisting.assigneeAgentId)
           || (issueData.assigneeUserId !== undefined && issueData.assigneeUserId !== receiptExisting.assigneeUserId)) {
+          await cancelCaseHandoffsForIssue(tx, { companyId: receiptExisting.companyId, issueId: id,
+            reason: "Task assignment changed", exceptId: caseHandoffId, publications: activityPublications });
           patch.statusVersion = sql`${issues.statusVersion} + 1` as unknown as number;
           // Invalidate human direction at the common assignment boundary, including
           // plugin/service writes that do not go through HTTP run cancellation.
@@ -11253,6 +11264,10 @@ export function issueService(db: Db) {
           .returning()
           .then((rows: Array<typeof issues.$inferSelect>) => rows[0] ?? null);
         if (!updated) return null;
+        if (updated.status === "done") {
+          await completeTerminalCaseHandoffsForIssue(tx, { companyId: updated.companyId, issueId: updated.id,
+            publications: activityPublications });
+        }
         if (workspaceSelectionActor && updated.workspaceBindingRevision !== receiptExisting.workspaceBindingRevision) {
           await executionWorkspaceService(db).assertTaskWorkspaceUpdateAccess({
             task: updated, actor: workspaceSelectionActor,

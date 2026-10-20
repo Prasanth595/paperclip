@@ -1,5 +1,6 @@
 import { reconcileMuseNativeTerminalRun } from "./muse-terminal-reconciliation.js";
 import { eligibleIssueMonitorWait } from "../issue-monitors.js";
+import { assertNativeCaseHandoffResult } from "./native-case-handoff.js";
 import { isNativePlanWaitResult, readNativePlanWait } from "./native-plan-wait.js";
 import { activeIssueInteractionCondition } from "../issue-question-context.js";
 import { hasPendingNativeChildCompletion } from "./native-child-completion-delivery.js";
@@ -1368,6 +1369,7 @@ export async function finalizeNativeRun(input: {
       await hasPendingNativeChildCompletion(input.db, childCompletionRecipient);
     const monitorWaitAt = eligibleIssueMonitorWait(authoritativeIssue, run.agentId);
     const proposedDecision = resolveNativeFinalizerStatus({
+      caseHandoffAuthorized: Boolean(await assertNativeCaseHandoffResult(input.db, run.id, authoritativeIssue.id, result)),
       monitorWaitAuthorized: authoritativeIssue.workMode === "standard" && authoritativeIssue.executionRunId === run.id && monitorWaitAt !== null,
       planWaitAuthorized: planWait !== null,
       hasPendingChildCompletion,

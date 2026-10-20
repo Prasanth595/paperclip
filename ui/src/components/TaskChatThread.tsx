@@ -3171,10 +3171,11 @@ export function TaskChatThread(props: TaskChatThreadProps) {
                 ) : null}
               </div>
             </div>
-            {assignedAgentForNotice?.status === "paused" ? (
+            {assignedAgentForNotice?.status === "paused" && !isTerminalIssueStatus(issueStatus) ? (
               <div className="mx-auto w-full max-w-(--tc-shell-max-w) px-4 pt-2">
                 <IssueAssigneePausedNotice
                   agent={assignedAgentForNotice}
+                  issueStatus={issueStatus}
                   onResume={onResumeAssignee}
                   resuming={resumeAssigneePending}
                 />

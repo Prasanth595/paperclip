@@ -45,6 +45,21 @@ Automated: [activity service](../../server/src/__tests__/activity-service.test.t
 
 Manual: Find a known mutation by actor/resource and a known run by status. Change filters, load more, and follow the source links. Reload the chosen view and verify no company leakage or duplicate events. Inspect a routine run from its audit entry.
 
+Case detail's **View in Audit** opens `/activity?entityType=case&entityId=<case UUID>`.
+The Activity filters include **Cases** actions and **Case** entities; the Case
+search accepts a UUID or human identifier such as `CAS-C1` (Enter or blur applies
+the search). Scoped history names and links the case, and agent actors use their
+real avatars. Historical creation, field, status, link, attachment and label
+events from `case_events` appear alongside the already recorded handoffs and
+document events, without duplicating those mirrored records. Combined history
+passes retained case access before cursor pagination.
+
+Focused regressions: [Audit feed](../../ui/src/pages/audit/AuditFeed.test.tsx),
+[Audit routing](../../ui/src/pages/audit/AuditHub.test.tsx), and
+[Postgres audit routes](../../server/src/__tests__/agent-action-audit-routes.test.ts).
+These prove the component/API boundaries separately; follow the case-to-Audit
+link in the actual app to verify the assembled journey.
+
 Issue activity is also available through `GET /api/issues/{id}/activity`.
 [Agent authorization](../../server/src/__tests__/activity-routes.test.ts) and
 [sandbox bridge](../../packages/adapter-utils/src/sandbox-callback-bridge.test.ts)

@@ -1,4 +1,6 @@
 import { isHeartbeatRunTerminalStatus } from "./run-lifecycle.js";
+import { pendingCaseHandoffForRun, cancelCaseHandoffsForIssue, isCaseHandoffSourceReleased } from "./case-handoff-lifecycle.js";
+import { publishActivity, type ActivityPublication } from "../activity-log.js";
 import { DEFERRED_WAKE_CONTEXT_KEY } from "./queue.js";
 import { CANCELLABLE_HEARTBEAT_RUN_STATUSES } from "./recovery.js";
 import {
@@ -710,13 +712,14 @@ export function createHeartbeatRunControl(db: Db, dependencies: HeartbeatRunCont
   ) {
     try {
       const source = await getRun(run.id);
+      const sourceHandoff = await pendingCaseHandoffForRun(db, run.id, run.companyId);
       const { postCommitEffects } = await wakeQueue.releaseIssueExecution({
         companyId: run.companyId,
         runId: run.id,
         now: new Date(),
         // A durable authentication card owns recovery. This covers the review path,
         // while continuation classification blocks periodic generic retries.
-        suppressImmediateRecovery: options.suppressImmediateRecovery || isAiAuthenticationBlocked(source),
+        suppressImmediateRecovery: options.suppressImmediateRecovery || isAiAuthenticationBlocked(source) || Boolean(sourceHandoff),
         ...(options.resumeStrandedQueue ? { resumeStrandedQueue: true } : {}),
       });
       if (options.deferredPostCommitEffects) {
@@ -727,6 +730,11 @@ export function createHeartbeatRunControl(db: Db, dependencies: HeartbeatRunCont
       const completed = await getRun(run.id);
       const issueId = readNonEmptyString(completed?.contextSnapshot?.issueId)
         ?? readNonEmptyString(completed?.contextSnapshot?.taskId) ?? completed?.nativeIssueId;
+      if (sourceHandoff && completed?.status === "cancelled" && !completed.startedAt && issueId) {
+        // A cancelled queue entry has no executeRun.finally. The canonical
+        // bootstrap proof still needs to release and wake its durable handoff.
+        await isCaseHandoffSourceReleased(db, { runId: completed.id, issueId });
+      }
       if (completed?.status === "succeeded" && issueId) {
         await settleSlackConversation(db, run.companyId, issueId).catch((err) => {
           logger.warn({ err, runId: run.id }, "Slack conversation settlement deferred to reconciliation");
@@ -902,7 +910,34 @@ export function createHeartbeatRunControl(db: Db, dependencies: HeartbeatRunCont
     let run = await getRun(runId);
     if (!run) throw notFound("Heartbeat run not found");
     if (options.expectedStatus && run.status !== options.expectedStatus) return null;
-    if (options.cancellationRequestId) {
+    const handoffIssueId = run.nativeIssueId ?? run.issueId ?? (typeof run.contextSnapshot?.issueId === "string" ? run.contextSnapshot.issueId : null);
+    const supersedesCaseHandoff = options.resultJson?.cancelledByActorType === "user" || options.errorCode === "issue_reassigned";
+    let cancellationClaimed = false;
+    if (handoffIssueId && supersedesCaseHandoff && options.resultJson?.caseHandoffYieldStop !== true) {
+      const publications: ActivityPublication[] = [];
+      await db.transaction(async tx => {
+        await tx.select({ id: issues.id }).from(issues).where(and(eq(issues.companyId, run!.companyId), eq(issues.id, handoffIssueId))).for("update");
+        if (options.cancellationRequestId) {
+          run = await claimCancellationRequest(tx as unknown as Db, runId, run!.companyId, options.cancellationRequestId,
+            options.cancellationRequestedByUserId ?? null);
+          cancellationClaimed = true;
+        }
+        // Acceptance takes task -> run locks too. Revoke the source's write
+        // authority in the same commit that cancels its outstanding intents,
+        // before waiting for process/native Stop. Otherwise a handoff can be
+        // accepted in the gap after this cancellation sweep.
+        const [fenced] = await tx.update(heartbeatRuns).set({
+          resultJson: sql`coalesce(${heartbeatRuns.resultJson}, '{}'::jsonb) || ${JSON.stringify({
+            executionCancellation: { state: "requested", requestedAt: new Date().toISOString() },
+          })}::jsonb`,
+        }).where(and(eq(heartbeatRuns.id, runId), eq(heartbeatRuns.companyId, run!.companyId),
+          inArray(heartbeatRuns.status, [...CANCELLABLE_HEARTBEAT_RUN_STATUSES]))).returning();
+        if (fenced) run = fenced;
+        await cancelCaseHandoffsForIssue(tx as unknown as Db, { companyId: run!.companyId, issueId: handoffIssueId, reason, publications });
+      });
+      publications.forEach(publishActivity);
+    }
+    if (options.cancellationRequestId && !cancellationClaimed) {
       run = await claimCancellationRequest(db, runId, run.companyId, options.cancellationRequestId, options.cancellationRequestedByUserId ?? null);
     }
     // The caller claim checked retry eligibility under both durable row locks.

@@ -67,6 +67,34 @@ Tasks have parentage. Every task exists in service of a parent task, all the way
 
 The current issue model includes stable issue identifiers, parent/sub-issues, blockers, a single assignee, comments, issue documents, attachments and work products, and review/approval handoffs. That structure keeps work inspectable by both the board and agents while still allowing agents to decompose work into smaller tasks.
 
+The experimental Cases feature also supports persistent work records and
+prompt-driven agent handoffs. Native case creation requires kickoff and creates
+one primary task; later handoffs move that same task
+between agents with a phase and instructions. The case retains facts, document references,
+and history while normal task assignments form each agent's queue. Task sessions,
+workspaces, private access, review rules, and human intervention remain part of
+the ordinary execution model. Ordinary task completion leaves case status unchanged.
+An explicit handoff to `done` closes the case when primary-task completion is
+accepted through the existing gates; review and human waits keep it open.
+
+Native agents can create, read and update case facts through dedicated tools.
+Creation always includes a kickoff and explicit `workflow_document_text`.
+The latter becomes the primary task's Markdown `workflow` document, describing
+phase owners, routing, evidence and completion rules. Agents read it before
+choosing their next step. Recommended authoring includes both a Mermaid
+`stateDiagram-v2` map and prose explaining each transition's conditions, evidence,
+destination agent, human waits and correction limits. Transitions remain advisory. Initial documents belong to
+the first task and are saved before its agent wakes; the case displays documents
+from its primary and accessible linked tasks without copying them. Agents use
+ordinary task document tools; historical case-owned documents remain readable.
+Each phase receives its current handoff instructions;
+compatible resumed sessions receive changed facts without repeating unchanged
+case contents. Agents can read current persisted data whenever they need it.
+
+Case pages are a lightweight read-only view: search or filter the list, open a
+record, read its findings and documents, and follow its current task and handoff
+history. Agents and APIs author the records; the pages have no editing controls.
+
 When a task is assigned to the current human, the message composer defaults to
 the latest agent that assigned it to them. If no assignment is available, it uses
 the latest other commenter, or leaves the recipient empty. A manual recipient

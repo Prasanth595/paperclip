@@ -8,9 +8,9 @@ The skill/reference inventory and eval cases are the only normative behavior sou
 
 ## Baseline Counts
 
-- Skill/reference headings: 164
+- Skill/reference headings: 166
 - Eval cases: 106 across 16 groups
-- Total normative rows: 270
+- Total normative rows: 272
 - Legacy MCP aliases folded into normative rows: 42
 
 | Eval group | Cases |
@@ -149,15 +149,17 @@ The skill/reference inventory and eval cases are the only normative behavior sou
 | skill:skills/paperclip/references/artifacts.md:workspace-only-file-references:15 | optional_agent_tool | skills/paperclip/references/artifacts.md:15 |
 | skill:skills/paperclip/references/cases.md:cases:1 | optional_agent_tool | skills/paperclip/references/cases.md:1 |
 | skill:skills/paperclip/references/cases.md:core-model:12 | optional_agent_tool | skills/paperclip/references/cases.md:12 |
-| skill:skills/paperclip/references/cases.md:upsert-semantics:29 | optional_agent_tool | skills/paperclip/references/cases.md:29 |
-| skill:skills/paperclip/references/cases.md:read-and-search:67 | optional_agent_tool | skills/paperclip/references/cases.md:67 |
-| skill:skills/paperclip/references/cases.md:documents:90 | always_agent_tool | skills/paperclip/references/cases.md:90 |
-| skill:skills/paperclip/references/cases.md:fields:118 | optional_agent_tool | skills/paperclip/references/cases.md:118 |
-| skill:skills/paperclip/references/cases.md:issue-links:151 | optional_agent_tool | skills/paperclip/references/cases.md:151 |
-| skill:skills/paperclip/references/cases.md:child-cases:176 | optional_agent_tool | skills/paperclip/references/cases.md:176 |
-| skill:skills/paperclip/references/cases.md:attachments:195 | optional_agent_tool | skills/paperclip/references/cases.md:195 |
-| skill:skills/paperclip/references/cases.md:lifecycle:208 | optional_agent_tool | skills/paperclip/references/cases.md:208 |
-| skill:skills/paperclip/references/cases.md:worked-blog-post-example:222 | optional_agent_tool | skills/paperclip/references/cases.md:222 |
+| skill:skills/paperclip/references/cases.md:upsert-semantics:31 | optional_agent_tool | skills/paperclip/references/cases.md:31 |
+| skill:skills/paperclip/references/cases.md:start-and-hand-off-work:69 | optional_agent_tool | skills/paperclip/references/cases.md:69 |
+| skill:skills/paperclip/references/cases.md:example-factory-instructions:218 | optional_agent_tool | skills/paperclip/references/cases.md:218 |
+| skill:skills/paperclip/references/cases.md:read-and-search:241 | optional_agent_tool | skills/paperclip/references/cases.md:241 |
+| skill:skills/paperclip/references/cases.md:task-documents-and-legacy-case-documents:301 | always_agent_tool | skills/paperclip/references/cases.md:301 |
+| skill:skills/paperclip/references/cases.md:fields:335 | optional_agent_tool | skills/paperclip/references/cases.md:335 |
+| skill:skills/paperclip/references/cases.md:issue-links:368 | optional_agent_tool | skills/paperclip/references/cases.md:368 |
+| skill:skills/paperclip/references/cases.md:child-cases:393 | optional_agent_tool | skills/paperclip/references/cases.md:393 |
+| skill:skills/paperclip/references/cases.md:attachments:412 | optional_agent_tool | skills/paperclip/references/cases.md:412 |
+| skill:skills/paperclip/references/cases.md:lifecycle:425 | optional_agent_tool | skills/paperclip/references/cases.md:425 |
+| skill:skills/paperclip/references/cases.md:worked-blog-post-example:439 | optional_agent_tool | skills/paperclip/references/cases.md:439 |
 | skill:skills/paperclip/references/company-skills.md:company-skills-workflow:1 | optional_agent_tool | skills/paperclip/references/company-skills.md:1 |
 | skill:skills/paperclip/references/company-skills.md:what-exists:5 | optional_agent_tool | skills/paperclip/references/company-skills.md:5 |
 | skill:skills/paperclip/references/company-skills.md:permission-model:22 | optional_agent_tool | skills/paperclip/references/company-skills.md:22 |

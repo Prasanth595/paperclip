@@ -114,6 +114,7 @@ export function arbitrateNativeStatus(input: {
   /** Server-verified accepted plan request and normal provider terminal. */
   planWaitAuthorized?: boolean;
   monitorWaitAuthorized?: boolean;
+  caseHandoffAuthorized?: boolean;
   boardResponseWaitAuthorized?: boolean;
   boardResponseWaitOrigin?: boolean;
   isConversation?: boolean;
@@ -161,6 +162,12 @@ export function arbitrateNativeStatus(input: {
     policyVersion: NATIVE_STATUS_ARBITER_POLICY_VERSION,
     statusAction: "preserve", toStatus: input.priorIssueStatus,
     reasonCode: "provider_failure_authority_superseded", unblockDescriptor: null, effects: [],
+  };
+  if (input.caseHandoffAuthorized) return {
+    policyVersion: NATIVE_STATUS_ARBITER_POLICY_VERSION,
+    statusAction: "preserve", toStatus: input.priorIssueStatus,
+    reasonCode: "case_handoff_waiting_for_release", unblockDescriptor: null,
+    effects: [{ kind: "release_checkout" }],
   };
   if (input.providerModelRejected && input.terminalState === "failed" &&
       input.nativeReviewOutcome !== "stale" && input.nativeReviewOutcome !== "resolved") {
@@ -572,6 +579,7 @@ export function arbitrateNativeStatus(input: {
   if (
     input.assessment.reportedDisposition === "yielded" &&
     input.assessment.continuation &&
+    input.assessment.continuation.kind !== "case_handoff" &&
     !unfinishedResponseWait
   ) {
     return {

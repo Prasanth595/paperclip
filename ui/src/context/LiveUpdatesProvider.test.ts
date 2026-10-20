@@ -567,16 +567,14 @@ describe("LiveUpdatesProvider issue invalidation", () => {
   });
 
   it("refreshes case document annotation caches when case annotation activity arrives", () => {
-    const invalidations: unknown[] = [];
-    const queryClient = {
-      invalidateQueries: (input: unknown) => {
-        invalidations.push(input);
-      },
-      getQueryData: () => undefined,
-    };
+    const queryClient = new QueryClient();
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    queryClient.setQueryData(queryKeys.cases.detail("PAP-C1"), {
+      id: "case-1", identifier: "PAP-C1", workIssueId: "issue-1",
+    });
 
     __liveUpdatesTestUtils.invalidateActivityQueries(
-      queryClient as never,
+      queryClient,
       "company-1",
       {
         entityType: "case",
@@ -593,18 +591,134 @@ describe("LiveUpdatesProvider issue invalidation", () => {
       { userId: "user-1", agentId: null },
     );
 
-    expect(invalidations).toContainEqual({
+    expect(invalidate).toHaveBeenCalledWith({
       queryKey: queryKeys.cases.list("company-1"),
     });
-    expect(invalidations).toContainEqual({
+    expect(invalidate).toHaveBeenCalledWith({
       queryKey: queryKeys.cases.detail("case-1"),
     });
-    expect(invalidations).toContainEqual({
+    expect(invalidate).toHaveBeenCalledWith({
       queryKey: queryKeys.cases.events("case-1"),
     });
-    expect(invalidations).toContainEqual({
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.cases.handoffs("case-1") });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.cases.detail("PAP-C1") });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.cases.events("PAP-C1") });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.cases.forIssue("issue-1") });
+    expect(invalidate).toHaveBeenCalledWith({
       queryKey: ["cases", "document-annotations", "case-1", "body"],
     });
+    queryClient.clear();
+  });
+
+  it.each(["key", "documentKey"])("refreshes current case document and revision reads for UUID and identifier using %s", (keyField) => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(queryKeys.cases.detail("PAP-C1"), { id: "case-1", identifier: "PAP-C1" });
+    const affected = ["case-1", "PAP-C1"].flatMap(ref => [
+      ["cases", "document", ref, "findings"],
+      queryKeys.cases.revisions(ref, "findings"),
+      queryKeys.cases.documents(ref),
+    ]);
+    const untouched = [
+      ["cases", "document", "PAP-C1", "specification"],
+      queryKeys.cases.revisions("PAP-C1", "specification"),
+      ["cases", "document", "PAP-C2", "findings"],
+      queryKeys.cases.revisions("PAP-C2", "findings"),
+    ];
+    for (const key of [...affected, ...untouched]) queryClient.setQueryData(key, { body: "Saved findings" });
+
+    __liveUpdatesTestUtils.invalidateActivityQueries(queryClient, "company-1", {
+      entityType: "case", entityId: "case-1", action: "case.document_revised",
+      actorType: "agent", actorId: "agent-1", details: { [keyField]: "findings" },
+    }, { userId: "user-1", agentId: null });
+
+    for (const key of affected) expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+    for (const key of untouched) expect(queryClient.getQueryState(key)?.isInvalidated).toBe(false);
+    queryClient.clear();
+  });
+
+  it("refreshes only the affected case's document reads when document activity omits its key", () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(queryKeys.cases.detail("PAP-C1"), { id: "case-1", identifier: "PAP-C1" });
+    const affected = ["findings", "specification"].flatMap(key => [
+      ["cases", "document", "PAP-C1", key], queryKeys.cases.revisions("PAP-C1", key),
+    ]);
+    const otherCase = ["cases", "document", "PAP-C2", "findings"];
+    for (const key of [...affected, otherCase]) queryClient.setQueryData(key, { body: "Saved findings" });
+
+    __liveUpdatesTestUtils.invalidateActivityQueries(queryClient, "company-1", {
+      entityType: "case", entityId: "case-1", action: "case.document_revised",
+      actorType: "agent", actorId: "agent-1", details: {},
+    }, { userId: "user-1", agentId: null });
+
+    for (const key of affected) expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(otherCase)?.isInvalidated).toBe(false);
+    queryClient.clear();
+  });
+
+  it("refreshes the task's case phase without a cached case detail", () => {
+    const queryClient = new QueryClient();
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    queryClient.setQueryData(queryKeys.cases.forIssue("issue-1"), [{
+      id: "link-1",
+      role: "work",
+      case: { id: "case-1", identifier: "PAP-C1", workIssueId: "issue-1", phase: "triage" },
+    }]);
+    queryClient.setQueryData(queryKeys.cases.forIssue("unrelated-issue"), [{
+      id: "link-2",
+      role: "work",
+      case: { id: "case-2", identifier: "PAP-C2", workIssueId: "unrelated-issue", phase: "triage" },
+    }]);
+    expect(queryClient.getQueriesData({ queryKey: ["cases", "detail"] })).toEqual([]);
+
+    __liveUpdatesTestUtils.invalidateActivityQueries(
+      queryClient,
+      "company-1",
+      {
+        entityType: "case",
+        entityId: "case-1",
+        action: "case.handoff_applied",
+        actorType: "agent",
+        actorId: "agent-1",
+        details: {},
+      },
+      { userId: "user-1", agentId: null },
+    );
+
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.cases.forIssue("issue-1") });
+    for (const ref of ["case-1", "PAP-C1"]) {
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.cases.detail(ref) });
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.cases.events(ref) });
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.cases.handoffs(ref) });
+    }
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: queryKeys.cases.forIssue("unrelated-issue") });
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: queryKeys.cases.detail("PAP-C2") });
+    queryClient.clear();
+  });
+
+  it("refreshes an empty task cases panel when its first handoff arrives", () => {
+    const queryClient = new QueryClient();
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    queryClient.setQueryData(queryKeys.cases.forIssue("issue-1"), []);
+
+    __liveUpdatesTestUtils.invalidateActivityQueries(
+      queryClient,
+      "company-1",
+      {
+        entityType: "case",
+        entityId: "case-1",
+        action: "case.handoff_requested",
+        issueId: "issue-1",
+        actorType: "agent",
+        actorId: "agent-1",
+        details: { issueId: "unrelated-issue" },
+      },
+      { userId: "user-1", agentId: null },
+    );
+
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.cases.forIssue("issue-1") });
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: queryKeys.cases.forIssue("unrelated-issue") });
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["cases", "for-issue"] });
+    queryClient.clear();
   });
 
   it("keeps self-authored comment events from refetching the active issue tree", () => {
