@@ -36,6 +36,7 @@ import { getExecutionBlocker, hasPendingRunCleanup } from "../execution-blocker.
 import { validateNativeWorkspaceReconstruction } from "../native-runtime/native-workspace-reconstruction.js";
 import { isConversationAdapter } from "../conversation-continuation.js";
 import { recordExecutionWait } from "../execution-wait.js";
+import { effectiveMaxConcurrentRuns } from "../quota-pacing.js";
 import {
   getNativeReviewAssignment,
   readNativeReviewAssignmentContext,
@@ -1913,10 +1914,16 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
         return [];
       }
       const policy = parseHeartbeatPolicy(agent);
+      // Quota pacing may lower the limit for local subscription adapters. It
+      // only limits new starts: runs above a lowered limit keep running.
+      const maxConcurrentRuns = effectiveMaxConcurrentRuns(
+        agent.adapterType,
+        policy.maxConcurrentRuns,
+      );
       const runningCount = await countRunningRunsForAgent(agentId);
       const availableSlots = Math.max(
         0,
-        policy.maxConcurrentRuns - runningCount,
+        maxConcurrentRuns - runningCount,
       );
       if (availableSlots <= 0) return [];
 

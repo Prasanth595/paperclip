@@ -5764,6 +5764,7 @@ const costSummaryPaths = [
   "finance-events",
   "window-spend",
   "quota-windows",
+  "quota-pacing",
   "subscriptions",
   "data-quality",
 ] as const;
