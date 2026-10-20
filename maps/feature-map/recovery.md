@@ -68,6 +68,13 @@ confirmation; unavailable actions must explain the gate or remain absent.
 
 ### `post-stop-message`
 
+Persisted local PID/group reuse is checked against process-generation evidence.
+A verified replacement no longer keeps the old execution blocked; unknown
+identity and surviving descendants retain the hold. Focused coverage:
+[identity](../../server/src/services/local-process-identity.test.ts) and
+[conversation blocker](../../server/src/services/conversation-process-identity.test.ts).
+These are deterministic policy checks, not live continuation acceptance.
+
 After a stop, send a new instruction on the same task or inspect one already
 saved while cleanup was pending. Observe the waiting message, continuation, and
 eventual result rather than manually changing the task status to look complete.

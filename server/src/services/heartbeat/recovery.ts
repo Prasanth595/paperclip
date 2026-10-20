@@ -7,7 +7,7 @@ import {
   hasStopOnlyCleanup,
   settleStopOnlyCleanup,
 } from "../sandbox-stop-and-retain.js";
-import { recordNativeLocalProcessStop } from "../native-local-process-stop.js";
+import { inspectHeartbeatRunProcessIdentity, recordNativeLocalProcessStop } from "../native-local-process-stop.js";
 import {
   legacyControllerBootId,
   hasLiveLegacyController,
@@ -63,7 +63,6 @@ import { performance } from "node:perf_hooks";
 import { buildProcessLossDiagnostic } from "../process-loss-diagnostics.js";
 import { logActivity } from "../activity-log.js";
 import { releaseRuntimeServicesForRun } from "../workspace-runtime.js";
-import { isProcessGroupAlive } from "../local-service-supervisor.js";
 import {
   findMissingHotRestartSnapshotRunIds,
   readHotRestartIntent,
@@ -290,7 +289,7 @@ export function isProcessAlive(pid: number | null | undefined) {
     const code = (error as NodeJS.ErrnoException | undefined)?.code;
     if (code === "EPERM") return true;
     if (code === "ESRCH") return false;
-    return false;
+    return true;
   }
 }
 
@@ -785,8 +784,8 @@ export function createHeartbeatRecovery(db: Db, dependencies: HeartbeatRecoveryD
 
       const processPid = run.processPid ?? candidate.processPid;
       const processGroupId = run.processGroupId ?? candidate.processGroupId;
-      const processPidAlive = isProcessAlive(processPid);
-      const processGroupAlive = isProcessGroupAlive(processGroupId);
+      const { pidMayBeOwned: processPidAlive, groupMayBeOwned: processGroupAlive } =
+        await inspectHeartbeatRunProcessIdentity(db, { ...run, processPid, processGroupId });
       if (!processPid && !processGroupId) {
         classify(candidate, "lost", "missing_process_metadata", patch);
         continue;
@@ -2002,10 +2001,8 @@ export function createHeartbeatRecovery(db: Db, dependencies: HeartbeatRecoveryD
         claimableNativeRunIds.add(run.id);
         continue;
       }
-      const processPidAlive =
-        !!run.processPid && isProcessAlive(run.processPid);
-      const processGroupAlive =
-        !!run.processGroupId && isProcessGroupAlive(run.processGroupId);
+      const { pidMayBeOwned: processPidAlive, groupMayBeOwned: processGroupAlive } =
+        await inspectHeartbeatRunProcessIdentity(db, run);
       if (processPidAlive || processGroupAlive) {
         await markNativeOwnershipUnverified(run, {
           reason: "live_process_identifier",
@@ -2026,6 +2023,8 @@ export function createHeartbeatRecovery(db: Db, dependencies: HeartbeatRecoveryD
           .where(
             and(
               eq(heartbeatRuns.id, run.id),
+              eq(heartbeatRuns.companyId, run.companyId),
+              eq(heartbeatRuns.status, run.status),
               eq(heartbeatRuns.runtimeMode, "native"),
               run.processPid === null
                 ? isNull(heartbeatRuns.processPid)
@@ -2040,7 +2039,8 @@ export function createHeartbeatRecovery(db: Db, dependencies: HeartbeatRecoveryD
           )
           .returning({ id: heartbeatRuns.id })
           .then((rows) => rows[0] ?? null);
-        if (cleared) await recordNativeLocalProcessStop(tx as unknown as Db, run);
+        if (cleared && !await recordNativeLocalProcessStop(tx as unknown as Db, run))
+          throw new Error("Process identity changed before stop receipt; rollback required");
         return cleared;
       });
       if (cleared) claimableNativeRunIds.add(cleared.id);
@@ -2216,12 +2216,18 @@ export function createHeartbeatRecovery(db: Db, dependencies: HeartbeatRecoveryD
       // preserves its explicit physical-copyback hold. Keep its source lease.
       if (nativeWorkspaceFinalizationPending) continue;
       const nativeRun = run.runtimeMode === "native";
-      const nativeProcessPidAlive =
-        nativeRun && !!run.processPid && isProcessAlive(run.processPid);
-      const nativeProcessGroupAlive =
-        nativeRun &&
-        !!run.processGroupId &&
-        isProcessGroupAlive(run.processGroupId);
+      const currentAdapterTracksLocalChild =
+        isTrackedLocalChildProcessAdapter(adapterType);
+      const checksPersistedChildLiveness = currentAdapterTracksLocalChild || nativeRun;
+      // Do not query lease inventory or inspect host PIDs for other adapters.
+      // The helper additionally requires positive local lease evidence: native
+      // runtime mode and an adapter name alone do not establish the PID namespace.
+      const persistedIdentity = !checksPersistedChildLiveness ||
+        runningProcesses.has(run.id) || activeRunExecutions.has(run.id)
+        ? { pidMayBeOwned: run.processPid !== null, groupMayBeOwned: run.processGroupId !== null }
+        : await inspectHeartbeatRunProcessIdentity(db, run);
+      const nativeProcessPidAlive = nativeRun && persistedIdentity.pidMayBeOwned;
+      const nativeProcessGroupAlive = nativeRun && persistedIdentity.groupMayBeOwned;
       const coordinatorOwnedByCurrentController =
         nativeRun &&
         nativeControllerBootId === currentNativeController.bootId &&
@@ -2286,24 +2292,14 @@ export function createHeartbeatRecovery(db: Db, dependencies: HeartbeatRecoveryD
         if (now.getTime() - refTime < staleThresholdMs) continue;
       }
 
-      const currentAdapterTracksLocalChild =
-        isTrackedLocalChildProcessAdapter(adapterType);
       const tracksLegacyLocalChild =
         run.runtimeMode !== "native" && currentAdapterTracksLocalChild;
       // Native runner processes also persist child metadata, but they must not
       // inherit legacy retry or termination authority. Use their PID/group only
       // for a read-only liveness check so a lost in-memory handle cannot cause
       // overlapping provider/tool execution while that child is still alive.
-      const checksPersistedChildLiveness =
-        currentAdapterTracksLocalChild || run.runtimeMode === "native";
-      const processPidAlive =
-        checksPersistedChildLiveness &&
-        run.processPid &&
-        isProcessAlive(run.processPid);
-      const processGroupAlive =
-        checksPersistedChildLiveness &&
-        run.processGroupId &&
-        isProcessGroupAlive(run.processGroupId);
+      const processPidAlive = persistedIdentity.pidMayBeOwned;
+      const processGroupAlive = persistedIdentity.groupMayBeOwned;
       if (
         (processPidAlive || processGroupAlive) &&
         readHotRestartAdoptionMetadata(parseObject(run.resultJson))
@@ -2313,8 +2309,8 @@ export function createHeartbeatRecovery(db: Db, dependencies: HeartbeatRecoveryD
       if (processPidAlive || processGroupAlive) {
         if (run.errorCode !== DETACHED_PROCESS_ERROR_CODE) {
           const detachedMessage = processPidAlive
-            ? `Lost in-memory process handle, but child pid ${run.processPid} is still alive`
-            : `Lost in-memory process handle, but persisted process group ${run.processGroupId} is still alive`;
+            ? `Lost in-memory process handle; ownership remains unresolved for child pid ${run.processPid}`
+            : `Lost in-memory process handle; ownership remains unresolved for persisted process group ${run.processGroupId}`;
           const detachedRun = await setRunStatus(run.id, "running", {
             error: detachedMessage,
             errorCode: DETACHED_PROCESS_ERROR_CODE,

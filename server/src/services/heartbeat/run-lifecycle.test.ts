@@ -1,3 +1,5 @@
+import { appendHeartbeatRunEvent } from "../heartbeat-run-events.js";
+import { hasNativeLocalProcessStop } from "../native-local-process-stop.js";
 import type { Db } from "@paperclipai/db";
 import { agents, agentWakeupRequests, companies, createDb, EMBEDDED_POSTGRES_TEST_TIMEOUT_MS, heartbeatRunEvents, heartbeatRuns } from "@paperclipai/db";
 import { eq, sql } from "drizzle-orm";
@@ -126,6 +128,23 @@ describe.skipIf(!support.supported)("heartbeat lifecycle database wiring", () =>
     expect(persisted?.processStartedAt?.toISOString()).toBe(remoteBirth);
     expect(persisted?.processPid).toBe(process.pid);
   });
+
+  it.each(["succeeded", "failed", "interrupted", "cancelled", "timed_out", "queued", "running", "scheduled_retry"])(
+    "keeps late spawn identity visible and invalidates old stop evidence for %s", async status => {
+      const { run } = await fixture({ status });
+      await appendHeartbeatRunEvent(db, { companyId: run.companyId, runId: run.id,
+        agentId: run.agentId, eventType: "native.local_process_stopped", stream: "system", level: "info" });
+      expect(await hasNativeLocalProcessStop(db, run.companyId, run.id)).toBe(true);
+      const birth = "2026-10-16T12:20:00.000Z";
+      await persistHeartbeatRunProcessMetadata(db, run.id, {
+        pid: 40250, processGroupId: 40250, startedAt: birth, targetKind: "remote",
+      });
+      const [persisted] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, run.id));
+      expect(persisted).toMatchObject({ status, processPid: 40250, processGroupId: 40250,
+        processStartedAt: new Date(birth) });
+      expect(await hasNativeLocalProcessStop(db, run.companyId, run.id)).toBe(false);
+    },
+  );
 
   it("keeps one terminal outcome and reports only the winner of competing writes", async () => {
     const { run } = await fixture();

@@ -3198,12 +3198,15 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
   });
 
   it("does not grant a dead native run legacy retry authority after adapter reassignment", async () => {
-    const { agentId, runId } = await seedRunFixture({
+    const { companyId, agentId, runId } = await seedRunFixture({
       adapterType: "paperclip_runner",
       runtimeMode: "native",
       processPid: 999_999_999,
       includeIssue: false,
     });
+    // This fixture represents a verified controller-local execution.
+    await db.insert(environmentLeases).values({ companyId, heartbeatRunId: runId,
+      provider: "local", status: "released", releasedAt: new Date() });
     // The persisted run remains native even after the agent's current adapter
     // changes to one that normally owns a legacy local child.
     await db
@@ -4958,11 +4961,14 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       cleanupPids.add(orphan.descendantPid);
       expect(isPidAlive(orphan.descendantPid)).toBe(true);
 
-      const { agentId, runId } = await seedRunFixture({
+      const { companyId, agentId, runId } = await seedRunFixture({
         agentStatus: "idle",
         processPid: orphan.processPid,
         processGroupId: orphan.processGroupId,
       });
+      // This fixture represents a verified controller-local execution.
+      await db.insert(environmentLeases).values({ companyId, heartbeatRunId: runId,
+        provider: "local", status: "released", releasedAt: new Date() });
       const heartbeat = heartbeatService(db);
 
       const result = await heartbeat.reapOrphanedRuns();

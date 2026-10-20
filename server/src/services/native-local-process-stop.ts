@@ -1,3 +1,4 @@
+import { inspectLocalProcessIdentity } from "./local-process-identity.js";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { environmentLeases, heartbeatRunEvents, heartbeatRuns, type Db } from "@paperclipai/db";
 import { appendHeartbeatRunEvent } from "./heartbeat-run-events.js";
@@ -7,12 +8,23 @@ export const PROCESS_IDENTITY_RECORDED = "native.process_identity_recorded";
 const LOCAL_PROCESS_STOPPED = "native.local_process_stopped";
 
 function absent(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return false;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ESRCH";
-  }
+  try { process.kill(pid, 0); return false; }
+  catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; }
+}
+
+
+/** Only positive, exclusively local lease evidence permits host observation.
+ * Missing inventory is unknown, not proof of a controller-local target. */
+export async function inspectHeartbeatRunProcessIdentity(db: Db, run: typeof heartbeatRuns.$inferSelect) {
+  if (run.processPid === null && run.processGroupId === null)
+    return { pidMayBeOwned: false, groupMayBeOwned: false, reused: false, mayBeOwned: false };
+  const leases = await db.select({ provider: environmentLeases.provider }).from(environmentLeases)
+    .where(and(eq(environmentLeases.companyId, run.companyId), eq(environmentLeases.heartbeatRunId, run.id)));
+  if (leases.length === 0 || leases.some(lease => lease.provider !== "local")) return {
+    pidMayBeOwned: run.processPid !== null, groupMayBeOwned: run.processGroupId !== null,
+    reused: false, mayBeOwned: run.processPid !== null || run.processGroupId !== null,
+  };
+  return inspectLocalProcessIdentity(run);
 }
 
 /**
@@ -28,9 +40,8 @@ export async function recordNativeLocalProcessStop(db: Db, run: typeof heartbeat
       eq(environmentLeases.companyId, run.companyId),
       eq(environmentLeases.heartbeatRunId, run.id),
     ));
-  if (leases.some(lease => lease.provider !== "local")) return false;
-  if ((run.processPid && !absent(run.processPid)) ||
-      (run.processGroupId && !absent(-run.processGroupId))) return false;
+  if (leases.length === 0 || leases.some(lease => lease.provider !== "local")) return false;
+  if ((await inspectLocalProcessIdentity(run)).mayBeOwned) return false;
   await appendHeartbeatRunEvent(db, {
     companyId: run.companyId,
     runId: run.id,

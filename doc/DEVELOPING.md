@@ -1556,6 +1556,33 @@ In Vite middleware mode, Paperclip gives HMR a dedicated HTTP server bound to th
 
 When a workspace service runs Paperclip for browser OAuth QA, configure its `expose.urlTemplate` with the canonical URL the browser can reach. Paperclip preserves explicit `PAPERCLIP_PUBLIC_URL` or `BETTER_AUTH_URL` settings; otherwise it uses a valid exposed HTTPS origin (or loopback HTTP) as the managed runtime fallback for Better Auth and `/api/tools/oauth/callback`. Internal service names such as `http://paperclip-dev:<port>` are rejected unless that hostname is genuinely the browser route. Use a unique origin per isolated worktree. See [Execution Workspaces And Runtime Services](../docs/guides/board-operator/execution-workspaces-and-runtime-services.md#browser-reachable-origins-for-oauth-qa) for configuration and verification.
 
+## Persisted local process identity
+
+Recovery treats numeric PIDs and process-group IDs as observations, not ownership
+capabilities. `server/src/services/local-process-identity.ts` uses the recorded
+birth time and repeated executable/group observations to reject a newer process
+generation. On supported POSIX hosts, reuse of the recorded group leader's PID
+also proves the old group ended; non-leader reuse cannot exclude descendants.
+Unknown observations, permission failures, matching/older birth times and missing
+identity retain the hold. These observations never authorize a termination signal.
+Remote environment IDs are not interpreted using the controller's process table.
+Heartbeat recovery requires positive, exclusively local lease inventory before
+probing persisted IDs; missing or mixed inventory retains the hold. Unsupported
+adapters with persisted IDs stay held without a host probe or lease lookup.
+Terminal status alone is not stop evidence: late spawn metadata remains visible,
+and a still-live provider retains its hold even after a terminal run outcome.
+Native retry clearing remains compare-and-set by company, run, status and identity;
+its stop receipt must commit in the same transaction, or clearing rolls back.
+
+Focused checks:
+
+```sh
+pnpm exec vitest run server/src/services/local-process-identity.test.ts server/src/services/conversation-process-identity.test.ts server/src/services/native-local-process-stop.test.ts
+```
+
+Database lifecycle and restart suites are still required for acceptance; passing
+the focused mocked checks does not qualify concurrent persistence or deployment.
+
 ## Heartbeat Service Extractions
 
 Routine and issue-monitor dispatch uses saved future deadlines through

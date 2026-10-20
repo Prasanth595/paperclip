@@ -1,3 +1,4 @@
+import { inspectLocalProcessIdentity } from "./local-process-identity.js";
 import { hasRequiredWorkspaceRecovery } from "./workspace-restore-recovery-state.js";
 import { hasVerifiedWorkspaceRepair } from "./workspace-recovery-receipt.js";
 import { createHash } from "node:crypto";
@@ -26,11 +27,6 @@ import { queuedCommentIdsFromWakePayload } from "./issue-queued-comment-queue.js
 
 type Run = typeof heartbeatRuns.$inferSelect;
 const terminal = ["failed", "interrupted", "timed_out", "cancelled"];
-
-function processStopped(pid: number): boolean {
-  try { process.kill(pid, 0); return false; }
-  catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; }
-}
 
 /** Validate the whole saved queue, preserving order and original authors.
  * Call again under the task lock before adopting IDs into a new run.
@@ -276,8 +272,8 @@ export async function admitExplicitNativeContinuation(input: {
         if (!run.processPid && !run.processGroupId &&
             !await hasNativeLocalProcessStop(db, companyId, run.id) &&
             !await hasHistoricalSuspendedNativeSession(db, run)) return blocked("process_identity_missing", "The previous run has no verified stop record. Paperclip cannot start this message yet.");
-        if (run.processPid && !processStopped(run.processPid)) return blocked("process_running", "Waiting for the previous process to stop. Your message will start automatically.");
-        if (run.processGroupId && !processStopped(-run.processGroupId)) return blocked("process_running", "Waiting for the previous process to stop. Your message will start automatically.");
+        if ((await inspectLocalProcessIdentity(run)).mayBeOwned)
+          return blocked("process_running", "Waiting for the previous process to stop. Your message will start automatically.");
       }
     }
     if (!remote && run.runtimeMode === "native" && run.errorCode === "native_session_cleanup_quarantined") {

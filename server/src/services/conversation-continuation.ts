@@ -2,7 +2,7 @@ import { hasRequiredWorkspaceRecovery } from "./workspace-restore-recovery-state
 import { and, desc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { environmentLeases, heartbeatRunEvents, heartbeatRuns, issueRecoveryActions, type Db } from "@paperclipai/db";
 import { canonicalExecutionUuid } from "./execution-identity.js";
-import { readProcessStartedAt } from "./hot-restart.js";
+import { inspectLocalProcessIdentity } from "./local-process-identity.js";
 import { hasRemoteTerminationReceipt } from "./remote-execution-termination.js";
 
 // These adapters accept a conversation turn. Retrying a process or webhook can
@@ -91,16 +91,6 @@ export function conversationRecoveryActionPredicate() {
   );
 }
 
-/** OS liveness probes do not signal or stop the process. Unknown ownership holds. */
-function processMayBeAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ESRCH";
-  }
-}
-
 /** A terminal conversation row does not prove that its execution authority ended.
  * Other adapters keep their existing bootstrap and ownership protocols.
  */
@@ -119,7 +109,7 @@ export async function getConversationOwnershipBlocker(db: Db, companyId: string,
         eq(heartbeatRuns.nativeIssueId, canonicalExecutionUuid(sql`${issueId}::text`)),
         and(isNull(heartbeatRuns.nativeIssueId), sql`${heartbeatRuns.contextSnapshot}->>'issueId' = ${issueId}`),
       ),
-      inArray(heartbeatRuns.status, ["failed", "timed_out", "interrupted", "cancelled"]),
+      inArray(heartbeatRuns.status, ["succeeded", "failed", "timed_out", "interrupted", "cancelled"]),
       or(isNotNull(heartbeatRuns.processPid), isNotNull(heartbeatRuns.processGroupId), activeLease,
         sql`${heartbeatRuns.resultJson}->'workspaceRestoreRecovery'->>'schema' = 'paperclip.workspace-restore-recovery.v1'`),
     )).orderBy(desc(heartbeatRuns.createdAt), desc(heartbeatRuns.id));
@@ -143,14 +133,8 @@ export async function getConversationOwnershipBlocker(db: Db, companyId: string,
       // A separate local lease keeps the existing host process checks below.
       if (leases.every(lease => lease.provider !== "local")) continue;
     }
-    let pidAlive = run.processPid !== null && processMayBeAlive(run.processPid);
-    if (pidAlive && run.processStartedAt) {
-      // A recycled PID cannot keep an old task blocked. An unreadable identity
-      // stays conservative; the original process may still own execution.
-      const observed = await readProcessStartedAt(run.processPid!).catch(() => null);
-      if (observed && new Date(observed).getTime() !== run.processStartedAt.getTime()) pidAlive = false;
-    }
-    const groupAlive = run.processGroupId !== null && processMayBeAlive(-run.processGroupId);
+    const { pidMayBeOwned: pidAlive, groupMayBeOwned: groupAlive } =
+      await inspectLocalProcessIdentity(run);
     if (pidAlive || groupAlive || leaseHeld) {
       return {
         runId: run.id,

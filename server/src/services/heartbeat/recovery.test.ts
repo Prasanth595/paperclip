@@ -1,6 +1,8 @@
+import * as processIdentity from "../local-process-identity.js";
+import * as heartbeatEvents from "../heartbeat-run-events.js";
 import { randomUUID } from "node:crypto";
 import type { Db } from "@paperclipai/db";
-import { agents, companies, createDb, EMBEDDED_POSTGRES_TEST_TIMEOUT_MS, environments, environmentLeases, heartbeatRuns, issueRecoveryActions, issues, nativeRunFinalizations } from "@paperclipai/db";
+import { agents, companies, createDb, EMBEDDED_POSTGRES_TEST_TIMEOUT_MS, environments, environmentLeases, heartbeatRuns, heartbeatRunEvents, issueRecoveryActions, issues, nativeRunFinalizations } from "@paperclipai/db";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "../../__tests__/helpers/embedded-postgres.js";
@@ -186,6 +188,59 @@ describePostgres("heartbeat recovery module ownership", () => {
     await db.insert(issues).values({ id: issueId, companyId, title: "Recover this run", status: "in_progress", assigneeAgentId: agentId });
     return (await db.insert(heartbeatRuns).values({ id: runId, companyId, agentId, issueId, invocationSource: "automation", status: "running", runtimeMode: "legacy" }).returning())[0];
   }
+
+  it.each(["http", "unknown_adapter", "codex_local"])("holds persisted IDs without host probes when %s has no local inventory", async adapterType => {
+    const run = await seedRun();
+    await db.update(agents).set({ adapterType }).where(eq(agents.id, run.agentId));
+    await db.update(heartbeatRuns).set({ processPid: 40250, processGroupId: 40250 }).where(eq(heartbeatRuns.id, run.id));
+    const inspect = vi.spyOn(processIdentity, "inspectLocalProcessIdentity");
+    const deps = callbacks(db);
+    try {
+      expect(await createHeartbeatRecovery(db, deps).reapOrphanedRuns({ staleThresholdMs: 0 })).toEqual({ reaped: 0, runIds: [] });
+      expect(inspect).not.toHaveBeenCalled();
+      expect(deps.executeRun).not.toHaveBeenCalled();
+      expect(deps.scheduleBoundedRetryForRun).not.toHaveBeenCalled();
+      expect((await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, run.id)))[0].status).toBe("running");
+    } finally {
+      inspect.mockRestore();
+      await db.delete(heartbeatRuns).where(eq(heartbeatRuns.id, run.id));
+    }
+  });
+
+  it.each([false, true])("fences concurrent retry identity clearing and rolls back receipt failure (fail: %s)", async failReceipt => {
+    const run = await seedRun();
+    const birth = new Date("2026-10-15T18:59:00Z");
+    await db.update(heartbeatRuns).set({ runtimeMode: "native", nativeIssueId: run.issueId,
+      status: "failed", processPid: 40250, processGroupId: 40250, processStartedAt: birth }).where(eq(heartbeatRuns.id, run.id));
+    await db.insert(nativeRunFinalizations).values({ runId: run.id, companyId: run.companyId,
+      issueId: run.issueId!, phase: "retryable_failure", nextAttemptAt: new Date(Date.now() + 60000) });
+    await db.insert(environmentLeases).values({ companyId: run.companyId, heartbeatRunId: run.id,
+      provider: "local", status: "released", releasedAt: new Date() });
+    const inspect = vi.spyOn(processIdentity, "inspectLocalProcessIdentity").mockResolvedValue({
+      pidMayBeOwned: false, groupMayBeOwned: false, mayBeOwned: false, reused: true });
+    const receipt = vi.spyOn(heartbeatEvents, "appendHeartbeatRunEvent");
+    if (failReceipt) receipt.mockRejectedValue(new Error("receipt storage failed"));
+    const deps = callbacks(db);
+    try {
+      if (failReceipt) {
+        await expect(createHeartbeatRecovery(db, deps).reapOrphanedRuns({ staleThresholdMs: 0 })).rejects.toThrow("receipt storage failed");
+      } else {
+        await Promise.all([1, 2].map(() => createHeartbeatRecovery(db, deps).reapOrphanedRuns({ staleThresholdMs: 0 })));
+      }
+      expect((await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, run.id)))[0]).toMatchObject({
+        status: "failed", processPid: failReceipt ? 40250 : null,
+        processGroupId: failReceipt ? 40250 : null, processStartedAt: failReceipt ? birth : null });
+      const events = await db.select().from(heartbeatRunEvents).where(eq(heartbeatRunEvents.runId, run.id));
+      expect(events.filter(event => event.eventType === "native.local_process_stopped")).toHaveLength(failReceipt ? 0 : 1);
+      expect(deps.executeRun).not.toHaveBeenCalled();
+    } finally {
+      receipt.mockRestore(); inspect.mockRestore();
+      await db.delete(heartbeatRunEvents).where(eq(heartbeatRunEvents.runId, run.id));
+      await db.delete(environmentLeases).where(eq(environmentLeases.heartbeatRunId, run.id));
+      await db.delete(nativeRunFinalizations).where(eq(nativeRunFinalizations.runId, run.id));
+      await db.delete(heartbeatRuns).where(eq(heartbeatRuns.id, run.id));
+    }
+  });
 
   it.each(["restored", "restore_failed"])("keeps the sandbox available until adapter workspace settlement: %s", async outcome => {
     const run = await seedRun();

@@ -245,6 +245,7 @@ import {
 import { withAdapterExecutionPhase } from "@paperclipai/adapter-utils/execution-phase";
 import {
   recordNativeLocalProcessStop,
+  inspectHeartbeatRunProcessIdentity,
 } from "./native-local-process-stop.js";
 
 import {
@@ -1788,10 +1789,8 @@ export function heartbeatService(
       const trackedProcessGroupAlive = trackedProcessGroupId
         ? isProcessGroupAlive(trackedProcessGroupId)
         : false;
-      const persistedPidAlive =
-        !!run.processPid && isProcessAlive(run.processPid);
-      const persistedProcessGroupAlive =
-        !!run.processGroupId && isProcessGroupAlive(run.processGroupId);
+      const { pidMayBeOwned: persistedPidAlive, groupMayBeOwned: persistedProcessGroupAlive } =
+        await inspectHeartbeatRunProcessIdentity(db, run);
       if (
         trackedChildIsActive ||
         trackedPidAlive ||
@@ -1821,6 +1820,8 @@ export function heartbeatService(
             .where(
               and(
                 eq(heartbeatRuns.id, run.id),
+                eq(heartbeatRuns.companyId, run.companyId),
+                eq(heartbeatRuns.status, run.status),
                 eq(heartbeatRuns.runtimeMode, "native"),
                 run.processPid === null
                   ? isNull(heartbeatRuns.processPid)
@@ -1835,7 +1836,8 @@ export function heartbeatService(
             )
             .returning()
             .then((rows) => rows[0] ?? null);
-          if (cleared) await recordNativeLocalProcessStop(tx as unknown as Db, run);
+          if (cleared && !await recordNativeLocalProcessStop(tx as unknown as Db, run))
+            throw new Error("Process identity changed before stop receipt; rollback required");
           return cleared;
         });
         if (!cleared) {

@@ -67,6 +67,12 @@ remaining operations before qualifying the whole capability.
 Gaps: Diagnostics expose recorded cause and boundaries; source-backed reading does not
 prove successful recovery.
 
+Process-generation checks can exclude a reused local PID/group from an old
+ownership hold. They grant no new agent action, termination authority, or bypass
+of review, budget, workspace or remote cleanup gates. Unknown identity remains
+held. [Focused evidence](../../server/src/services/local-process-identity.test.ts)
+is policy coverage; database lifecycle verification remains separate.
+
 ## `bounded-continuation`
 
 Review: `baseline`.

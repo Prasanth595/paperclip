@@ -1,9 +1,15 @@
+import * as childProcess from "node:child_process";
+vi.mock("node:child_process", async importOriginal => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, execFile: vi.fn(actual.execFile) };
+});
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { agents, companies, createDb, heartbeatRuns, issues, issueRecoveryActions, type Db } from "@paperclipai/db";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "../__tests__/helpers/embedded-postgres.js";
 import { conversationRecoveryActionPredicate, getConversationOwnershipBlocker } from "./conversation-continuation.js";
+import * as hotRestart from "./hot-restart.js";
 import { deliverExecutionStatuses } from "./execution-status-delivery.js";
 
 const support = await getEmbeddedPostgresTestSupport();
@@ -59,6 +65,33 @@ describePostgres("execution identity query contracts", () => {
     expect(await getConversationOwnershipBlocker(db, f.companyId, f.issueId)).toMatchObject({ runId: legacy.id });
     await db.update(heartbeatRuns).set({ processPid: null }).where(eq(heartbeatRuns.id, legacy.id));
     expect(await getConversationOwnershipBlocker(db, f.companyId, f.issueId)).toBeNull();
+  });
+  it.each(["succeeded", "failed", "interrupted", "cancelled", "timed_out"].flatMap(status => [false, true].map(withGroup => ({ status, withGroup }))))("does not retain $status for a recycled PID (persisted group: $withGroup)", async ({ status, withGroup }) => {
+    const f = await fixture();
+    // No host process is inspected or signalled. The old provider started the
+    // previous evening; the replacement macOS process began the following day.
+    const oldBirth = new Date("2026-10-15T18:59:00.000Z");
+    const replacementBirth = "2026-10-16T12:20:00.000Z";
+    const legacy = await run(f, { issueId: f.issueId }, null, 40250);
+    await db.update(heartbeatRuns).set({ status, processStartedAt: oldBirth,
+      processGroupId: withGroup ? 40250 : null }).where(eq(heartbeatRuns.id, legacy.id));
+    const kill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+      if (signal !== 0 || Math.abs(Number(pid)) !== 40250) throw new Error("Unexpected process observation");
+      return true;
+    });
+    const birth = vi.spyOn(hotRestart, "readProcessStartedAt").mockResolvedValue(replacementBirth);
+    const command = vi.spyOn(childProcess, "execFile").mockImplementation((...args: any[]) => {
+      args.at(-1)(null, "40250 40250 /System/Library/MigrationSubscriber.xpc\n", "");
+      return {} as childProcess.ChildProcess;
+    });
+
+    try {
+      expect(await getConversationOwnershipBlocker(db, f.companyId, f.issueId)).toBeNull();
+    } finally {
+      kill.mockRestore();
+      birth.mockRestore();
+      command.mockRestore();
+    }
   });
   it("delivers canonical same-company task IDs and keeps malformed IDs private", async () => {
     const f = await fixture(), foreign = await fixture();
