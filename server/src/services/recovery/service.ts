@@ -131,10 +131,8 @@ import {
   DEFAULT_MAX_SUCCESSFUL_RUN_HANDOFF_ATTEMPTS,
   FINISH_SUCCESSFUL_RUN_HANDOFF_REASON,
   SUCCESSFUL_RUN_MISSING_STATE_REASON,
-  buildSuccessfulRunHandoffExhaustedNotice,
   isPluginManagedIssueLifecycle,
   noticeMetadataReferencesRecoveryAction,
-  type SuccessfulRunHandoffNotice,
 } from "./successful-run-handoff.js";
 import {
   SANDBOX_PROVIDER_PLUGIN_NOT_READY_REASON,
@@ -155,6 +153,10 @@ import {
   dispositionRepairDelayMs,
   DISPOSITION_REPAIR_MAX_ATTEMPTS,
 } from "./disposition-repair.js";
+import {
+  ensureMissingDispositionDecisionCard,
+  RECOVERY_EPISODE_MAX_ATTEMPTS,
+} from "./missing-disposition-escalation.js";
 import {
   createActiveRunWatchdog,
   WatchdogDecisionApplicationError,
@@ -2623,7 +2625,10 @@ export function recoveryService(
       monitorPolicy: isProviderQuotaWait
         ? { type: "wait_recovery", retryAgentId: routing.returnOwnerAgentId }
         : null,
-      maxAttempts: null,
+      maxAttempts:
+        recoveryCause === SUCCESSFUL_RUN_MISSING_STATE_REASON
+          ? RECOVERY_EPISODE_MAX_ATTEMPTS
+          : null,
       lastAttemptAt: now,
     });
 
@@ -4027,52 +4032,27 @@ export function recoveryService(
     const recoveryOwner = recoveryAction.ownerAgentId
       ? await getAgent(recoveryAction.ownerAgentId)
       : null;
-    const sourceAssignee = input.issue.assigneeAgentId
-      ? await getAgent(input.issue.assigneeAgentId)
-      : null;
-    let notice: SuccessfulRunHandoffNotice | null = null;
+    let missingDispositionDecisionCardId: string | null = null;
     if (
       input.recoveryCause === SUCCESSFUL_RUN_MISSING_STATE_REASON &&
       input.successfulRunHandoffEvidence
     ) {
-      const [sourceRun] = input.successfulRunHandoffEvidence.sourceRunId
-        ? await db
-            .select({
-              id: heartbeatRuns.id,
-              status: heartbeatRuns.status,
-              agentId: heartbeatRuns.agentId,
-            })
-            .from(heartbeatRuns)
-            .where(
-              and(
-                eq(
-                  heartbeatRuns.id,
-                  input.successfulRunHandoffEvidence.sourceRunId,
-                ),
-                eq(heartbeatRuns.companyId, input.issue.companyId),
-              ),
-            )
-            .limit(1)
-        : [];
-      notice = buildSuccessfulRunHandoffExhaustedNotice({
-        issue: input.issue,
-        sourceRun: sourceRun ?? null,
-        correctiveRun: input.latestRun
-          ? {
-              id: input.latestRun.id,
-              status: input.latestRun.status,
-              agentId: input.latestRun.agentId,
-            }
-          : null,
-        sourceAssignee,
-        recoveryIssue: null,
+      const decisionCard = await ensureMissingDispositionDecisionCard(db, {
+        issue: {
+          id: input.issue.id,
+          companyId: input.issue.companyId,
+          identifier: input.issue.identifier,
+          assigneeUserId: input.issue.assigneeUserId,
+          monitorNextCheckAt: input.issue.monitorNextCheckAt,
+        },
         recoveryActionId: recoveryAction.id,
-        recoveryOwner,
-        latestIssueStatus: input.issue.status,
-        latestHandoffRunStatus: input.latestRun?.status ?? "unknown",
+        sourceRunId: input.successfulRunHandoffEvidence.sourceRunId,
         missingDisposition:
           input.successfulRunHandoffEvidence.missingDisposition,
+        handoffAttemptsUsed:
+          input.successfulRunHandoffEvidence.handoffAttempt,
       });
+      missingDispositionDecisionCardId = decisionCard?.id ?? null;
     }
     const escalationNotice = buildStrandedRecoveryEscalationNotice({
       seed: input.notice,
@@ -4097,9 +4077,10 @@ export function recoveryService(
     });
 
     const shouldPostEscalationComment =
-      recoveryAction.attemptCount === 1 ||
-      input.recoveryCause === "workspace_validation_failed" ||
-      input.recoveryCause === "configuration_incomplete";
+      input.recoveryCause !== SUCCESSFUL_RUN_MISSING_STATE_REASON &&
+      (recoveryAction.attemptCount === 1 ||
+        input.recoveryCause === "workspace_validation_failed" ||
+        input.recoveryCause === "configuration_incomplete");
     if (shouldPostEscalationComment) {
       const escalationCommentMarker = `Recovery action: \`${recoveryAction.id}\``;
 
@@ -4133,29 +4114,16 @@ export function recoveryService(
         );
 
       if (!hasEscalationComment) {
-        if (notice) {
-          await issuesSvc.addComment(
-            input.issue.id,
-            notice.body,
-            {},
-            {
-              authorType: "system",
-              presentation: notice.presentation,
-              metadata: notice.metadata,
-            },
-          );
-        } else {
-          await issuesSvc.addComment(
-            input.issue.id,
-            escalationNotice.body,
-            {},
-            {
-              authorType: "system",
-              presentation: escalationNotice.presentation,
-              metadata: escalationNotice.metadata,
-            },
-          );
-        }
+        await issuesSvc.addComment(
+          input.issue.id,
+          escalationNotice.body,
+          {},
+          {
+            authorType: "system",
+            presentation: escalationNotice.presentation,
+            metadata: escalationNotice.metadata,
+          },
+        );
       }
     }
 
@@ -4192,6 +4160,7 @@ export function recoveryService(
         latestRunErrorCode: input.latestRun?.errorCode ?? null,
         recoveryActionId: recoveryAction.id,
         recoveryOwnerType: recoveryAction.ownerType,
+        missingDispositionDecisionCardId,
         recoveryOwnerAgentId: recoveryAction.ownerAgentId,
         previousOwnerAgentId: recoveryAction.previousOwnerAgentId,
         returnOwnerAgentId: recoveryAction.returnOwnerAgentId,
