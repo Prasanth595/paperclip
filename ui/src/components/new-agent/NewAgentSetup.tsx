@@ -25,9 +25,10 @@ import { ArrowLeft, ArrowRight, Check, Settings2 } from "lucide-react";
 import type {
   AdapterEnvironmentTestResult,
   Agent,
+  AgentRole,
   EnvBinding,
 } from "@paperclipai/shared";
-import { ADAPTER_AUTH_MISSING_CHECK_CODE } from "@paperclipai/shared";
+import { ADAPTER_AUTH_MISSING_CHECK_CODE, AGENT_ROLES, AGENT_ROLE_LABELS } from "@paperclipai/shared";
 import { useNavigate, useSearchParams } from "@/lib/router";
 import { agentsApi } from "@/api/agents";
 import { adaptersApi } from "@/api/adapters";
@@ -55,7 +56,7 @@ import {
 } from "@/lib/provider-credential";
 import { defaultCreateValues } from "../agent-config-defaults";
 import { ModelDropdown } from "../AgentConfigForm";
-import { Field, ToggleField } from "../agent-config-primitives";
+import { Field, ToggleField, help } from "../agent-config-primitives";
 import { SecretPicker } from "../environment-variables-editor/SecretPicker";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -157,6 +158,9 @@ function Setup({
     createdAgentId ? "saved" : connectionAdapter ? "connect" : "runtime",
   );
   const [model, setModel] = useState("");
+  // Null keeps the historical default: first agent is CEO, later hires are
+  // general. Picking a value in Configure overrides it for this hire.
+  const [role, setRole] = useState<AgentRole | null>(null);
   const efforts = isRunner ? [] : setupEfforts(adapterType, model);
   const [effort, setEffort] = useState("");
   const [modelOpen, setModelOpen] = useState(false);
@@ -577,11 +581,12 @@ function Setup({
       const leader = existing.find(
         (agent) => agent.role === "ceo" && agent.status !== "terminated",
       );
+      const hireRole: AgentRole = role ?? (existing.length ? "general" : "ceo");
       const response = await agentsApi.hire(companyId, {
         name: name.trim(),
         appearance: appearanceDraft.appearance,
-        role: existing.length ? "general" : "ceo",
-        ...(leader ? { reportsTo: leader.id } : {}),
+        role: hireRole,
+        ...(leader && hireRole !== "ceo" ? { reportsTo: leader.id } : {}),
         adapterType: requestAdapterType,
         ...(["codex_local", "claude_local"].includes(adapterType) && runner !== "auto" ? { runner } : {}),
         adapterConfig: config,
@@ -922,6 +927,22 @@ function Setup({
                     </h2>
                     <fieldset disabled={busy} className="space-y-8">
                       <section className="space-y-5">
+                        <Field label="Role" hint={help.role}>
+                          <NativeSelect
+                            aria-label="Role"
+                            value={role ?? (agents.data ? (agents.data.length ? "general" : "ceo") : "general")}
+                            onChange={(event) => {
+                              const next = AGENT_ROLES.find((r) => r === event.target.value);
+                              if (next) setRole(next);
+                            }}
+                          >
+                            {AGENT_ROLES.map((r) => (
+                              <option key={r} value={r}>
+                                {AGENT_ROLE_LABELS[r]}
+                              </option>
+                            ))}
+                          </NativeSelect>
+                        </Field>
                         {isDot && <>
                           <p className="text-sm text-muted-foreground">Create this agent, then copy its pairing prompt to your Dot.</p>
                           {experimental.data?.enablePublicMcp !== true && <p className="text-sm text-muted-foreground">Enable Assistant connections (MCP) in Experimental settings before pairing.</p>}

@@ -3964,6 +3964,23 @@ describe("AgentConfigForm managed-sandbox-only host surfaces", () => {
   });
 });
 
+describe("AgentConfigForm identity role", () => {
+  it("lets the board change an agent role from the identity section", async () => {
+    const result = await renderForm([], { role: "general" });
+    const select = result.container.querySelector<HTMLSelectElement>('select[aria-label="Role"]');
+    expect(select).toBeTruthy();
+    expect(select!.value).toBe("general");
+    await act(async () => {
+      select!.value = "ceo";
+      select!.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flushReact();
+    await clickByText(result.container, "Save");
+    expect(result.onSave).toHaveBeenCalledWith({ role: "ceo" });
+    await act(async () => result.root.unmount());
+  });
+});
+
 describe("subtractPersistedOverlay", () => {
   const overlayWith = (adapterConfig: Record<string, unknown>) => ({
     identity: {},

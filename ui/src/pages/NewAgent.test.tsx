@@ -183,6 +183,19 @@ describe("New agent setup", () => {
     expect(api.hire.mock.calls[0][1]).not.toHaveProperty("runner");
   });
 
+  it("hires with the role picked in Configure instead of the general default", async () => {
+    await render("codex_local");
+    await connect("OpenAI");
+    const role = container.querySelector<HTMLSelectElement>('select[aria-label="Role"]')!;
+    expect(role.value).toBe("general");
+    await act(async () => { role.value = "ceo"; role.dispatchEvent(new Event("change", { bubbles: true })); });
+    await settle();
+    await click("Finish setup");
+    expect(api.hire).toHaveBeenCalledTimes(1);
+    expect(api.hire.mock.calls[0][1]).toMatchObject({ role: "ceo" });
+    expect(api.hire.mock.calls[0][1]).not.toHaveProperty("reportsTo");
+  });
+
   it("finishes ordinary native Claude API setup when the key is verified without a CLI hello", async () => {
     settings.getExperimental.mockResolvedValue({ enableNativeRunner: false });
     state.adapters = (state.adapters as any[]).map(adapter => adapter.type === "claude_local"
