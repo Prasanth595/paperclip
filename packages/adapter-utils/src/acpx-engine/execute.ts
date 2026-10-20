@@ -92,6 +92,12 @@ import {
 import { shellQuote } from "@paperclipai/adapter-utils/ssh";
 import { createEphemeralSessionEnvironmentStore } from "./ephemeral-session-environment.js";
 import {
+  PAPERCLIP_MCP_SERVER_NAME,
+  buildPaperclipMcpServerConfig,
+  readPaperclipMcpSelection,
+  resolvePaperclipMcpEntrypoint,
+} from "./paperclip-mcp.js";
+import {
   createAcpRuntime,
   createAgentRegistry,
   createRuntimeStore,
@@ -270,6 +276,7 @@ interface AcpxEngineSettings {
   adapterType: string;
   moduleDir: string;
   packageRootDir: string;
+  resolvePaperclipMcpEntrypoint: () => Promise<string | null>;
 }
 
 export interface AcpxEngineBillingIdentity {
@@ -425,6 +432,7 @@ export interface AcpxEngineExecutorOptions {
   adapterType?: string;
   moduleDir?: string;
   packageRootDir?: string;
+  resolvePaperclipMcpEntrypoint?: () => Promise<string | null>;
   /**
    * Adapter-specific billing classification (provider/biller/billingType) for
    * cost-ledger attribution. Without it, results fall back to the opaque
@@ -535,6 +543,7 @@ function resolveEngineSettings(options: AcpxEngineExecutorOptions): AcpxEngineSe
     adapterType: options.adapterType?.trim() || "acp_engine",
     moduleDir,
     packageRootDir: path.resolve(options.packageRootDir ?? path.resolve(moduleDir, "../..")),
+    resolvePaperclipMcpEntrypoint: options.resolvePaperclipMcpEntrypoint ?? resolvePaperclipMcpEntrypoint,
   };
 }
 
@@ -1545,9 +1554,14 @@ function buildCodexStartupConfig(input: {
   requestedThinkingEffort: string;
   fastMode: boolean;
   identityEnvironmentKeys?: string[];
+  mcpServers?: Record<string, unknown>;
 }): { value: string | null; invalidExistingConfig: boolean } {
   const hasRuntimeConfig = Boolean(
-    input.requestedModel || input.requestedThinkingEffort || input.fastMode || input.identityEnvironmentKeys,
+    input.requestedModel
+      || input.requestedThinkingEffort
+      || input.fastMode
+      || input.identityEnvironmentKeys
+      || input.mcpServers,
   );
   if (!hasRuntimeConfig) return { value: null, invalidExistingConfig: false };
 
@@ -1583,6 +1597,7 @@ function buildCodexStartupConfig(input: {
         shell_environment_policy: { ...parseObject(existing.shell_environment_policy),
           inherit: "all", ignore_default_excludes: true, include_only: input.identityEnvironmentKeys },
       } : {}),
+      ...(input.mcpServers ? { mcp_servers: { ...parseObject(existing.mcp_servers), ...input.mcpServers } } : {}),
     }),
     invalidExistingConfig,
   };
@@ -2116,9 +2131,39 @@ async function buildRuntime(input: {
   if (requestedModel && acpxAgent === "gemini") {
     env.GEMINI_MODEL = requestedModel;
   }
+  let paperclipMcpServers: Record<string, unknown> | undefined;
   if (acpxAgent === "codex") {
+    const paperclipMcpSelection = readPaperclipMcpSelection(config);
+    if (paperclipMcpSelection) {
+      const rejected = paperclipMcpSelection.rejectedTools;
+      if (rejected.length > 0) {
+        await input.ctx.onLog("stderr", `[paperclip] Ignoring invalid paperclipMcp tool names: ${rejected.join(", ")}.\n`);
+      }
+      const entrypoint = executionTargetIsRemote || paperclipMcpSelection.tools.length === 0
+        ? null
+        : await input.engine.resolvePaperclipMcpEntrypoint();
+      if (paperclipMcpSelection.tools.length === 0) {
+        await input.ctx.onLog("stderr", "[paperclip] paperclipMcp has no valid tools; continuing without it.\n");
+      } else if (entrypoint) {
+        paperclipMcpServers = {
+          [PAPERCLIP_MCP_SERVER_NAME]: buildPaperclipMcpServerConfig({
+            entrypoint,
+            tools: paperclipMcpSelection.tools,
+            nodeExecutable: process.execPath,
+          }),
+        };
+      } else if (executionTargetIsRemote) {
+        await input.ctx.onLog("stderr", "[paperclip] paperclipMcp is only available for local runs; continuing without it.\n");
+      } else {
+        await input.ctx.onLog(
+          "stderr",
+          "[paperclip] paperclipMcp is enabled but no usable Paperclip MCP server was found for this run; continuing without it.\n",
+        );
+      }
+    }
     const codexStartupConfig = buildCodexStartupConfig({
       existingConfig: env.CODEX_CONFIG,
+      ...(paperclipMcpServers ? { mcpServers: paperclipMcpServers } : {}),
       ...(input.ctx.agentIdentity ? { identityEnvironmentKeys: [...new Set([
         "PATH", "HOME", "LANG", "TMPDIR", "CODEX_HOME",
         "PAPERCLIP_AGENT_KEY_ID", "PAPERCLIP_AGENT_PUBLIC_KEY", "PAPERCLIP_AGENT_PRIVATE_KEY",
